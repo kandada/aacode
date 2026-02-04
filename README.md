@@ -141,14 +141,16 @@ export LLM_MODEL_NAME="your-model-name"
 - `run_tests` - 运行测试套件
 - `debug_code` - 调试代码问题
 
-### 管理工具
+### To-Do List工具
 - `delegate_task` - 委托子任务
-- `create_sub_agent` - 创建专门子Agent
-- `get_project_status` - 获取项目状态
+- `add_todo_item` - 添加待办
+- `update_todo_item` - 更新待办
 
 ### 网络工具
 - `web_search` - 搜索网络内容(当前支持searXNG，需要自己部署并将配置SEARCHXNG_URL环境变量)
 - `browse_web` - 浏览器上网（未来）
+
+### 文件工具（比如增量代码更新等）
 
 ## 📈 项目状态
 
