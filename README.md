@@ -19,7 +19,7 @@
 ### 一键初始化（推荐）
 
 ```bash
-git clone https://github.com/kandada/aacode
+git clone https://github.com/kandada/aacode.git
 cd aacode
 python3 init.py  # 建议最好是3.12版本
 # 此时观察一下有没有进入.venv环境，如果没有，请执行:
