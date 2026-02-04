@@ -86,6 +86,59 @@ export LLM_MODEL_NAME="your-model-name"
 ./run.sh -p examples/data_analysis "创建一个数据分析脚本，读取项目目录中的CSV文件并生成统计图表"
 ```
 
+
+## 🎯 最佳实践
+
+### 1. 任务描述要清晰
+
+✅ **好的描述**:
+```
+"创建一个Python程序，使用requests库获取天气API数据，
+并将结果保存到weather.json文件"
+```
+
+❌ **不好的描述**:
+```
+"做个天气程序"
+```
+
+### 2. 分步骤执行复杂任务
+
+对于复杂项目，分多次执行：
+
+```bash
+# 第一步：创建基础结构
+python3 main.py -p examples/app "创建Flask应用基础结构"
+
+# 第二步：添加功能
+python3 main.py -p examples/app "添加用户认证功能"
+
+# 第三步：测试
+python3 main.py -p examples/app "为所有功能编写测试"
+```
+
+### 3. 利用项目指导原则
+
+编辑 `init.md` 文件，添加项目特定的规则：
+
+```markdown
+# 项目指导原则
+
+## 代码风格
+- 使用PEP 8规范
+- 函数名使用snake_case
+- 类名使用PascalCase
+
+## 测试要求
+- 每个功能必须有单元测试
+- 测试覆盖率不低于80%
+
+## 文档要求
+- 所有公共函数必须有docstring
+- README.md必须包含使用示例
+```
+
+
 ## 🏗️ 架构设计
 
 ### 设计原则
