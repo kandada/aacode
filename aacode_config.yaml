@@ -107,7 +107,7 @@ safety:
 tools:
   enable_code_execution: true
   enable_file_ops: true
-  enable_sandbox: false
+  enable_sandbox: true   # true/false
   enable_search: true
   enable_shell: true
   enable_testing: true
