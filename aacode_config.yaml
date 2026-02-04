@@ -1,0 +1,157 @@
+context:
+  compact_threshold: 32000
+  history_compression: true
+  max_context_length: 16000
+  strategy: file_based
+  use_vector_store: false
+  # 上下文缩减（卸载）配置
+  compact_trigger_tokens: 80000      # 触发缩减的token数阈值
+  compact_keep_messages: 20         # 缩减后保留的消息数
+  compact_keep_rounds: 8            # 缩减后保留的对话轮数（最近N轮）
+  compact_summary_steps: 10         # 摘要包含的步骤数
+  compact_protect_first_rounds: 3   # 保护前N轮（任务规划、初始理解）
+
+# 输出处理配置
+output:
+  # 输出截断阈值配置（根据内容类型自动调整）
+  truncate_thresholds:
+    test_output: 10000      # 测试输出阈值（pytest, unittest等）
+    code_content: 20000     # 代码内容阈值（Python, JS, Java等）
+    normal_output: 5000     # 普通输出阈值（命令输出、日志等）
+  
+  # 预览长度配置（当输出超过阈值时显示的预览长度）
+  preview_lengths:
+    test_output: 3000       # 测试输出预览长度
+    code_content: 5000      # 代码内容预览长度
+    normal_output: 2000     # 普通输出预览长度
+  
+  # 测试输出摘要配置
+  test_summary:
+    enabled: true           # 是否启用测试输出摘要提取
+    max_summary_lines: 20   # 摘要最大行数
+  
+  # 内容类型检测关键词（用于自动识别内容类型）
+  detection_keywords:
+    # 代码内容关键词
+    code_indicators:
+      - 'def '
+      - 'class '
+      - 'import '
+      - 'from '
+      - '#!/'
+      - 'function '
+      - 'const '
+      - 'let '
+      - 'var '
+      - 'public '
+      - 'private '
+      - 'protected '
+    
+    # 测试输出关键词
+    test_indicators:
+      - 'test session starts'
+      - 'PASSED'
+      - 'FAILED'
+      - 'pytest'
+      - 'unittest'
+      - 'Test'
+      - 'Traceback'
+      - 'AssertionError'
+      - '==='
+      - 'collected'
+      - 'passed'
+      - 'failed'
+
+# 超时配置
+timeouts:
+  shell_command: 30         # Shell命令执行超时（秒）
+  tool_execution: 60        # 工具执行超时（秒）
+  model_summary: 60         # 模型摘要生成超时（秒）
+  file_search: 20            # 文件搜索超时（秒）
+  code_execution: 60        # 代码执行超时（秒）
+  sandbox_command: 120      # 沙箱命令超时（秒）
+  web_request: 60           # 网络请求超时（秒）
+
+# 限制配置
+limits:
+  max_file_list_results: 100    # 文件列表最大结果数
+  max_search_results: 10        # 搜索最大结果数
+  max_retries: 3                # 最大重试次数
+  shell_output_preview: 200     # Shell输出预览长度（字符）
+  
+  # 文件读取智能提示配置
+  max_auto_read_lines: 200      # 超过此行数时提供分段建议
+  structure_preview_lines: 50   # 结构预览显示的行数
+  
+  # 上下文文件结构配置
+  max_context_files: 50         # 上下文中显示的最大文件数（从30增加到50）
+  prioritize_file_types: true   # 是否优先显示重要文件类型
+
+model:
+  api_key: your-llm-api-key
+  base_url: https://api.deepseek.com/v1   # https://api.openai.com/v1
+  max_tokens: 8000   # 单次输出tokens长度
+  name: deepseek-chat        # gpt-4-turbo-preview
+  temperature: 0.1
+agent:
+  max_react_iterations: 100
+  max_sub_agent_iterations: 100
+  enable_auto_planning: true
+  enable_todo_tracking: true
+safety:
+  allow_network: true
+  dangerous_command_action: reject   # reject, ask, log
+  enable_safety_guard: true
+  max_file_size: 52428800
+  restrict_to_project: true
+tools:
+  enable_code_execution: true
+  enable_file_ops: true
+  enable_sandbox: false
+  enable_search: true
+  enable_shell: true
+  enable_testing: true
+  enable_web_search: true
+  max_execution_time: 60
+  sandbox_type: docker
+  search_api_url: http://192.168.0.106:8081
+  search_engine: searxng
+
+# MCP（模型上下文协议）配置
+mcp:
+  # 是否启用MCP功能
+  enabled: true
+  
+  # 自动连接配置
+  auto_connect: true
+  connection_timeout: 30
+  max_retries: 3
+  
+  # STD类型MCP服务器配置（标准进程）
+  std_servers:
+    - name: local_tools
+      command: python
+      args: 
+        - "-m"
+        - "mcp.server.cli"
+      enabled: true
+      timeout: 30
+      retry_count: 3
+  
+  # SSE类型MCP服务器配置（Server-Sent Events）
+  sse_servers:
+    - name: filesystem
+      url: http://localhost:3001
+      enabled: false
+      timeout: 30
+      retry_count: 3
+    - name: database
+      url: http://localhost:3002
+      enabled: false
+      timeout: 30
+      retry_count: 3
+    - name: web_search
+      url: http://localhost:3003
+      enabled: false
+      timeout: 30
+      retry_count: 3
