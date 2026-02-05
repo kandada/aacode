@@ -16,7 +16,7 @@
 
 ## 🎯 快速开始
 ### 操作系统
-该项目主要再Linux和MacOS开发和测试，建议使用Linux或MacOS。windows可能会存在python路径问题，请自行解决。
+该项目主要在Linux和MacOS开发和测试，建议使用Linux或MacOS。windows环境下可能会存在python路径问题，请自行解决。
 
 ### 一键初始化（推荐）
 
