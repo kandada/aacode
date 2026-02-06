@@ -1,3 +1,5 @@
+[English](README_en.md) | 
+
 # 🤖 AACode - CLI编程Agent
 
 [![Python Version](https://img.shields.io/badge/python-3.12+-blue.svg)](https://python.org)
