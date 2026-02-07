@@ -353,7 +353,7 @@ class MainAgent(BaseAgent):
                         return "我将创建一个hello world程序。\n\nAction: write_file\nAction Input: {\"path\": \"hello.py\", \"content\": \"print('Hello, World!')\"}"
                     elif '运行' in last_msg or 'run' in last_msg:
                         return "让我运行这个程序。\n\nAction: run_shell\nAction Input: {\"command\": \"python3 hello.py\"}"
-                    elif '完成' in last_msg or 'finish' in last_msg or 'action' not in last_msg:
+                    elif '已完成' in last_msg or 'finish' in last_msg or 'action' not in last_msg:
                         return "任务已完成。\n\n"
                     else:
                         return "我需要分析当前情况并继续执行。\n\nAction: list_files\nAction Input: {\"pattern\": \"*\"}"
