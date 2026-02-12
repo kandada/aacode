@@ -4,6 +4,7 @@
 沙箱工具集
 用于在隔离环境中运行工具
 """
+
 import asyncio
 from typing import Dict, List, Any, Optional
 from pathlib import Path
@@ -21,10 +22,10 @@ class SandboxTools:
 
         # 沙箱管理器
         import os
+
         sandbox_type = os.getenv("SANDBOX_TYPE", "docker")  # 默认使用Docker沙箱
         self.sandbox_manager = SandboxManager(
-            sandbox_type=sandbox_type,
-            base_dir=project_path / ".aacode" / "sandboxes"
+            sandbox_type=sandbox_type, base_dir=project_path / ".aacode" / "sandboxes"
         )
 
         # MCP客户端
@@ -33,10 +34,9 @@ class SandboxTools:
         # 默认沙箱
         self.default_sandbox_id = None
 
-    async def run_in_sandbox(self,
-                             command: str,
-                             sandbox_id: str = None,
-                             timeout: int = 60) -> Dict[str, Any]:
+    async def run_in_sandbox(
+        self, command: str, sandbox_id: str = None, timeout: int = 60
+    ) -> Dict[str, Any]:
         """
         在沙箱中运行命令
 
@@ -53,7 +53,7 @@ class SandboxTools:
         if not safety_check["allowed"] and self.sandbox_manager.sandbox_type == "local":
             return {
                 "error": f"命令被安全护栏拒绝: {safety_check['reason']}",
-                "suggestion": "请使用Docker沙箱运行潜在危险命令"
+                "suggestion": "请使用Docker沙箱运行潜在危险命令",
             }
 
         # 获取或创建沙箱
@@ -76,10 +76,9 @@ class SandboxTools:
             sandbox_id, command, timeout
         )
 
-    async def install_package(self,
-                              package: str,
-                              package_manager: str = "pip",
-                              sandbox_id: str = None) -> Dict[str, Any]:
+    async def install_package(
+        self, package: str, package_manager: str = "pip", sandbox_id: str = None
+    ) -> Dict[str, Any]:
         """
         在沙箱中安装软件包
 
@@ -105,10 +104,9 @@ class SandboxTools:
 
         return await self.run_in_sandbox(command, sandbox_id, timeout=120)
 
-    async def call_mcp(self,
-                       tool_name: str,
-                       arguments: Dict = None,
-                       mcp_server: str = None) -> Dict[str, Any]:
+    async def call_mcp(
+        self, tool_name: str, arguments: Dict = None, mcp_server: str = None
+    ) -> Dict[str, Any]:
         """
         调用MCP工具
 
@@ -128,20 +126,17 @@ class SandboxTools:
             self.mcp_client = MCPClient(server_url=mcp_server)
 
         # 确保已连接
-        if not hasattr(self.mcp_client, 'session_id') or not self.mcp_client.session_id:
+        if not hasattr(self.mcp_client, "session_id") or not self.mcp_client.session_id:
             connected = await self.mcp_client.connect()
             if not connected:
                 return {"error": "无法连接到MCP服务器"}
 
         # 调用工具
-        return await self.mcp_client.call_tool(
-            tool_name, arguments or {}
-        )
+        return await self.mcp_client.call_tool(tool_name, arguments or {})
 
-    async def run_unsafe_script(self,
-                                script: str,
-                                language: str = "python",
-                                sandbox_id: str = None) -> Dict[str, Any]:
+    async def run_unsafe_script(
+        self, script: str, language: str = "python", sandbox_id: str = None
+    ) -> Dict[str, Any]:
         """
         运行潜在不安全的脚本
 
@@ -158,19 +153,20 @@ class SandboxTools:
             "python": ".py",
             "bash": ".sh",
             "javascript": ".js",
-            "node": ".js"
+            "node": ".js",
         }
 
         extension = extension_map.get(language, ".txt")
 
         # 创建临时文件
         import tempfile
+
         with tempfile.NamedTemporaryFile(
-                mode='w',
-                suffix=extension,
-                dir=self.project_path / ".aacode" / "temp",
-                delete=False,
-                encoding='utf-8'
+            mode="w",
+            suffix=extension,
+            dir=self.project_path / ".aacode" / "temp",
+            delete=False,
+            encoding="utf-8",
         ) as f:
             f.write(script)
             script_path = f.name
@@ -199,9 +195,9 @@ class SandboxTools:
             # 不删除文件,供调试使用
             pass
 
-    async def create_isolated_environment(self,
-                                          sandbox_id: str = None,
-                                          packages: List[str] = None) -> Dict[str, Any]:
+    async def create_isolated_environment(
+        self, sandbox_id: str = None, packages: List[str] = None
+    ) -> Dict[str, Any]:
         """
         创建隔离的Python环境
 
@@ -215,18 +211,13 @@ class SandboxTools:
         sandbox_id = sandbox_id or f"venv_{asyncio.get_event_loop().time():.0f}"
 
         # 创建沙箱
-        result = await self.sandbox_manager.create_sandbox(
-            sandbox_id=sandbox_id
-        )
+        result = await self.sandbox_manager.create_sandbox(sandbox_id=sandbox_id)
 
         if not result["success"]:
             return result
 
         # 创建虚拟环境
-        commands = [
-            "python -m venv venv",
-            "source venv/bin/activate"
-        ]
+        commands = ["python -m venv venv", "source venv/bin/activate"]
 
         # 安装包
         if packages:
@@ -242,7 +233,7 @@ class SandboxTools:
                 return {
                     "error": f"创建环境失败: {cmd_result.get('error', '未知错误')}",
                     "command": cmd,
-                    "sandbox_id": sandbox_id
+                    "sandbox_id": sandbox_id,
                 }
 
         return {
@@ -250,7 +241,7 @@ class SandboxTools:
             "sandbox_id": sandbox_id,
             "environment": "venv",
             "packages": packages or [],
-            "message": f"隔离环境创建成功,ID: {sandbox_id}"
+            "message": f"隔离环境创建成功,ID: {sandbox_id}",
         }
 
     async def cleanup_all_sandboxes(self) -> Dict[str, Any]:
@@ -260,19 +251,9 @@ class SandboxTools:
         results = []
         for sandbox_id in sandboxes.get("sandboxes", []):
             result = await self.sandbox_manager.cleanup_sandbox(sandbox_id)
-            results.append({
-                "sandbox_id": sandbox_id,
-                "result": result
-            })
+            results.append({"sandbox_id": sandbox_id, "result": result})
 
         # 重置默认沙箱
         self.default_sandbox_id = None
 
-        return {
-            "success": True,
-            "cleaned_sandboxes": results,
-            "count": len(results)
-        }
-
-
-
+        return {"success": True, "cleaned_sandboxes": results, "count": len(results)}

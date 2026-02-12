@@ -21,16 +21,10 @@ class ModelConfig:
     max_tokens: int = 8000
 
     def __post_init__(self):
-        # 优先使用LLM环境变量，然后是OpenAI变量
-        if not self.api_key:
-            self.api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
-
-        if not self.base_url:
-            self.base_url = os.getenv("LLM_API_URL") or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-        
-        # 设置模型名称
-        if not self.name:
-            self.name = os.getenv("LLM_MODEL_NAME", "gpt-4")
+        # 环境变量优先，yaml配置作为后备
+        self.api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY") or self.api_key
+        self.base_url = os.getenv("LLM_API_URL") or os.getenv("OPENAI_BASE_URL") or self.base_url or "https://api.openai.com/v1"
+        self.name = os.getenv("LLM_MODEL_NAME") or self.name or "gpt-4"
 
 
 @dataclass
@@ -179,6 +173,38 @@ class LimitsConfig:
     prioritize_file_types: bool = True  # 是否优先显示重要文件类型
 
 
+@dataclass
+class SkillsConfig:
+    """Skills配置"""
+    enabled: bool = True                # 是否启用skills功能
+    skills_dir: str = "skills"          # Skills目录（相对于项目根目录）
+    auto_discover: bool = True          # 是否自动发现skills
+    enabled_skills: List[str] = field(default_factory=lambda: [
+        "data_cleaning",
+        "api_client",
+        "data_converter"
+    ])                                   # 默认启用的skills列表
+    # Skills元数据配置 - 用于渐进式披露，提高token效率
+    # 格式：skill_name: {name: 显示名称, description: 简短描述, trigger_keywords: [关键词列表]}
+    skills_metadata: Dict[str, Dict[str, Any]] = field(default_factory=lambda: {
+        "data_cleaning": {
+            "name": "数据清洗",
+            "description": "清洗CSV/Excel数据，处理缺失值、去除重复项",
+            "trigger_keywords": ["清洗", "数据清洗", "clean", "data cleaning", "csv", "excel"]
+        },
+        "data_converter": {
+            "name": "数据转换", 
+            "description": "转换数据格式：JSON/YAML/CSV/XML等",
+            "trigger_keywords": ["转换", "格式转换", "convert", "json", "yaml", "xml"]
+        },
+        "api_client": {
+            "name": "API客户端",
+            "description": "调用REST API，支持GET/POST/PUT/DELETE请求",
+            "trigger_keywords": ["api", "接口", "调用", "request", "http"]
+        }
+    })
+
+
 class Settings:
     """全局设置"""
 
@@ -196,12 +222,13 @@ class Settings:
         self.output = OutputConfig()  # 输出配置
         self.timeouts = TimeoutConfig()  # 超时配置
         self.limits = LimitsConfig()  # 限制配置
+        self.skills = SkillsConfig()  # Skills配置
 
-        # 从环境变量更新配置
-        self._load_from_env()
-        
         # 从文件加载配置
         self.load_config()
+        
+        # 从环境变量更新配置（环境变量优先）
+        self._load_from_env()
 
     def load_config(self):
         """从文件加载配置"""
@@ -223,7 +250,8 @@ class Settings:
             "tools": asdict(self.tools),
             "safety": asdict(self.safety),
             "context": asdict(self.context),
-            "mcp": asdict(self.mcp)  # 添加MCP配置
+            "mcp": asdict(self.mcp),
+            "skills": asdict(self.skills)
         }
 
         try:
@@ -233,13 +261,11 @@ class Settings:
             print(f"⚠️ 配置文件保存失败: {e}")
 
     def _load_from_env(self):
-        """从环境变量加载配置"""
-        # 设置搜索API URL
-        if not self.tools.search_api_url:
-            self.tools.search_api_url = os.getenv("SEARCHXNG_URL")
-            
-        # 启用网络搜索
-        if os.getenv("SEARCHXNG_URL"):
+        """从环境变量加载配置（环境变量优先）"""
+        # 环境变量优先，覆盖yaml配置
+        search_api_url = os.getenv("SEARCHXNG_URL")
+        if search_api_url:
+            self.tools.search_api_url = search_api_url
             self.tools.enable_web_search = True
 
     def _update_from_dict(self, config_dict: Dict[str, Any]):
@@ -293,6 +319,12 @@ class Settings:
                     for key, value in values.items():
                         if hasattr(self.mcp, key):
                             setattr(self.mcp, key, value)
+            elif section == "skills":
+                # 处理Skills配置
+                if isinstance(values, dict):
+                    for key, value in values.items():
+                        if hasattr(self.skills, key):
+                            setattr(self.skills, key, value)
             elif hasattr(self, section):
                 section_obj = getattr(self, section)
                 if hasattr(section_obj, '__dataclass_fields__'):
@@ -303,7 +335,7 @@ class Settings:
     @property
     def DEFAULT_MODEL(self):
         """获取默认模型配置"""
-        # 优先使用环境变量
+        # 环境变量优先，yaml配置作为后备
         return {
             "name": os.getenv("LLM_MODEL_NAME") or self.model.name or "deepseek-chat",
             "api_key": os.getenv("LLM_API_KEY") or self.model.api_key,

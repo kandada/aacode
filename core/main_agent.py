@@ -3,6 +3,7 @@
 """
 主Agent实现，负责协调任务和委托子任务
 """
+
 import asyncio
 from typing import Dict, List, Any, Optional
 from pathlib import Path
@@ -11,6 +12,7 @@ import os
 from core.agent import BaseAgent
 from core.react_loop import AsyncReActLoop
 from core.multi_agent import MultiAgentSystem
+from core.prompts import SYSTEM_PROMPT_FOR_MAIN_AGENT
 from tools.atomic_tools import AtomicTools
 from tools.code_tools import CodeTools
 from tools.sandbox_tools import SandboxTools
@@ -20,7 +22,8 @@ from tools.incremental_tools import IncrementalTools
 from utils.mcp_manager import MCPManager
 from utils.session_manager import SessionManager
 from utils.tool_registry import get_global_registry
-from utils.tool_schemas import ALL_SCHEMAS
+from utils.tool_schemas import get_all_schemas, get_schema
+from tools.skills_tools import SkillsManager
 import openai
 from core.sub_agent import SubAgent
 import subprocess
@@ -30,233 +33,43 @@ from config import settings
 class MainAgent(BaseAgent):
     """主Agent，负责复杂任务分解和协调"""
 
-    def __init__(self,
-                 project_path: Path,
-                 context_manager: Any,
-                 safety_guard: Any,
-                 model_config: Dict,
-                 **kwargs):
+    def __init__(
+        self,
+        project_path: Path,
+        context_manager: Any,
+        safety_guard: Any,
+        model_config: Dict,
+        **kwargs,
+    ):
 
         # 初始化模型调用器
         model_caller = self._create_model_caller(model_config)
+
+        # 先初始化skills_manager，因为_create_tools需要它
+        # 从配置中获取skills配置
+        skills_config = (
+            {"skills_metadata": settings.skills.skills_metadata}
+            if hasattr(settings.skills, "skills_metadata")
+            else {}
+        )
+        self.skills_manager = SkillsManager(project_path, skills_config)
 
         # 初始化工具（主Agent有更多工具）
         tools = self._create_tools(project_path, safety_guard)
 
         # 系统提示
-        system_prompt = """你是一个主AI编程助手，负责协调复杂的编码任务。
-
-        请严格按照以下格式进行思考行动：
-        
-        Thought: 你的思考过程
-        Action: 要执行的动作名称（必须是：read_file, write_file, run_shell, list_files, search_files, execute_python, run_tests, debug_code, delegate_task, check_task_status, get_project_status, create_sub_agent等可用工具中的一个，善用run_shell使用计算机能力，善用glob、grep、curl等，支持多数常见命令）
-        Action Input: 动作输入（必须是JSON格式）
-
-        例如：
-        Thought: 我需要创建一个hello.py文件
-        Action: write_file
-        Action Input: {"path": "hello.py", "content": "print('Hello, World!')"}
-
-        或者：
-        Thought: 任务已完成
-        Action:
-        
-        🌐 网络资源查询能力（重要！）：
-        当你需要查询技术资料、API文档、最佳实践时，你应该：
-        1. **优先使用fetch_url或curl命令直接访问官方文档**：
-           - Python官方文档: https://docs.python.org/3/
-           - Flask文档: https://flask.palletsprojects.com/
-           - Django文档: https://docs.djangoproject.com/
-           - FastAPI文档: https://fastapi.tiangolo.com/
-           - React文档: https://react.dev/
-           - Vue文档: https://vuejs.org/
-           - Node.js文档: https://nodejs.org/docs/
-           - MDN Web文档: https://developer.mozilla.org/
-           - GitHub API: https://docs.github.com/
-           - 其他常用技术网站csdn、知乎、腾讯云、阿里云文档等
-           - 搜索引擎网站
-        
-        2. **按图索骥式查询流程**：
-           - 第一步：使用fetch_url获取官方文档首页或目录页
-           - 第二步：从返回的内容中找到相关章节的链接
-           - 第三步：继续使用fetch_url访问具体章节
-           - 第四步：提取所需信息并应用到代码中
-        
-        3. **搜索引擎作为补充**：
-           - 当官方文档不够详细时，使用search_web搜索
-           - 搜索关键词："{技术名} best practices"、"{技术名} tutorial"、"{技术名} example"
-           - 优先查看Stack Overflow、GitHub、官方博客的结果
-        
-        4. **代码示例查询**：
-           - 使用search_code工具在GitHub上搜索实际代码示例
-           - 参考高星项目的实现方式
-        
-        示例查询流程：
-        Thought: 我需要了解Flask的路由装饰器用法
-        Action: fetch_url
-        Action Input: {"url": "https://flask.palletsprojects.com/en/latest/quickstart/"}
-        
-        观察后：
-        Thought: 文档中提到了更多高级用法，让我查看路由章节
-        Action: fetch_url
-        Action Input: {"url": "https://flask.palletsprojects.com/en/latest/api/#flask.Flask.route"}
-        
-        📚 多读多思考原则（最重要！）：
-        1. **必读文档**: 
-           - 任务开始时，首先使用 read_file 读取 init.md（项目规范）
-           - 读取 README.md、requirements.txt 等关键文档
-           - 查看项目结构映射文件（project_structure.md）
-           - 读取必要的代码文件和其他相关的文件的全文进入上下文
-        2. **充分搜索**: 
-           - 使用 search_files 搜索相关代码和配置
-           - 使用 list_files（或glob或grep命令） 了解完整的项目结构
-           - 使用 search_web 搜索不熟悉的技术和最佳实践，或直接访问一些常用的官方文档网页
-        3. **理解后行动**: 
-           - 在充分理解项目结构和需求后再编写代码
-           - 参考现有代码的风格和模式
-           - 避免重复上下文中"重要错误历史"里的错误
-        4. **持续学习**: 
-           - 遇到错误时，先分析原因，搜索解决方案
-           - 参考官方文档和最佳实践
-           - 不要盲目重试相同的方法
-        
-         **自主解决问题能力**：
-        当现有工具不足以完成任务时，你应该：
-        1. **编写自定义代码**：使用 write_file 创建辅助脚本来解决特定问题
-        2. **安装必要软件**：使用 run_shell 执行 pip install、apt-get install 等命令安装依赖
-        3. **在沙箱中测试**：如果有沙箱工具，优先在沙箱中测试危险操作
-        4. **创建临时工具**：编写一次性脚本来处理特殊需求（如数据转换、API调用等）
-        5. **组合现有工具**：通过多个工具的组合使用来实现复杂功能
-        
-        **避免重复造轮子原则**：
-        1. **优先修改现有文件**：当需要修改代码时，首先检查文件是否已存在，使用 read_file 读取现有内容，然后使用 incremental_update 或 write_file 修改
-        2. **避免创建重复文件**：在创建新文件前，使用 list_files 或 search_files 检查是否已有类似功能的文件
-        3. **复用现有代码**：查找项目中已有的类似实现，参考其模式和风格
-        4. **使用增量更新**：对于代码修改，优先使用 incremental_update 工具而不是 write_file，这样可以保留原有结构
-        
-        示例场景：
-        - 需要解析特殊格式文件 → 编写Python脚本处理
-        - 需要调用外部API → 编写requests脚本
-        - 需要特定库 → 先 pip install，再使用
-        - 需要复杂数据处理 → 编写pandas/numpy脚本
-        - 需要系统级操作 → 编写shell脚本执行
-        
-        可用工具：
-        1.原子工具
-        - read_file: 读取文件内容
-        - write_file: 写入文件内容
-        - run_shell: 执行shell命令
-        - list_files: 列出文件
-        - search_files: 搜索文件内容
-        2.代码工具
-        - execute_python: 执行Python代码
-        - run_tests: 运行测试
-        - debug_code: 调试代码
-        3.管理工具
-        - delegate_task: 委托任务给子Agent
-        - check_task_status: 检查任务状态
-        - get_project_status: 获取项目状态
-        - create_sub_agent: 创建子Agent
-        4.网络工具
-        - search_web: 搜索互联网（searXNG引擎）
-        - fetch_url: 获取网页内容（也可run_shell用curl等获取）
-        - search_code: 搜索代码示例
-        5.To-Do List工具
-        - add_todo_item: 添加待办事项
-        - mark_todo_completed: 标记待办事项为完成
-        - update_todo_item: 更新待办事项
-        - get_todo_summary: 获取待办清单摘要
-        - list_todo_files: 列出待办清单文件
-        - add_execution_record: 添加执行记录
-         6.增量更新文件内容工具（推荐使用）
-         - incremental_update: 增量更新文件（推荐用于代码更新，避免覆盖整个文件）
-         - patch_file: 使用补丁更新文件（适用于精确修改）
-         - get_file_diff: 获取文件差异（查看修改内容）
-         
-         **重要提示**：修改现有代码时，优先使用 incremental_update 而不是 write_file，这样可以：
-         1. 保留原有代码结构
-         2. 避免意外覆盖
-         3. 更容易跟踪修改历史
-
-          重要提示：
-         1. 可以执行一个或多个Action（支持多个Action同时执行）
-         2. Action必须是可用的工具名称之一
-         3. Action Input必须是有效的JSON格式
-         4. 任务完成后，Action字段留空
-         5. 不要在Action中写代码块，只写工具名称
-         
-         多个Action格式示例：
-         Thought: 我需要创建两个文件
-         Action 1: write_file
-         Action Input 1: {"path": "file1.py", "content": "print('hello')"}
-         Action 2: write_file  
-         Action Input 2: {"path": "file2.py", "content": "print('world')"}
-         
-         或者使用JSON格式：
-         ```json
-         {
-           "thought": "我需要创建两个文件",
-           "actions": [
-             {
-               "action": "write_file",
-               "action_input": {"path": "file1.py", "content": "print('hello')"}
-             },
-             {
-               "action": "write_file", 
-               "action_input": {"path": "file2.py", "content": "print('world')"}
-             }
-           ]
-         }
-         ```
-
-        代码质量和测试要求（重要！）：
-        1. **测试驱动开发（TDD）**: 
-           - 编写代码后**必须立即测试**，使用execute_python或run_tests工具
-           - 不要只是"写完代码"就认为任务完成
-           - 必须实际运行代码，验证功能正确性
-        2. **错误必须修复**: 
-           - 如果测试出现错误（ImportError、SyntaxError等），**必须继续迭代修复**
-           - 不要在有错误的情况下声称"任务完成"
-           - 持续迭代直到代码能够正常运行
-        3. **动态更新TODO**: 
-           - 发现错误时，添加新的待办事项（如"修复ImportError"）
-           - 修复错误后，标记对应待办事项为完成
-           - 保持待办清单与实际进度同步
-        4. **增量更新**: 修改现有代码时，尽量只更新必要的部分，避免重写整个文件
-        5. **全面测试**: 任务完成前必须进行全面的功能测试
-        6. **错误处理**: 代码应包含适当的错误处理和边界情况检查
-        7. **代码复用**: 优先使用现有代码和函数，避免重复造轮子
-        8. **文档注释**: 为重要函数和类添加文档注释
-        9. **性能考虑**: 编写高效、可维护的代码
-        
-        任务完成的标准（严格）：
-        ✅ 代码已编写
-        ✅ 代码已测试运行
-        ✅ 所有错误已修复
-        ✅ 功能验证通过
-        ✅ 待办清单已更新
-        ✅ 给出简要总结
-        
-        ❌ 只写完代码但未测试 → 任务未完成
-        ❌ 测试出现错误但未修复 → 任务未完成
-        ❌ 只完成了子步骤 → 任务未完成
-
-        多语言支持：
-        1. 项目可能包含多种编程语言，请根据文件扩展名识别语言
-        2. 对于非Python代码，使用适当的语法、约定和最佳实践
-        3. 跨语言调用时注意接口兼容性和数据格式
-
-        工作流程：
-        1. 读取文档（init.md等） → 2. 分析需求 → 3. 制定计划 → 4. 编写代码 → 5. 立即测试 → 6. 修复问题 → 7. 全面验证 → 8. 简要报告"""
-
+        system_prompt = SYSTEM_PROMPT_FOR_MAIN_AGENT
         super().__init__(
             agent_id="main",
             system_prompt=system_prompt,
             model_caller=model_caller,
             tools=tools,
             context_manager=context_manager,
-            max_iterations=kwargs.get('max_iterations', 50)
+            max_iterations=kwargs.get("max_iterations", 50),
         )
+        
+        # 初始化技能（需要在super().__init__之后，因为需要self.tools）
+        self._init_skills()
 
         self.project_path = project_path
         self.safety_guard = safety_guard
@@ -269,67 +82,251 @@ class MainAgent(BaseAgent):
 
         # 任务跟踪
         self.tasks: Dict[str, Dict] = {}
-        
+
         # MCP管理器
         self.mcp_manager = MCPManager(project_path)
-        
+
+        # Skills管理器已经在__init__开头初始化了
+
         # 会话管理器
         self.session_manager = SessionManager(project_path)
-        
-        # 移除复杂规划器，使用ReAct内置的动态规划
 
         # ReAct循环
         self.react_loop = AsyncReActLoop(
             model_caller=model_caller,
             tools=tools,
             context_manager=context_manager,
-            max_iterations=kwargs.get('max_iterations', settings.MAX_REACT_ITERATIONS),
+            max_iterations=kwargs.get("max_iterations", settings.MAX_REACT_ITERATIONS),
             project_path=project_path,
-            context_config=settings.context  # 传递上下文配置
+            context_config=settings.context,
         )
+
+    async def _list_skills(self, include_details: bool = False) -> Dict[str, Any]:
+        """列出所有可用的skills（支持渐进式披露）
+
+        Args:
+            include_details: 是否包含详细参数信息（默认只返回元数据）
+        """
+        try:
+            enabled_list = self.skills_manager.list_enabled_skills()
+            skills_info = []
+
+            for skill_name in enabled_list:
+                skill_info = self.skills_manager.loaded_skills.get(skill_name)
+                if skill_info:
+                    # 基础元数据（总是返回）
+                    skill_data = {
+                        "name": skill_name,
+                        "display_name": skill_info.display_name or skill_name,
+                        "description": (
+                            skill_info.description[:100] + "..."
+                            if len(skill_info.description) > 100
+                            else skill_info.description
+                        ),
+                        "trigger_keywords": skill_info.trigger_keywords,
+                        "metadata_loaded": skill_info.metadata_loaded,
+                        "full_instruction_loaded": skill_info.full_instruction_loaded,
+                    }
+
+                    # 如果需要详细信息，加载完整指令
+                    if include_details and not skill_info.full_instruction_loaded:
+                        self.skills_manager._load_full_instruction(skill_name)
+                        skill_info = self.skills_manager.loaded_skills.get(skill_name)
+
+                    # 添加详细信息
+                    if include_details and skill_info and skill_info.full_instruction_loaded:
+                        schema = self.skills_manager.get_skill_schema(skill_name)
+                        if schema:
+                            skill_data["parameters"] = [
+                                p.name for p in schema.parameters
+                            ]
+                            skill_data["parameter_details"] = [
+                                {
+                                    "name": p.name,
+                                    "type": str(p.type),
+                                    "required": p.required,
+                                    "description": p.description,
+                                }
+                                for p in schema.parameters
+                            ]
+                            skill_data["examples"] = (
+                                schema.examples if hasattr(schema, "examples") else []
+                            )
+
+                    skills_info.append(skill_data)
+
+            return {
+                "success": True,
+                "skills": skills_info,
+                "count": len(skills_info),
+                "metadata_only": not include_details,
+                "token_efficiency_note": "使用include_details=true获取完整信息（消耗更多tokens）",
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    async def _get_skill_info(self, skill_name: str) -> Dict[str, Any]:
+        """获取特定skill的详细信息（按需加载完整指令）"""
+        try:
+            # 确保技能已完全加载
+            if skill_name in self.skills_manager.loaded_skills:
+                skill_info = self.skills_manager.loaded_skills[skill_name]
+                if not skill_info.full_instruction_loaded:
+                    self.skills_manager._load_full_instruction(skill_name)
+
+            schema = self.skills_manager.get_skill_schema(skill_name)
+            if not schema:
+                return {"success": False, "error": f"Skill不存在: {skill_name}"}
+
+            # 获取技能元数据
+            skill_info = self.skills_manager.loaded_skills.get(skill_name)
+
+            # 清理描述
+            desc = schema.description.strip()
+            if desc.startswith("# "):
+                desc = desc[2:]
+            elif desc.startswith("## "):
+                desc = desc[3:]
+
+            params_info = []
+            for param in schema.parameters:
+                param_info = {
+                    "name": param.name,
+                    "type": (
+                        param.type.__name__
+                        if hasattr(param.type, "__name__")
+                        else str(param.type)
+                    ),
+                    "required": param.required,
+                    "description": param.description,
+                }
+                if hasattr(param, "default") and param.default is not None:
+                    param_info["default"] = param.default
+                params_info.append(param_info)
+
+            result = {
+                "success": True,
+                "name": skill_name,
+                "description": desc,
+                "parameters": params_info,
+                "examples": schema.examples if hasattr(schema, "examples") else [],
+                "loading_info": {"loaded_on_demand": True},
+            }
+
+            # 添加元数据信息（如果可用）
+            if skill_info:
+                result["display_name"] = skill_info.display_name or skill_name
+                result["trigger_keywords"] = skill_info.trigger_keywords
+                result["loading_info"]["metadata_loaded"] = skill_info.metadata_loaded
+                result["loading_info"][
+                    "full_instruction_loaded"
+                ] = skill_info.full_instruction_loaded
+
+            return result
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def _init_skills(self):
+        """初始化skills（支持渐进式披露）"""
+        if not settings.skills.enabled:
+            print("ℹ️ Skills功能已禁用")
+            return
+
+        if not settings.skills.auto_discover:
+            print("ℹ️ Skills自动发现已禁用")
+            return
+
+        # 渐进式披露：启动时只加载元数据
+        discovered = self.skills_manager.discover_skills(load_full_instructions=False)
+        if not discovered:
+            print("ℹ️ 未发现任何Skills")
+            return
+
+        print(f"🔍 发现 {len(discovered)} 个Skills（仅元数据）")
+
+        # 打印skills元数据信息
+        for skill_name, skill_info in discovered.items():
+            status = "✅" if skill_info.metadata_loaded else "⚠️"
+            desc = (
+                skill_info.description[:50] + "..."
+                if len(skill_info.description) > 50
+                else skill_info.description
+            )
+            print(f"   {status} {skill_name}: {desc}")
+
+        enabled = settings.skills.enabled_skills or []
+        self.skills_manager.enable_skills(enabled)
+        enabled_list = self.skills_manager.list_enabled_skills()
+        print(f"✅ 启用 {len(enabled_list)} 个Skills: {', '.join(enabled_list)}")
+
+        # 注册skill工具到注册表并添加到Agent工具字典
+        registry = get_global_registry()
+        for skill_name in enabled_list:
+            # 先确保技能已完全加载
+            self.skills_manager._load_full_instruction(skill_name)
+
+            schema = self.skills_manager.get_skill_schema(skill_name)
+            if schema:
+                func = self._create_skill_executor(skill_name)
+                registry.register(func, schema)
+                self.tools[skill_name] = func
+
+        print(f"✅ 已注册 {len(enabled_list)} 个Skill工具（按需加载完整指令）")
+
+    def _create_skill_executor(self, skill_name: str):
+        """创建skill执行函数"""
+
+        async def executor(**kwargs):
+            return await self.skills_manager.execute_skill(skill_name, **kwargs)
+
+        return executor
 
     def _create_model_caller(self, model_config: Dict):
         """创建模型调用器（支持流式输出）"""
-        
+
         async def model_caller(messages: List[Dict]) -> str:
             try:
                 # 使用提供的配置创建客户端
-                api_key = model_config.get('api_key') or os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
-                base_url = model_config.get('base_url') or os.getenv("LLM_API_URL") or os.getenv("OPENAI_BASE_URL")
-                model_name = model_config.get('name') or os.getenv("LLM_MODEL_NAME", "gpt-4")
-                
+                api_key = (
+                    model_config.get("api_key")
+                    or os.getenv("LLM_API_KEY")
+                    or os.getenv("OPENAI_API_KEY")
+                )
+                base_url = (
+                    model_config.get("base_url")
+                    or os.getenv("LLM_API_URL")
+                    or os.getenv("OPENAI_BASE_URL")
+                )
+                model_name = model_config.get("name") or os.getenv(
+                    "LLM_MODEL_NAME", "gpt-4"
+                )
+
                 if not api_key:
                     # 回退到简单响应
                     return "错误：未设置API密钥。请设置 LLM_API_KEY 环境变量。"
-                
-                client = openai.OpenAI(
-                    api_key=api_key,
-                    base_url=base_url
-                )
-                
+
+                client = openai.OpenAI(api_key=api_key, base_url=base_url)
+
                 # 确保消息格式正确
                 formatted_messages = []
                 for msg in messages:
-                    role = msg.get('role', 'user')
-                    content = msg.get('content', '')
+                    role = msg.get("role", "user")
+                    content = msg.get("content", "")
                     if role and content:
-                        formatted_messages.append({
-                            "role": role,
-                            "content": content
-                        })
-                
+                        formatted_messages.append({"role": role, "content": content})
+
                 # 流式输出
                 print("🤖 模型思考中", end="", flush=True)
                 full_response = ""
-                
+
                 stream = client.chat.completions.create(
                     model=model_name,
                     messages=formatted_messages,
-                    temperature=model_config.get('temperature', 0.1),
-                    max_tokens=model_config.get('max_tokens', 8000),
-                    stream=True  # 启用流式输出
+                    temperature=model_config.get("temperature", 0.1),
+                    max_tokens=model_config.get("max_tokens", 8000),
+                    stream=True,  # 启用流式输出
                 )
-                
+
                 # 处理流式响应 - 模型输出什么就打印什么
                 for chunk in stream:
                     if chunk.choices[0].delta.content is not None:
@@ -337,28 +334,69 @@ class MainAgent(BaseAgent):
                         full_response += content_chunk
                         # 实时打印
                         print(content_chunk, end="", flush=True)
-                
+
                 print()  # 换行
                 return full_response if full_response is not None else ""
-                
+
             except Exception as e:
                 # 详细的错误信息
                 error_msg = f"模型调用失败: {str(e)}"
                 print(f"\n❌ {error_msg}")
                 
-                # 回退到简单的响应逻辑
-                if len(messages) > 0:
-                    last_msg = messages[-1].get('content', '').lower()
-                    if '创建' in last_msg or 'create' in last_msg or 'hello' in last_msg:
-                        return "我将创建一个hello world程序。\n\nAction: write_file\nAction Input: {\"path\": \"hello.py\", \"content\": \"print('Hello, World!')\"}"
-                    elif '运行' in last_msg or 'run' in last_msg:
-                        return "让我运行这个程序。\n\nAction: run_shell\nAction Input: {\"command\": \"python3 hello.py\"}"
-                    elif '已完成' in last_msg or 'finish' in last_msg or 'action' not in last_msg:
-                        return "任务已完成。\n\n"
-                    else:
-                        return "我需要分析当前情况并继续执行。\n\nAction: list_files\nAction Input: {\"pattern\": \"*\"}"
-                return "任务完成。"
-        
+                # 检查是否为认证错误
+                error_str = str(e).lower()
+                if "401" in error_str or "authentication" in error_str or "invalid api key" in error_str:
+                    print("\n🔑 API认证失败！请检查：")
+                    print("1. API密钥是否正确")
+                    print("2. 环境变量 LLM_API_KEY 是否设置")
+                    print("3. API密钥是否有权限")
+                    print("4. API服务是否可用")
+                    print("\n💡 建议：")
+                    print("- 运行 `export LLM_API_KEY=your_api_key` 设置环境变量")
+                    print("- 检查API密钥是否过期或被撤销")
+                    print("- 确认API服务端点是否正确")
+                    # 抛出异常，停止执行
+                    raise RuntimeError(f"API认证失败: {error_msg}")
+                
+                # 检查是否为网络错误
+                elif "connection" in error_str or "timeout" in error_str or "network" in error_str:
+                    print("\n🌐 网络连接失败！请检查：")
+                    print("1. 网络连接是否正常")
+                    print("2. API服务端点是否可达")
+                    print("3. 防火墙或代理设置")
+                    print("\n💡 建议：")
+                    print("- 检查网络连接")
+                    print("- 确认API服务URL是否正确")
+                    print("- 尝试使用 `curl` 测试API端点")
+                    # 抛出异常，停止执行
+                    raise RuntimeError(f"网络连接失败: {error_msg}")
+                
+                # 检查是否为配额错误
+                elif "quota" in error_str or "limit" in error_str or "rate limit" in error_str:
+                    print("\n📊 API配额或限制错误！请检查：")
+                    print("1. API配额是否用完")
+                    print("2. 是否达到速率限制")
+                    print("3. 账户余额是否充足")
+                    print("\n💡 建议：")
+                    print("- 检查API使用情况")
+                    print("- 等待配额重置")
+                    print("- 升级API套餐")
+                    # 抛出异常，停止执行
+                    raise RuntimeError(f"API配额错误: {error_msg}")
+                
+                # 其他错误，提供通用建议
+                else:
+                    print("\n⚠️  模型调用遇到问题！请检查：")
+                    print("1. API服务状态")
+                    print("2. 模型名称是否正确")
+                    print("3. 请求参数是否有效")
+                    print("\n💡 建议：")
+                    print("- 查看错误详情")
+                    print("- 检查API文档")
+                    print("- 联系技术支持")
+                    # 抛出异常，停止执行
+                    raise RuntimeError(f"模型调用错误: {error_msg}")
+
         return model_caller
 
     def _create_tools(self, project_path: Path, safety_guard) -> Dict[str, Any]:
@@ -369,6 +407,9 @@ class MainAgent(BaseAgent):
         web_tools = WebTools(project_path, safety_guard)
         todo_tools = TodoTools(project_path, safety_guard)
         incremental_tools = IncrementalTools(project_path, safety_guard)
+        
+        # 保存web_tools引用以便后续清理
+        self.web_tools = web_tools
 
         # 主Agent的特殊工具
         tools = {
@@ -378,17 +419,14 @@ class MainAgent(BaseAgent):
             "run_shell": atomic_tools.run_shell,
             "list_files": atomic_tools.list_files,
             "search_files": atomic_tools.search_files,
-
             # 代码工具
             "execute_python": code_tools.execute_python,
             "run_tests": code_tools.run_tests,
             "debug_code": code_tools.debug_code,
-
             # 网络工具
             "search_web": web_tools.search_web,
             "fetch_url": web_tools.fetch_url,
             "search_code": web_tools.search_code,
-
             # To-Do List工具
             "add_todo_item": todo_tools.add_todo_item,
             "mark_todo_completed": todo_tools.mark_todo_completed,
@@ -396,23 +434,22 @@ class MainAgent(BaseAgent):
             "get_todo_summary": todo_tools.get_todo_summary,
             "list_todo_files": todo_tools.list_todo_files,
             "add_execution_record": todo_tools.add_execution_record,
-
             # 增量更新工具
             "incremental_update": incremental_tools.incremental_update,
             "patch_file": incremental_tools.patch_file,
             "get_file_diff": incremental_tools.get_file_diff,
-
             # 管理工具
             "delegate_task": self.delegate_task,
             "check_task_status": self.check_task_status,
             "get_project_status": self.get_project_status,
             "create_sub_agent": self.create_sub_agent,
-            
             # MCP工具
             "list_mcp_tools": self.list_mcp_tools,
             "call_mcp_tool": self.call_mcp_tool,
             "get_mcp_status": self.get_mcp_status,
-            
+            # Skills查询工具
+            "list_skills": self._list_skills,
+            "get_skill_info": self._get_skill_info,
             # 会话管理工具
             "new_session": self.new_session,
             "continue_session": self.continue_session,
@@ -421,38 +458,46 @@ class MainAgent(BaseAgent):
             "delete_session": self.delete_session,
             "get_conversation_history": self.get_conversation_history,
             "get_session_stats": self.get_session_stats,
-            
             # 动态规划已集成到ReAct循环中，移除复杂规划工具
         }
 
         # 可选：沙箱工具
         try:
             sandbox_tools = SandboxTools(project_path, safety_guard)
-            tools.update({
-                "run_in_sandbox": sandbox_tools.run_in_sandbox,
-                "install_package": sandbox_tools.install_package,
-                "call_mcp": sandbox_tools.call_mcp,
-            })
+            tools.update(
+                {
+                    "run_in_sandbox": sandbox_tools.run_in_sandbox,
+                    "install_package": sandbox_tools.install_package,
+                    "call_mcp": sandbox_tools.call_mcp,
+                }
+            )
         except:
             pass  # 沙箱工具可选
 
         # 注册工具到全局注册表
         registry = get_global_registry()
+        registered_count = 0
+
         for tool_name, tool_func in tools.items():
-            if tool_name in ALL_SCHEMAS:
-                registry.register(tool_func, ALL_SCHEMAS[tool_name])
-        
-        print(f"✅ 已注册 {len([t for t in tools.keys() if t in ALL_SCHEMAS])} 个工具到注册表")
+            # 使用动态schema获取函数
+            schema = get_schema(tool_name, self.skills_manager)
+            if schema:
+                registry.register(tool_func, schema)
+                registered_count += 1
+
+        print(f"✅ 已注册 {registered_count} 个工具到注册表")
 
         return tools
 
-    async def execute(self,
-                      task: str,
-                      init_instructions: str = "",
-                      task_dir: Optional[Path] = None,
-                      max_iterations: int = 20,
-                      project_analysis: str = "",
-                      todo_manager: Optional[Any] = None) -> Dict[str, Any]:
+    async def execute(
+        self,
+        task: str,
+        init_instructions: str = "",
+        task_dir: Optional[Path] = None,
+        max_iterations: int = 20,
+        project_analysis: str = "",
+        todo_manager: Optional[Any] = None,
+    ) -> Dict[str, Any]:
         """
         执行任务
 
@@ -469,7 +514,7 @@ class MainAgent(BaseAgent):
         """
         print(f"\n🤖 主Agent开始执行任务: {task}")
         self.start_time = asyncio.get_event_loop().time()
-        
+
         # 创建会话并显示 session_id
         session_id = await self.session_manager.create_session(task)
         print(f"📋 会话ID: {session_id}")
@@ -478,24 +523,46 @@ class MainAgent(BaseAgent):
         # 更新系统提示，包含项目分析结果
         analysis_section = ""
         if project_analysis and "失败" not in project_analysis:
-            analysis_section = f"\n\n项目结构分析结果（类方法映射）:\n{project_analysis[:1500]}..."
+            analysis_section = (
+                f"\n\n项目结构分析结果（类方法映射）:\n{project_analysis[:1500]}..."
+            )
             print("📊 项目分析结果已集成到系统提示中")
-        
+
         full_system_prompt = f"{self.system_prompt}{analysis_section}\n\n项目初始化指令:\n{init_instructions}"
-        self.conversation_history[0]['content'] = full_system_prompt
+        self.conversation_history[0]["content"] = full_system_prompt
 
         # 添加任务描述
-        self.conversation_history.append({
-            "role": "user",
-            "content": f"任务：{task}\n\n请参考项目结构分析结果，制定计划并执行。"
-        })
+        self.conversation_history.append(
+            {
+                "role": "user",
+                "content": f"任务：{task}\n\n请参考项目结构分析结果，制定计划并执行。",
+            }
+        )
 
         # 运行ReAct循环
-        result = await self.react_loop.run(
-            initial_prompt=full_system_prompt,
-            task_description=task,
-            todo_manager=todo_manager
-        )
+        try:
+            result = await self.react_loop.run(
+                initial_prompt=full_system_prompt,
+                task_description=task,
+                todo_manager=todo_manager,
+            )
+        except asyncio.CancelledError:
+            # 任务被取消，重新抛出以便上层处理
+            raise
+        except Exception as e:
+            # 记录错误
+            print(f"❌ ReAct循环执行失败: {e}")
+            import traceback
+            traceback.print_exc()
+            # 重新抛出异常
+            raise
+        finally:
+            # 确保资源被清理，即使发生异常
+            try:
+                if hasattr(self, 'web_tools'):
+                    await self.web_tools.cleanup()
+            except Exception as e:
+                print(f"⚠️  清理web_tools时出错: {e}")
 
         # 更新统计
         self.iterations = len(self.react_loop.steps)
@@ -504,13 +571,15 @@ class MainAgent(BaseAgent):
             **result,
             "session_id": session_id,
             "agent_stats": self.get_stats(),
-            "execution_time": asyncio.get_event_loop().time() - self.start_time
+            "execution_time": asyncio.get_event_loop().time() - self.start_time,
         }
 
-    async def delegate_task(self,
-                            task_description: str,
-                            agent_type: str = "general",
-                            context_strategy: str = "isolated") -> Dict[str, Any]:
+    async def delegate_task(
+        self,
+        task_description: str,
+        agent_type: str = "general",
+        context_strategy: str = "isolated",
+    ) -> Dict[str, Any]:
         """
         委托任务给子Agent
 
@@ -533,14 +602,14 @@ class MainAgent(BaseAgent):
             "context_strategy": context_strategy,
             "status": "pending",
             "created_at": datetime.now().isoformat(),
-            "result": None
+            "result": None,
         }
 
         # 使用多Agent系统委托
         delegation_result = await self.multi_agent_system.delegate_task(
             task_description=task_description,
             task_type=agent_type,
-            context_strategy=context_strategy
+            context_strategy=context_strategy,
         )
 
         self.tasks[task_id]["status"] = "delegated"
@@ -549,7 +618,7 @@ class MainAgent(BaseAgent):
         return {
             "task_id": task_id,
             "status": "delegated",
-            "delegation_result": delegation_result
+            "delegation_result": delegation_result,
         }
 
     async def check_task_status(self, task_id: str) -> Dict[str, Any]:
@@ -571,12 +640,12 @@ class MainAgent(BaseAgent):
             "status": task["status"],
             "description": task["description"],
             "result": task.get("result"),
-            "created_at": task["created_at"]
+            "created_at": task["created_at"],
         }
 
-    async def create_sub_agent(self,
-                               agent_type: str = "code",
-                               capabilities: Optional[List[str]] = None) -> Dict[str, Any]:
+    async def create_sub_agent(
+        self, agent_type: str = "code", capabilities: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
         """创建子Agent"""
         agent_id = f"sub_{agent_type}_{len(self.sub_agents)}"
 
@@ -623,7 +692,7 @@ class MainAgent(BaseAgent):
             tools=self.tools,  # 可以传递子集
             context_manager=self.context_manager,
             parent_agent_id=self.agent_id,
-            max_iterations=self.max_iterations
+            max_iterations=self.max_iterations,
         )
 
         self.sub_agents[agent_id] = sub_agent
@@ -632,7 +701,7 @@ class MainAgent(BaseAgent):
             "agent_id": agent_id,
             "agent_type": agent_type,
             "status": "created",
-            "capabilities": capabilities if capabilities is not None else ["general"]
+            "capabilities": capabilities if capabilities is not None else ["general"],
         }
 
     async def list_mcp_tools(self) -> Dict[str, Any]:
@@ -643,19 +712,21 @@ class MainAgent(BaseAgent):
                 "success": True,
                 "tools": tools_result.get("tools", {}),
                 "count": tools_result.get("count", 0),
-                "connected_servers": tools_result.get("connected_servers", [])
+                "connected_servers": tools_result.get("connected_servers", []),
             }
         except Exception as e:
             return {"error": f"获取MCP工具列表失败: {str(e)}"}
-    
-    async def call_mcp_tool(self, tool_name: str, arguments: Optional[Dict] = None) -> Dict[str, Any]:
+
+    async def call_mcp_tool(
+        self, tool_name: str, arguments: Optional[Dict] = None
+    ) -> Dict[str, Any]:
         """调用MCP工具"""
         try:
             result = await self.mcp_manager.call_tool(tool_name, arguments or {})
             return result
         except Exception as e:
             return {"error": f"调用MCP工具失败: {str(e)}"}
-    
+
     async def get_mcp_status(self) -> Dict[str, Any]:
         """获取MCP服务器状态"""
         try:
@@ -663,51 +734,51 @@ class MainAgent(BaseAgent):
             return status_result
         except Exception as e:
             return {"error": f"获取MCP状态失败: {str(e)}"}
-    
-    async def new_session(self, task: str, title: Optional[str] = None) -> Dict[str, Any]:
+
+    async def new_session(
+        self, task: str, title: Optional[str] = None
+    ) -> Dict[str, Any]:
         """创建新会话"""
         try:
             session_id = await self.session_manager.create_session(task, title)
             return {
                 "success": True,
                 "session_id": session_id,
-                "message": "新会话已创建"
+                "message": "新会话已创建",
             }
         except Exception as e:
             return {"error": f"创建会话失败: {str(e)}"}
-    
-    async def continue_session(self, message: str, session_id: Optional[str] = None) -> Dict[str, Any]:
+
+    async def continue_session(
+        self, message: str, session_id: Optional[str] = None
+    ) -> Dict[str, Any]:
         """继续当前会话或指定会话"""
         try:
             # 添加用户消息
             added = await self.session_manager.add_message("user", message)
             if not added:
                 return {"error": "消息添加失败，可能超过token限制"}
-            
+
             # 获取会话历史
             messages = await self.session_manager.get_messages(session_id)
-            
+
             return {
                 "success": True,
                 "session_id": session_id or self.session_manager.current_session_id,
                 "messages": messages,
-                "conversation_preview": await self.session_manager.get_conversation_history()
+                "conversation_preview": await self.session_manager.get_conversation_history(),
             }
         except Exception as e:
             return {"error": f"继续会话失败: {str(e)}"}
-    
+
     async def list_sessions(self) -> Dict[str, Any]:
         """列出所有会话"""
         try:
             sessions = await self.session_manager.list_sessions()
-            return {
-                "success": True,
-                "sessions": sessions,
-                "count": len(sessions)
-            }
+            return {"success": True, "sessions": sessions, "count": len(sessions)}
         except Exception as e:
             return {"error": f"获取会话列表失败: {str(e)}"}
-    
+
     async def switch_session(self, session_id: str) -> Dict[str, Any]:
         """切换到指定会话"""
         try:
@@ -716,13 +787,13 @@ class MainAgent(BaseAgent):
                 return {
                     "success": True,
                     "session_id": session_id,
-                    "message": "会话切换成功"
+                    "message": "会话切换成功",
                 }
             else:
                 return {"error": f"会话不存在: {session_id}"}
         except Exception as e:
             return {"error": f"切换会话失败: {str(e)}"}
-    
+
     async def delete_session(self, session_id: str) -> Dict[str, Any]:
         """删除会话"""
         try:
@@ -731,38 +802,32 @@ class MainAgent(BaseAgent):
                 return {
                     "success": True,
                     "session_id": session_id,
-                    "message": "会话已删除"
+                    "message": "会话已删除",
                 }
             else:
                 return {"error": f"会话不存在: {session_id}"}
         except Exception as e:
             return {"error": f"删除会话失败: {str(e)}"}
-    
+
     async def get_conversation_history(self, max_length: int = 10) -> Dict[str, Any]:
         """获取对话历史"""
         try:
             history = await self.session_manager.get_conversation_history(max_length)
-            return {
-                "success": True,
-                "history": history
-            }
+            return {"success": True, "history": history}
         except Exception as e:
             return {"error": f"获取对话历史失败: {str(e)}"}
-    
+
     # 移除复杂规划功能，使用ReAct内置的动态规划
     # 相关的create_plan、execute_plan_step、get_plan_status等方法已删除
-    
+
     async def get_session_stats(self) -> Dict[str, Any]:
         """获取会话统计信息"""
         try:
             stats = self.session_manager.get_session_stats()
-            return {
-                "success": True,
-                "stats": stats
-            }
+            return {"success": True, "stats": stats}
         except Exception as e:
             return {"error": f"获取会话统计失败: {str(e)}"}
-    
+
     async def get_project_status(self) -> Dict[str, Any]:
         """获取项目状态"""
         try:
@@ -773,10 +838,14 @@ class MainAgent(BaseAgent):
                     ["git", "status", "--porcelain"],
                     capture_output=True,
                     text=True,
-                    cwd=self.project_path
+                    cwd=self.project_path,
                 )
                 if result.returncode == 0:
-                    git_status["changed_files"] = len(result.stdout.strip().split('\n')) if result.stdout.strip() else 0
+                    git_status["changed_files"] = (
+                        len(result.stdout.strip().split("\n"))
+                        if result.stdout.strip()
+                        else 0
+                    )
                     git_status["has_changes"] = bool(result.stdout.strip())
             except:
                 git_status["error"] = "Git未初始化或不可用"
@@ -794,11 +863,27 @@ class MainAgent(BaseAgent):
                 "file_count": file_count,
                 "total_size_bytes": total_size,
                 "git_status": git_status,
-                "active_tasks": len([t for t in self.tasks.values() if t["status"] != "completed"]),
-                "sub_agents": len(self.sub_agents)
+                "active_tasks": len(
+                    [t for t in self.tasks.values() if t["status"] != "completed"]
+                ),
+                "sub_agents": len(self.sub_agents),
             }
 
         except Exception as e:
             return {"error": str(e)}
-
-
+    
+    def __del__(self):
+        """析构函数，确保资源被清理"""
+        try:
+            if hasattr(self, 'web_tools'):
+                # 尝试同步清理
+                import asyncio
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # 如果事件循环正在运行，安排异步清理
+                    asyncio.create_task(self.web_tools.cleanup())
+                else:
+                    # 否则同步清理
+                    loop.run_until_complete(self.web_tools.cleanup())
+        except:
+            pass  # 忽略析构函数中的错误

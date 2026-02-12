@@ -3,11 +3,12 @@
 """
 文件操作辅助工具
 """
+
 import asyncio
 import aiofiles
 import aiofiles.os
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Union
+from typing import Dict, List, Any, Optional, Union, Callable, Coroutine
 import shutil
 import json
 import hashlib
@@ -29,7 +30,7 @@ class FileOps:
             文件内容
         """
         try:
-            async with aiofiles.open(file_path, 'r', encoding=encoding) as f:
+            async with aiofiles.open(file_path, "r", encoding=encoding) as f:
                 return await f.read()
         except FileNotFoundError:
             raise FileNotFoundError(f"文件不存在: {file_path}")
@@ -38,10 +39,10 @@ class FileOps:
 
     @staticmethod
     async def write_file(
-            file_path: Union[str, Path],
-            content: str,
-            encoding: str = "utf-8",
-            append: bool = False
+        file_path: Union[str, Path],
+        content: str,
+        encoding: str = "utf-8",
+        append: bool = False,
     ) -> bool:
         """
         异步写入文件
@@ -56,7 +57,7 @@ class FileOps:
             是否成功
         """
         try:
-            mode = 'a' if append else 'w'
+            mode = "a" if append else "w"
             async with aiofiles.open(file_path, mode, encoding=encoding) as f:
                 await f.write(content)
             return True
@@ -65,9 +66,7 @@ class FileOps:
 
     @staticmethod
     async def list_files(
-            directory: Union[str, Path],
-            pattern: str = "*",
-            recursive: bool = False
+        directory: Union[str, Path], pattern: str = "*", recursive: bool = False
     ) -> List[str]:
         """
         列出文件
@@ -106,7 +105,7 @@ class FileOps:
     async def is_file(file_path: Union[str, Path]) -> bool:
         """检查是否是文件"""
         try:
-            return (await aiofiles.os.path.isfile(file_path))
+            return await aiofiles.os.path.isfile(file_path)
         except:
             return False
 
@@ -114,7 +113,7 @@ class FileOps:
     async def is_dir(directory: Union[str, Path]) -> bool:
         """检查是否是目录"""
         try:
-            return (await aiofiles.os.path.isdir(directory))
+            return await aiofiles.os.path.isdir(directory)
         except:
             return False
 
@@ -133,7 +132,7 @@ class FileOps:
         try:
             hash_func = hashlib.new(algorithm)
 
-            async with aiofiles.open(file_path, 'rb') as f:
+            async with aiofiles.open(file_path, "rb") as f:
                 while chunk := await f.read(8192):
                     hash_func.update(chunk)
 
@@ -153,9 +152,7 @@ class FileOps:
 
     @staticmethod
     async def copy_file(
-            source: Union[str, Path],
-            destination: Union[str, Path],
-            overwrite: bool = True
+        source: Union[str, Path], destination: Union[str, Path], overwrite: bool = True
     ) -> bool:
         """复制文件"""
         try:
@@ -172,9 +169,9 @@ class FileOps:
             await FileOps.create_dir(dst.parent)
 
             # 复制文件
-            async with aiofiles.open(src, 'rb') as f_src:
+            async with aiofiles.open(src, "rb") as f_src:
                 content = await f_src.read()
-                async with aiofiles.open(dst, 'wb') as f_dst:
+                async with aiofiles.open(dst, "wb") as f_dst:
                     await f_dst.write(content)
 
             return True
@@ -183,9 +180,7 @@ class FileOps:
 
     @staticmethod
     async def move_file(
-            source: Union[str, Path],
-            destination: Union[str, Path],
-            overwrite: bool = True
+        source: Union[str, Path], destination: Union[str, Path], overwrite: bool = True
     ) -> bool:
         """移动文件"""
         try:
@@ -243,9 +238,7 @@ class FileOps:
 
     @staticmethod
     async def search_in_file(
-            file_path: Union[str, Path],
-            pattern: str,
-            case_sensitive: bool = False
+        file_path: Union[str, Path], pattern: str, case_sensitive: bool = False
     ) -> List[Dict[str, Any]]:
         """
         在文件中搜索文本
@@ -267,16 +260,20 @@ class FileOps:
             regex = re.compile(pattern, flags)
 
             matches = []
-            lines = content.split('\n')
+            lines = content.split("\n")
 
             for i, line in enumerate(lines, 1):
                 for match in regex.finditer(line):
-                    matches.append({
-                        "line": i,
-                        "column": match.start() + 1,
-                        "match": match.group(),
-                        "context": line[max(0, match.start() - 20):match.end() + 20]
-                    })
+                    matches.append(
+                        {
+                            "line": i,
+                            "column": match.start() + 1,
+                            "match": match.group(),
+                            "context": line[
+                                max(0, match.start() - 20) : match.end() + 20
+                            ],
+                        }
+                    )
 
             return matches
         except Exception as e:
@@ -295,10 +292,10 @@ class FileOps:
 
     @staticmethod
     async def write_json(
-            file_path: Union[str, Path],
-            data: Any,
-            indent: int = 2,
-            ensure_ascii: bool = False
+        file_path: Union[str, Path],
+        data: Any,
+        indent: int = 2,
+        ensure_ascii: bool = False,
     ) -> bool:
         """写入JSON文件"""
         try:
@@ -309,9 +306,9 @@ class FileOps:
 
     @staticmethod
     async def backup_file(
-            file_path: Union[str, Path],
-            backup_dir: Optional[Union[str, Path]] = None,
-            suffix: str = ".bak"
+        file_path: Union[str, Path],
+        backup_dir: Optional[Union[str, Path]] = None,
+        suffix: str = ".bak",
     ) -> str:
         """
         备份文件
@@ -346,9 +343,9 @@ class FileOps:
 
     @staticmethod
     async def watch_file(
-            file_path: Union[str, Path],
-            callback: Callable[[str], Coroutine],
-            check_interval: float = 1.0
+        file_path: Union[str, Path],
+        callback: Callable[[str], Coroutine],
+        check_interval: float = 1.0,
     ):
         """
         监视文件变化
@@ -409,5 +406,3 @@ read_json = FileOps.read_json
 write_json = FileOps.write_json
 backup_file = FileOps.backup_file
 watch_file = FileOps.watch_file
-
-

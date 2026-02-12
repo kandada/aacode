@@ -4,6 +4,7 @@
 轻量级原子工具
 遵循"bash是万能适配器"原则,简化实现
 """
+
 import asyncio
 import subprocess
 from pathlib import Path
@@ -17,24 +18,30 @@ class AtomicTools:
         self.project_path = project_path
         self.safety_guard = safety_guard
 
-    async def read_file(self, path: str, line_start: Optional[int] = None, line_end: Optional[int] = None, **kwargs) -> Dict[str, Any]:
+    async def read_file(
+        self,
+        path: str,
+        line_start: Optional[int] = None,
+        line_end: Optional[int] = None,
+        **kwargs,
+    ) -> Dict[str, Any]:
         """
         读取文件内容 - 支持行范围读取和智能分段提示
-        
+
         Args:
             path: 文件路径(相对或绝对)
             line_start: 起始行号(从1开始,可选)
             line_end: 结束行号(包含,可选)
-        
+
         注意:**kwargs 用于接收并忽略模型可能传入的额外参数
-        
+
         Returns:
             包含文件内容的字典
         """
         try:
             # 转换为 Path 对象并处理绝对/相对路径
             path_obj = Path(path)
-            
+
             if path_obj.is_absolute():
                 # 绝对路径:直接使用
                 full_path = path_obj
@@ -47,7 +54,7 @@ class AtomicTools:
                 # 相对路径:拼接到 project_path
                 full_path = self.project_path / path
                 display_path = path
-            
+
             # 安全检查
             if not self.safety_guard.is_safe_path(full_path):
                 return {"error": f"访问路径超出项目范围: {display_path}"}
@@ -55,107 +62,134 @@ class AtomicTools:
             # 检查文件是否存在
             if not full_path.exists():
                 return {"error": f"文件不存在: {display_path}"}
-            
+
             # 检查是否为文件
             if not full_path.is_file():
                 return {"error": f"路径不是文件: {display_path}"}
 
             # 使用bash万能适配器 - 使用绝对路径避免cwd问题
             result = await asyncio.create_subprocess_exec(
-                'cat', str(full_path.absolute()),
+                "cat",
+                str(full_path.absolute()),
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                stderr=asyncio.subprocess.PIPE,
             )
-            
+
             stdout, stderr = await result.communicate()
-            
+
             if result.returncode != 0:
                 error_msg = stderr.decode() if stderr else "读取文件失败"
                 return {"error": f"读取文件失败: {error_msg}"}
-                
-            content = stdout.decode('utf-8', errors='ignore')
-            lines = content.split('\n')
+
+            content = stdout.decode("utf-8", errors="ignore")
+            lines = content.split("\n")
             total_lines = len(lines)
-            
+
             # 如果指定了行范围,提取相应的行
             if line_start is not None or line_end is not None:
                 # 处理行号(从1开始转换为从0开始的索引)
                 start_idx = (line_start - 1) if line_start is not None else 0
-                end_idx = line_end if line_end is not None else total_lines
-                
+                end_idx = (line_end - 1) if line_end is not None else total_lines
+
                 # 边界检查
                 start_idx = max(0, min(start_idx, total_lines))
                 end_idx = max(0, min(end_idx, total_lines))
-                
+
                 # 检查是否有效的范围
-                if start_idx < end_idx:
-                    # 提取行
-                    selected_lines = lines[start_idx:end_idx]
-                    content = '\n'.join(selected_lines)
-                    
+                if start_idx <= end_idx:
+                    # 提取行 (end_idx需要+1因为切片不包含结束索引)
+                    selected_lines = lines[start_idx:end_idx + 1]
+                    content = "\n".join(selected_lines)
+
                     return {
                         "success": True,
                         "path": display_path,
                         "content": content,
                         "size": len(content),
                         "lines": len(selected_lines),
-                        "line_range": f"{start_idx + 1}-{end_idx}",
-                        "total_lines": total_lines
+                        "line_range": f"{start_idx + 1}-{end_idx + 1}",
+                        "total_lines": total_lines,
                     }
                 else:
                     # 无效的范围，返回整个文件
-                    print(f"⚠️  警告: 无效的行范围 {line_start}-{line_end}, 返回整个文件")
-            
+                    print(
+                        f"⚠️  警告: 无效的行范围 {line_start}-{line_end}, 返回整个文件"
+                    )
+
             # 读取整个文件 - 智能分段提示
             from config import settings
-            max_auto_read_lines = getattr(settings.limits, 'max_auto_read_lines', 200)
-            
+
+            max_auto_read_lines = getattr(settings.limits, "max_auto_read_lines", 200)
+
             if total_lines > max_auto_read_lines:
                 # 文件较大,提供智能提示
-                return await self._handle_large_file(display_path, full_path, content, lines, total_lines)
-            
+                return await self._handle_large_file(
+                    display_path, full_path, content, lines, total_lines
+                )
+
             # 文件不大,直接返回
             return {
                 "success": True,
                 "path": display_path,
                 "content": content,
                 "size": len(content),
-                "lines": total_lines  # 使用 total_lines 而不是 len(lines)
+                "lines": total_lines,  # 使用 total_lines 而不是 len(lines)
             }
         except Exception as e:
             return {"error": f"读取文件异常: {str(e)},路径: {path}"}
-    
-    async def _handle_large_file(self, path: str, full_path: Path, content: str, lines: List[str], total_lines: int) -> Dict[str, Any]:
+
+    async def _handle_large_file(
+        self,
+        path: str,
+        full_path: Path,
+        content: str,
+        lines: List[str],
+        total_lines: int,
+    ) -> Dict[str, Any]:
         """
         处理大文件 - 提供智能分段建议
-        
+
         Args:
             path: 相对路径
             full_path: 绝对路径
             content: 文件内容
             lines: 文件行列表
             total_lines: 总行数
-            
+
         Returns:
             包含建议的字典
         """
         file_ext = full_path.suffix
-        
+
         # 尝试分析代码结构(仅对代码文件)
-        code_extensions = ['.py', '.js', '.ts', '.java', '.cpp', '.c', '.go', '.rs', '.php', '.rb']
-        
+        code_extensions = [
+            ".py",
+            ".js",
+            ".ts",
+            ".java",
+            ".cpp",
+            ".c",
+            ".go",
+            ".rs",
+            ".php",
+            ".rb",
+        ]
+
         if file_ext in code_extensions:
             try:
                 from utils.code_analyzer import CodeAnalyzer
+
                 analyzer = CodeAnalyzer(self.project_path)
                 analysis = analyzer.analyze_code(content, file_ext)
-                
+
                 # 生成结构摘要
                 structure_info = self._generate_structure_summary(analysis, path)
-                
+
                 # 生成分段建议
-                suggestions = self._generate_smart_suggestions(path, total_lines, analysis)
-                
+                suggestions = self._generate_smart_suggestions(
+                    path, total_lines, analysis
+                )
+
                 return {
                     "success": True,
                     "path": path,
@@ -164,14 +198,15 @@ class AtomicTools:
                     "warning": f"⚠️  文件较大({total_lines}行),建议分段读取或按结构读取",
                     "structure": structure_info,
                     "suggestions": suggestions,
-                    "preview": '\n'.join(lines[:50]) + f"\n\n... (还有 {total_lines - 50} 行)",
-                    "note": "💡 提示:使用 line_start 和 line_end 参数读取特定范围,或参考上面的结构信息选择需要的部分"
+                    "preview": "\n".join(lines[:50])
+                    + f"\n\n... (还有 {total_lines - 50} 行)",
+                    "note": "💡 提示:使用 line_start 和 line_end 参数读取特定范围,或参考上面的结构信息选择需要的部分",
                 }
             except Exception as e:
                 # 代码分析失败,返回简单提示
                 print(f"⚠️  代码分析失败: {e}")
                 pass
-        
+
         # 非代码文件或分析失败,返回简单的分段建议
         return {
             "success": True,
@@ -183,19 +218,19 @@ class AtomicTools:
                 f"📖 读取前100行: read_file(path='{path}', line_end=100)",
                 f"📖 读取第100-200行: read_file(path='{path}', line_start=100, line_end=200)",
                 f"📖 读取中间部分: read_file(path='{path}', line_start={total_lines//2-50}, line_end={total_lines//2+50})",
-                f"📖 读取末尾100行: read_file(path='{path}', line_start={max(1, total_lines-100)})"
+                f"📖 读取末尾100行: read_file(path='{path}', line_start={max(1, total_lines-100)})",
             ],
-            "preview": '\n'.join(lines[:50]) + f"\n\n... (还有 {total_lines - 50} 行)",
-            "note": "💡 提示:使用 line_start 和 line_end 参数读取特定范围"
+            "preview": "\n".join(lines[:50]) + f"\n\n... (还有 {total_lines - 50} 行)",
+            "note": "💡 提示:使用 line_start 和 line_end 参数读取特定范围",
         }
-    
+
     def _generate_structure_summary(self, analysis, path: str) -> Dict[str, Any]:
         """生成代码结构摘要"""
         summary = {
             "total_lines": analysis.lines_of_code,
-            "complexity": round(analysis.complexity_score, 2)
+            "complexity": round(analysis.complexity_score, 2),
         }
-        
+
         # 函数列表
         if analysis.functions:
             summary["functions"] = [
@@ -203,13 +238,15 @@ class AtomicTools:
                     "name": f["name"],
                     "line": f["line"],
                     "args": f.get("args", []),
-                    "suggestion": f"read_file(path='{path}', line_start={f['line']}, line_end={f['line']+20})"
+                    "suggestion": f"read_file(path='{path}', line_start={f['line']}, line_end={f['line']+20})",
                 }
                 for f in analysis.functions[:10]  # 最多显示10个
             ]
             if len(analysis.functions) > 10:
-                summary["functions_note"] = f"... 还有 {len(analysis.functions) - 10} 个函数"
-        
+                summary["functions_note"] = (
+                    f"... 还有 {len(analysis.functions) - 10} 个函数"
+                )
+
         # 类列表
         if analysis.classes:
             summary["classes"] = [
@@ -217,58 +254,64 @@ class AtomicTools:
                     "name": c["name"],
                     "line": c["line"],
                     "methods": c.get("methods", []),
-                    "suggestion": f"read_file(path='{path}', line_start={c['line']}, line_end={c['line']+50})"
+                    "suggestion": f"read_file(path='{path}', line_start={c['line']}, line_end={c['line']+50})",
                 }
                 for c in analysis.classes[:5]  # 最多显示5个
             ]
             if len(analysis.classes) > 5:
                 summary["classes_note"] = f"... 还有 {len(analysis.classes) - 5} 个类"
-        
+
         # 导入列表
         if analysis.imports:
             summary["imports"] = analysis.imports[:10]
             if len(analysis.imports) > 10:
-                summary["imports_note"] = f"... 还有 {len(analysis.imports) - 10} 个导入"
-        
+                summary["imports_note"] = (
+                    f"... 还有 {len(analysis.imports) - 10} 个导入"
+                )
+
         return summary
-    
-    def _generate_smart_suggestions(self, path: str, total_lines: int, analysis) -> List[str]:
+
+    def _generate_smart_suggestions(
+        self, path: str, total_lines: int, analysis
+    ) -> List[str]:
         """生成智能分段建议"""
         suggestions = []
-        
+
         # 基于函数的建议
         if analysis.functions:
             func = analysis.functions[0]
             suggestions.append(
                 f"📖 读取第一个函数 '{func['name']}': read_file(path='{path}', line_start={func['line']}, line_end={func['line']+30})"
             )
-        
+
         # 基于类的建议
         if analysis.classes:
             cls = analysis.classes[0]
             suggestions.append(
                 f"📖 读取第一个类 '{cls['name']}': read_file(path='{path}', line_start={cls['line']}, line_end={cls['line']+50})"
             )
-        
+
         # 通用建议
-        suggestions.extend([
-            f"📖 读取前100行: read_file(path='{path}', line_end=100)",
-            f"📖 读取中间部分: read_file(path='{path}', line_start={total_lines//2-50}, line_end={total_lines//2+50})",
-            f"📖 读取末尾: read_file(path='{path}', line_start={max(1, total_lines-100)})"
-        ])
-        
+        suggestions.extend(
+            [
+                f"📖 读取前100行: read_file(path='{path}', line_end=100)",
+                f"📖 读取中间部分: read_file(path='{path}', line_start={total_lines//2-50}, line_end={total_lines//2+50})",
+                f"📖 读取末尾: read_file(path='{path}', line_start={max(1, total_lines-100)})",
+            ]
+        )
+
         return suggestions
 
     async def write_file(self, path: str, content: str, **kwargs) -> Dict[str, Any]:
         """
         写入文件 - 简化实现
-        
+
         注意:**kwargs 用于接收并忽略模型可能传入的额外参数
         """
         try:
             # 转换为 Path 对象
             path_obj = Path(path)
-            
+
             # 处理路径
             if path_obj.is_absolute():
                 # 绝对路径:直接使用
@@ -280,7 +323,22 @@ class AtomicTools:
                     display_path = str(path_obj)
             else:
                 # 相对路径:规范化并拼接到 project_path
-                path_normalized = str(path_obj).lstrip('./')  # 移除开头的 ./
+                # 注意：使用 removeprefix 而不是 lstrip，因为 lstrip 会错误地移除路径中的点号
+                path_str = str(path_obj)
+                # 安全地移除开头的 "./" 前缀，但保留 ".aacode" 这样的目录名
+                # 使用正则表达式或简单逻辑：只移除开头的 "./" 如果后面跟着的不是 "."
+                if path_str.startswith("./"):
+                    # 检查第二个字符之后是否是 "."（如 "./.aacode"）
+                    if len(path_str) > 2 and path_str[2] == ".":
+                        # 这是 "./.aacode" 的情况，只移除 "./"
+                        path_normalized = path_str[2:]  # 变成 ".aacode"
+                    else:
+                        # 这是 "./test.py" 的情况，移除 "./"
+                        path_normalized = path_str[2:]
+                elif path_str == ".":
+                    path_normalized = ""  # 当前目录
+                else:
+                    path_normalized = path_str
                 full_path = self.project_path / path_normalized
                 display_path = path_normalized
 
@@ -295,16 +353,18 @@ class AtomicTools:
                 mkdir_cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd=self.project_path
+                cwd=self.project_path,
             )
-            
+
             mkdir_stdout, mkdir_stderr = await mkdir_process.communicate()
             if mkdir_process.returncode != 0:
-                return {"error": f"创建目录失败: {mkdir_stderr.decode() if mkdir_stderr else '未知错误'}"}
-            
+                return {
+                    "error": f"创建目录失败: {mkdir_stderr.decode() if mkdir_stderr else '未知错误'}"
+                }
+
             # 使用Python原生方式写入文件,避免shell权限问题
             try:
-                full_path.write_text(content, encoding='utf-8')
+                full_path.write_text(content, encoding="utf-8")
                 print(f"✅ 文件已写入: {display_path} ({len(content)} 字符)")
             except PermissionError as e:
                 return {"error": f"写入文件权限错误: {str(e)},路径: {display_path}"}
@@ -315,31 +375,34 @@ class AtomicTools:
                 "success": True,
                 "path": display_path,
                 "size": len(content),
-                "lines": len(content.split('\n')),
-                "absolute_path": str(full_path)
+                "lines": len(content.split("\n")),
+                "absolute_path": str(full_path),
             }
         except Exception as e:
             return {"error": f"写入文件异常: {str(e)},路径: {path}"}
 
-    async def run_shell(self, command: str, timeout: int = 120, **kwargs) -> Dict[str, Any]:
+    async def run_shell(
+        self, command: str, timeout: int = 120, **kwargs
+    ) -> Dict[str, Any]:
         """
         执行shell命令(带安全护栏)
-        
+
         注意:**kwargs 用于接收并忽略模型可能传入的额外参数
         """
         try:
             # 使用配置的超时时间(来自 aacode_config.yaml)
             if timeout is None:
                 from config import settings
+
                 timeout = settings.timeouts.shell_command
-            
+
             # 安全检查
             safety_check = self.safety_guard.check_command(command)
             if not safety_check["allowed"]:
                 return {
                     "error": f"命令被安全护栏拒绝: {safety_check['reason']}",
                     "allowed": False,
-                    "command": command
+                    "command": command,
                 }
 
             # 在项目目录下执行
@@ -351,35 +414,43 @@ class AtomicTools:
                 cwd=str(self.project_path),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                shell=True
+                shell=True,
             )
 
             try:
                 stdout, stderr = await asyncio.wait_for(
-                    process.communicate(),
-                    timeout=timeout
+                    process.communicate(), timeout=timeout
                 )
 
-                stdout_text = stdout.decode('utf-8', errors='ignore')
-                stderr_text = stderr.decode('utf-8', errors='ignore')
-                
+                stdout_text = stdout.decode("utf-8", errors="ignore")
+                stderr_text = stderr.decode("utf-8", errors="ignore")
+
                 # 打印输出预览(使用配置的预览长度)
                 from config import settings
+
                 preview_length = settings.limits.shell_output_preview
-                
+
                 # 关键改进：run_shell 工具总是成功的（只要命令能执行）
                 # 命令的退出码只是返回信息的一部分，不代表工具失败
-                
+
                 # 打印输出预览
                 if stdout_text:
-                    preview = stdout_text[:preview_length] + "..." if len(stdout_text) > preview_length else stdout_text
+                    preview = (
+                        stdout_text[:preview_length] + "..."
+                        if len(stdout_text) > preview_length
+                        else stdout_text
+                    )
                     print(f"📤 输出: {preview}")
-                
+
                 if stderr_text and process.returncode != 0:
                     # 只有在命令失败时才打印 stderr
-                    stderr_preview = stderr_text[:preview_length] + "..." if len(stderr_text) > preview_length else stderr_text
+                    stderr_preview = (
+                        stderr_text[:preview_length] + "..."
+                        if len(stderr_text) > preview_length
+                        else stderr_text
+                    )
                     print(f"⚠️  错误输出: {stderr_preview}")
-                
+
                 # 统一返回格式：工具总是成功，返回完整的命令执行信息
                 return {
                     "success": True,  # 工具执行成功
@@ -387,7 +458,7 @@ class AtomicTools:
                     "stdout": stdout_text,
                     "stderr": stderr_text,
                     "command": command,
-                    "working_directory": str(self.project_path)
+                    "working_directory": str(self.project_path),
                 }
             except asyncio.TimeoutError:
                 process.terminate()
@@ -396,7 +467,7 @@ class AtomicTools:
                     "error": f"命令执行超时 ({timeout}秒)",
                     "timeout": True,
                     "command": command,
-                    "working_directory": str(self.project_path)
+                    "working_directory": str(self.project_path),
                 }
 
         except Exception as e:
@@ -408,19 +479,21 @@ class AtomicTools:
                 "success": False,  # 工具执行失败
                 "error": error_msg,
                 "command": command,
-                "working_directory": str(self.project_path)
+                "working_directory": str(self.project_path),
             }
 
-    async def list_files(self, pattern: str = "*", max_results: int = 100, grep: str = "", **kwargs) -> Dict[str, Any]:
+    async def list_files(
+        self, pattern: str = "*", max_results: int = 100, grep: str = "", **kwargs
+    ) -> Dict[str, Any]:
         """
         列出文件 - 增强实现，支持文件列表和内容搜索
-        
+
         Args:
             pattern: 文件名匹配模式(支持通配符),如 "*.py","test_*"
                     注意:如果传入路径(如 ".","./"),会自动转换为 "*"
             max_results: 返回的最大文件数量
             grep: 可选，搜索文件内容的关键词。如果提供，将搜索包含该关键词的文件
-        
+
         注意:**kwargs 用于接收并忽略模型可能传入的额外参数(如recursive等)，也用于接收别名参数
         """
         try:
@@ -431,25 +504,28 @@ class AtomicTools:
                 if alias in kwargs and kwargs[alias]:
                     grep = kwargs[alias]
                     break
-            
+
             # 检查是否有通过别名传递的pattern参数（如glob, path等）
             pattern_aliases = ["glob", "path", "file_pattern", "directory", "dir"]
             for alias in pattern_aliases:
                 if alias in kwargs and kwargs[alias]:
                     pattern = kwargs[alias]
                     break
-            
+
             # 使用配置的最大结果数(来自 aacode_config.yaml)
             from config import settings
+
             if max_results == 100:  # 使用默认值，检查配置
                 max_results = settings.limits.max_file_list_results
-            
+
             # 智能处理:如果pattern看起来像路径,转换为通配符
             if pattern in [".", "./", "/", "", ".."] or pattern.endswith("/"):
                 original_pattern = pattern
                 pattern = "*"
-                print(f"💡 提示:已将路径参数 '{original_pattern}' 转换为文件模式 '*'(列出所有文件)")
-            
+                print(
+                    f"💡 提示:已将路径参数 '{original_pattern}' 转换为文件模式 '*'(列出所有文件)"
+                )
+
             # 检查是否进行内容搜索
             if grep:
                 print(f"🔍 搜索模式: 在文件 '{pattern}' 中搜索 '{grep}'")
@@ -458,58 +534,54 @@ class AtomicTools:
                 # 普通文件列表模式
                 print(f"📁 列表模式: 列出文件 '{pattern}'")
                 return await self._list_files_only(pattern, max_results)
-                
+
         except Exception as e:
             return {"error": str(e)}
-    
+
     async def _list_files_only(self, pattern: str, max_results: int) -> Dict[str, Any]:
         """仅列出文件（不搜索内容）"""
         # 使用bash万能适配器
         cmd = f"find . -name '{pattern}' -type f | head -{max_results}"
-        
+
         process = await asyncio.create_subprocess_shell(
             cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            cwd=self.project_path
+            cwd=self.project_path,
         )
-        
+
         stdout, stderr = await process.communicate()
-        
+
         if process.returncode != 0:
             return {"error": stderr.decode() if stderr else "列出文件失败"}
-        
+
         files = []
-        for line in stdout.decode().strip().split('\n'):
-            if line.strip() and '.aacode' not in line:
+        for line in stdout.decode().strip().split("\n"):
+            if line.strip() and ".aacode" not in line:
                 rel_path = line.strip()[2:]  # 移除 './'
-                files.append({
-                    "path": rel_path,
-                    "size": 0,  # 简化,不获取大小
-                    "is_dir": False
-                })
-        
-        return {
-            "success": True,
-            "files": files,
-            "count": len(files),
-            "mode": "list"
-        }
-    
-    async def _search_with_grep(self, pattern: str, grep: str, max_results: int) -> Dict[str, Any]:
+                files.append(
+                    {"path": rel_path, "size": 0, "is_dir": False}  # 简化,不获取大小
+                )
+
+        return {"success": True, "files": files, "count": len(files), "mode": "list"}
+
+    async def _search_with_grep(
+        self, pattern: str, grep: str, max_results: int
+    ) -> Dict[str, Any]:
         """使用grep搜索文件内容"""
         try:
             import subprocess
-            
+
             # 检查是否安装了rg (ripgrep)
             use_rg = False
             try:
                 import shutil
+
                 if shutil.which("rg"):
                     use_rg = True
             except:
                 pass
-            
+
             if use_rg:
                 # 使用ripgrep进行高效搜索
                 cmd = [
@@ -517,11 +589,14 @@ class AtomicTools:
                     "-i",  # 忽略大小写
                     "-n",  # 显示行号
                     "-H",  # 显示文件名
-                    "--color", "never",
+                    "--color",
+                    "never",
                     grep,
                     str(self.project_path),
-                    "-g", pattern,
-                    "-m", str(max_results)  # 最大结果数
+                    "-g",
+                    pattern,
+                    "-m",
+                    str(max_results),  # 最大结果数
                 ]
             else:
                 # 使用标准grep作为后备
@@ -532,17 +607,21 @@ class AtomicTools:
                     "-n",  # 显示行号
                     "-H",  # 显示文件名
                     grep,
-                    "--include", pattern,
+                    "--include",
+                    pattern,
                     ".",
-                    "|", "head", "-n", str(max_results * 10)  # 粗略限制结果数
+                    "|",
+                    "head",
+                    "-n",
+                    str(max_results * 10),  # 粗略限制结果数
                 ]
-            
+
             if use_rg:
                 process = await asyncio.create_subprocess_exec(
                     *cmd,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
-                    cwd=str(self.project_path)
+                    cwd=str(self.project_path),
                 )
             else:
                 # 对于grep命令，使用shell模式
@@ -551,80 +630,80 @@ class AtomicTools:
                     cmd_str,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
-                    cwd=str(self.project_path)
+                    cwd=str(self.project_path),
                 )
-            
+
             stdout, stderr = await process.communicate()
-            
+
             if process.returncode not in [0, 1]:  # 0: 找到结果, 1: 没找到
-                return {
-                    "error": f"搜索失败: {stderr.decode()}",
-                    "success": False
-                }
-            
+                return {"error": f"搜索失败: {stderr.decode()}", "success": False}
+
             # 收集结果，按文件分组
             file_results = {}
-            for line in stdout.decode().split('\n'):
+            for line in stdout.decode().split("\n"):
                 if line.strip():
-                    parts = line.split(':', 2)
+                    parts = line.split(":", 2)
                     if len(parts) >= 3:
-                        file_path, line_num, content = parts[0], parts[1], ':'.join(parts[2:])
-                        
+                        file_path, line_num, content = (
+                            parts[0],
+                            parts[1],
+                            ":".join(parts[2:]),
+                        )
+
                         # 处理文件路径：可能是相对路径或绝对路径
                         try:
                             # 如果是绝对路径，转换为相对路径
-                            if file_path.startswith('/'):
-                                rel_path = Path(file_path).relative_to(self.project_path)
+                            if file_path.startswith("/"):
+                                rel_path = Path(file_path).relative_to(
+                                    self.project_path
+                                )
                                 file_str = str(rel_path)
                             else:
                                 # 已经是相对路径
                                 file_str = file_path
                                 # 移除开头的'./'如果存在
-                                if file_str.startswith('./'):
+                                if file_str.startswith("./"):
                                     file_str = file_str[2:]
                         except ValueError:
                             # 路径转换失败，使用原始路径
                             file_str = file_path
-                        
+
                         if file_str not in file_results:
                             file_results[file_str] = {
                                 "path": file_str,
                                 "size": 0,
                                 "is_dir": False,
-                                "matches": []
+                                "matches": [],
                             }
-                        
-                        file_results[file_str]["matches"].append({
-                            "line": int(line_num),
-                            "content": content.strip()
-                        })
-            
+
+                        file_results[file_str]["matches"].append(
+                            {"line": int(line_num), "content": content.strip()}
+                        )
+
             # 转换为files格式
             files = list(file_results.values())
-            
+
             # 计算总匹配数
             total_matches = sum(len(file_info["matches"]) for file_info in files)
-            
+
             return {
                 "success": True,
                 "files": files,
                 "count": len(files),
                 "total_matches": total_matches,
                 "mode": "search",
-                "query": grep
+                "query": grep,
             }
-            
+
         except Exception as e:
             return {"error": str(e), "success": False}
 
-    async def search_files(self,
-                           query: str,
-                           file_pattern: str = "*.py",
-                           max_results: int = 20,
-                           **kwargs) -> Dict[str, Any]:
+    async def search_files(
+        self, query: str, file_pattern: str = "*.py", max_results: int = 20, **kwargs
+    ) -> Dict[str, Any]:
         """
         搜索文件内容 - 在文件中搜索文本,使用grep-like功能
-        
+
         注意:**kwargs 用于接收并忽略模型可能传入的额外参数
         """
         try:
@@ -632,6 +711,7 @@ class AtomicTools:
 
             # 使用配置的最大结果数(来自 aacode_config.yaml)
             from config import settings
+
             if max_results == 20:  # 使用默认值，检查配置
                 max_results = settings.limits.max_search_results
 
@@ -639,11 +719,12 @@ class AtomicTools:
             use_rg = False
             try:
                 import shutil
+
                 if shutil.which("rg"):
                     use_rg = True
             except:
                 pass
-            
+
             if use_rg:
                 # 使用ripgrep进行高效搜索
                 cmd = [
@@ -651,17 +732,20 @@ class AtomicTools:
                     "-i",  # 忽略大小写
                     "-n",  # 显示行号
                     "-H",  # 显示文件名
-                    "--color", "never",
+                    "--color",
+                    "never",
                     query,
                     str(self.project_path),
-                    "-g", file_pattern,
-                    "-m", str(max_results)  # 最大结果数
+                    "-g",
+                    file_pattern,
+                    "-m",
+                    str(max_results),  # 最大结果数
                 ]
                 process = await asyncio.create_subprocess_exec(
                     *cmd,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
-                    cwd=str(self.project_path)
+                    cwd=str(self.project_path),
                 )
             else:
                 # 使用标准grep作为后备
@@ -670,49 +754,54 @@ class AtomicTools:
                     cmd_str,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
-                    cwd=str(self.project_path)
+                    cwd=str(self.project_path),
                 )
 
             stdout, stderr = await process.communicate()
 
             if process.returncode not in [0, 1]:  # 0: 找到结果, 1: 没找到
-                return {
-                    "error": f"搜索失败: {stderr.decode()}",
-                    "success": False
-                }
+                return {"error": f"搜索失败: {stderr.decode()}", "success": False}
 
             results = []
-            for line in stdout.decode().split('\n'):
+            for line in stdout.decode().split("\n"):
                 if line.strip():
-                    parts = line.split(':', 2)
+                    parts = line.split(":", 2)
                     if len(parts) >= 3:
-                        file_path, line_num, content = parts[0], parts[1], ':'.join(parts[2:])
-                        
+                        file_path, line_num, content = (
+                            parts[0],
+                            parts[1],
+                            ":".join(parts[2:]),
+                        )
+
                         # 处理文件路径：可能是相对路径或绝对路径
                         try:
                             # 如果是绝对路径，转换为相对路径
-                            if file_path.startswith('/'):
-                                rel_path = Path(file_path).relative_to(self.project_path)
+                            if file_path.startswith("/"):
+                                rel_path = Path(file_path).relative_to(
+                                    self.project_path
+                                )
                             else:
                                 # 已经是相对路径
                                 rel_path = Path(file_path)
                                 # 移除开头的'./'如果存在
-                                if str(rel_path).startswith('./'):
+                                if str(rel_path).startswith("./"):
                                     rel_path = Path(str(rel_path)[2:])
                         except ValueError:
                             # 路径转换失败，使用原始路径
                             rel_path = Path(file_path)
-                        results.append({
-                            "file": str(rel_path),
-                            "line": int(line_num),
-                            "content": content.strip()
-                        })
+                        results.append(
+                            {
+                                "file": str(rel_path),
+                                "line": int(line_num),
+                                "content": content.strip(),
+                            }
+                        )
 
             return {
                 "success": True,
                 "query": query,
                 "results": results,
-                "count": len(results)
+                "count": len(results),
             }
 
         except FileNotFoundError:
@@ -721,22 +810,26 @@ class AtomicTools:
         except Exception as e:
             return {"error": str(e)}
 
-    async def _python_search(self, query: str, file_pattern: str, max_results: int) -> Dict[str, Any]:
+    async def _python_search(
+        self, query: str, file_pattern: str, max_results: int
+    ) -> Dict[str, Any]:
         """Python实现的文件搜索 - 简化版"""
         try:
             # 使用bash万能适配器作为备选
             # 添加 -n 参数确保输出行号
-            cmd = f"grep -rn --include='{file_pattern}' '{query}' . | head -{max_results}"
-            
+            cmd = (
+                f"grep -rn --include='{file_pattern}' '{query}' . | head -{max_results}"
+            )
+
             process = await asyncio.create_subprocess_shell(
                 cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd=self.project_path
+                cwd=self.project_path,
             )
-            
+
             stdout, stderr = await process.communicate()
-            
+
             # grep 返回1表示没找到匹配，这是正常的
             if process.returncode not in [0, 1]:
                 return {
@@ -744,65 +837,57 @@ class AtomicTools:
                     "error": f"搜索命令失败: {stderr.decode() if stderr else '未知错误'}",
                     "query": query,
                     "results": [],
-                    "count": 0
+                    "count": 0,
                 }
-            
+
             results = []
             output = stdout.decode().strip()
-            
+
             if not output:
                 # 没有匹配结果
-                return {
-                    "success": True,
-                    "query": query,
-                    "results": [],
-                    "count": 0
-                }
-            
-            for line in output.split('\n'):
-                if line.strip() and '.aacode' not in line:
+                return {"success": True, "query": query, "results": [], "count": 0}
+
+            for line in output.split("\n"):
+                if line.strip() and ".aacode" not in line:
                     # 尝试解析 文件:行号:内容 格式
-                    parts = line.split(':', 2)
+                    parts = line.split(":", 2)
                     if len(parts) >= 2:
                         try:
                             file_path = parts[0]
                             # 移除 './' 前缀
-                            if file_path.startswith('./'):
+                            if file_path.startswith("./"):
                                 file_path = file_path[2:]
-                            
+
                             # 尝试解析行号
                             line_num = None
                             content = ""
-                            
+
                             if len(parts) >= 3:
                                 try:
                                     line_num = int(parts[1])
                                     content = parts[2]
                                 except ValueError:
                                     # 行号解析失败，可能格式不对
-                                    content = ':'.join(parts[1:])
+                                    content = ":".join(parts[1:])
                             else:
                                 content = parts[1]
-                            
-                            result = {
-                                "file": file_path,
-                                "content": content
-                            }
-                            
+
+                            result = {"file": file_path, "content": content}
+
                             if line_num is not None:
                                 result["line"] = str(line_num)
-                            
+
                             results.append(result)
                         except Exception as e:
                             # 解析失败，跳过这一行
                             print(f"⚠️  解析搜索结果失败: {line[:50]}... 错误: {e}")
                             continue
-            
+
             return {
                 "success": True,
                 "query": query,
                 "results": results,
-                "count": len(results)
+                "count": len(results),
             }
         except Exception as e:
             return {
@@ -810,11 +895,5 @@ class AtomicTools:
                 "error": f"搜索异常: {str(e)}",
                 "query": query,
                 "results": [],
-                "count": 0
+                "count": 0,
             }
-
-
-
-
-
-

@@ -88,7 +88,7 @@ limits:
   prioritize_file_types: true   # 是否优先显示重要文件类型
 
 model:
-  api_key: your-llm-api-key
+  api_key: your-api-key   # 建议最好是用deepseek-chat模型
   base_url: https://api.deepseek.com/v1   # https://api.openai.com/v1
   max_tokens: 8000   # 单次输出tokens长度
   name: deepseek-chat        # gpt-4-turbo-preview
@@ -107,14 +107,14 @@ safety:
 tools:
   enable_code_execution: true
   enable_file_ops: true
-  enable_sandbox: true   # true/false
+  enable_sandbox: true
   enable_search: true
   enable_shell: true
   enable_testing: true
   enable_web_search: true
   max_execution_time: 60
   sandbox_type: docker
-  search_api_url: http://192.168.0.106:8081
+  search_api_url: http://192.168.0.106:8081    # 这是开发者xiefujin自己部署的实例，需要替换为你自己的实例
   search_engine: searxng
 
 # MCP（模型上下文协议）配置
@@ -130,11 +130,11 @@ mcp:
   # STD类型MCP服务器配置（标准进程）
   std_servers:
     - name: local_tools
-      command: python
+      command: python3
       args: 
-        - "-m"
-        - "mcp.server.cli"
-      enabled: true
+        - "-c"
+        - "print('MCP server placeholder')"
+      enabled: false
       timeout: 30
       retry_count: 3
   
@@ -155,3 +155,47 @@ mcp:
       enabled: false
       timeout: 30
       retry_count: 3
+
+# Skills配置
+skills:
+  # 是否启用skills功能
+  enabled: true
+  
+  # Skills目录（相对于项目根目录）
+  skills_dir: skills
+  
+  # 是否自动发现skills目录下的技能
+  auto_discover: true
+  
+  # 启用的skills列表（ skills目录下的子目录名）
+  enabled_skills:
+    - data_cleaning
+    - api_client
+    - data_converter
+    - file_organizer
+    - web_scraper
+  
+  # Skills元数据配置 - 用于渐进式披露，提高token效率
+  # 格式：skill_name: {name: 显示名称, description: 简短描述, trigger_keywords: [关键词列表]}
+  # 注释：这些元数据会在启动时加载到Agent上下文（约100 tokens/技能），详细指令在需要时才加载
+  skills_metadata:
+     data_cleaning:
+       name: "数据清洗"
+       description: "清洗CSV/Excel数据，处理缺失值、去除重复项"
+       trigger_keywords: ["清洗", "数据清洗", "clean", "data cleaning", "csv", "excel"]
+     data_converter:
+       name: "数据转换"
+       description: "转换数据格式：JSON/YAML/CSV/XML等"
+       trigger_keywords: ["转换", "格式转换", "convert", "json", "yaml", "xml"]
+     api_client:
+       name: "API客户端"
+       description: "调用REST API，支持GET/POST/PUT/DELETE请求"
+       trigger_keywords: ["api", "接口", "调用", "request", "http"]
+     file_organizer:
+       name: "文件组织器"
+       description: "文件组织和管理工具，提供文件分类、重命名、批量操作等功能"
+       trigger_keywords: ["文件", "组织", "整理", "file", "organize", "整理文件"]
+     web_scraper:
+       name: "网页抓取器"
+       description: "网页抓取和数据提取工具，提供网页内容抓取、HTML解析、数据提取等功能"
+       trigger_keywords: ["网页", "抓取", "爬虫", "web", "scrape", "爬取"]

@@ -8,6 +8,7 @@ import json
 @dataclass
 class AgentTask:
     """Agent任务定义"""
+
     id: str
     description: str
     parent_id: Optional[str] = None
@@ -28,10 +29,12 @@ class MultiAgentSystem:
         # 任务队列
         self.task_queue = asyncio.Queue()
 
-    async def delegate_task(self,
-                            task_description: str,
-                            task_type: str = "code_analysis",
-                            context_strategy: str = "isolated") -> Dict[str, Any]:
+    async def delegate_task(
+        self,
+        task_description: str,
+        task_type: str = "code_analysis",
+        context_strategy: str = "isolated",
+    ) -> Dict[str, Any]:
         """
         委托任务给子Agent
 
@@ -50,7 +53,7 @@ class MultiAgentSystem:
             description=task_description,
             parent_id="main",
             status="pending",
-            created_at=asyncio.get_event_loop().time()
+            created_at=asyncio.get_event_loop().time(),
         )
 
         self.tasks[task_id] = task
@@ -63,7 +66,7 @@ class MultiAgentSystem:
             task_id=task_id,
             task_description=task_description,
             context=context,
-            task_type=task_type
+            task_type=task_type,
         )
 
         self.sub_agents[task_id] = sub_agent
@@ -74,7 +77,7 @@ class MultiAgentSystem:
         return {
             "task_id": task_id,
             "status": "delegated",
-            "message": f"任务已委托给子Agent {task_id}"
+            "message": f"任务已委托给子Agent {task_id}",
         }
 
     async def _prepare_subagent_context(self, strategy: str) -> str:
@@ -94,8 +97,9 @@ class MultiAgentSystem:
         else:
             return "默认上下文"
 
-    async def _create_subagent(self, task_id: str, task_description: str,
-                               context: str, task_type: str):
+    async def _create_subagent(
+        self, task_id: str, task_description: str, context: str, task_type: str
+    ):
         """创建子Agent"""
         # 根据任务类型配置子Agent
         if task_type == "code_analysis":
@@ -134,7 +138,7 @@ class MultiAgentSystem:
             "prompt": prompt,
             "context": context,
             "tools": ["read_file", "search_files", "execute_python"],
-            "max_iterations": 10
+            "max_iterations": 10,
         }
 
         return sub_agent
@@ -152,7 +156,7 @@ class MultiAgentSystem:
                 "analysis": "代码分析完成",
                 "issues": ["发现3个潜在问题"],
                 "suggestions": ["建议1", "建议2"],
-                "code_examples": ["示例代码"]
+                "code_examples": ["示例代码"],
             }
 
             task.result = result
