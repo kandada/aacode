@@ -255,17 +255,48 @@ class AICoder:
         todo_file = await self.todo_manager.create_todo_list(task, context_manager=self.context_manager)
         print(f"✅ 待办清单已创建: {todo_file}")
 
-        # 运行主Agent，传递类方法映射信息
-        result = await self.main_agent.execute(
-            task=task,
-            init_instructions=self.init_instructions,
-            task_dir=task_dir,
-            max_iterations=max_iterations,
-            project_analysis=analysis_result,
-            todo_manager=self.todo_manager  # 传递todo管理器
-        )
-
-        return result
+        try:
+            # 运行主Agent，传递类方法映射信息
+            result = await self.main_agent.execute(
+                task=task,
+                init_instructions=self.init_instructions,
+                task_dir=task_dir,
+                max_iterations=max_iterations,
+                project_analysis=analysis_result,
+                todo_manager=self.todo_manager  # 传递todo管理器
+            )
+            return result
+        except asyncio.CancelledError:
+            # 异步任务被取消
+            print("\n⏹️ 任务被取消")
+            return {
+                "status": "cancelled",
+                "error": "任务被用户取消",
+                "iterations": 0,
+                "execution_time": 0,
+                "session_id": f"cancelled_{int(asyncio.get_event_loop().time())}"
+            }
+        except Exception as e:
+            # 捕获并处理异常，避免程序崩溃
+            print(f"\n❌ 任务执行失败: {e}")
+            import traceback
+            traceback.print_exc()
+            # 返回一个包含错误信息的结果，而不是抛出异常
+            return {
+                "status": "error",
+                "error": str(e),
+                "iterations": 0,
+                "execution_time": 0,
+                "session_id": f"error_{int(asyncio.get_event_loop().time())}"
+            }
+        finally:
+            # 确保资源被清理
+            try:
+                # 清理web_tools资源
+                if hasattr(self.main_agent, 'web_tools'):
+                    await self.main_agent.web_tools.cleanup()
+            except Exception as e:
+                print(f"⚠️  清理资源时出错: {e}")
 
 
 async def continue_session(coder, project_dir):
@@ -274,14 +305,35 @@ async def continue_session(coder, project_dir):
     print("🔁 继续会话模式")
     print("="*50)
     
+    # 检查是否有待办清单
+    todo_dir = project_dir / ".aacode" / "todos"
+    if todo_dir.exists():
+        todo_files = list(todo_dir.glob("*.md"))
+        if todo_files:
+            print(f"\n📋 发现 {len(todo_files)} 个待办清单:")
+            for i, todo_file in enumerate(todo_files[-3:], 1):  # 显示最近3个
+                print(f"  {i}. {todo_file.name}")
+            print("💡 输入 'todo' 查看待办清单详情")
+    
+    # 检查是否有会话日志
+    log_dir = project_dir / ".aacode" / "logs"
+    if log_dir.exists():
+        log_files = list(log_dir.glob("*.log"))
+        if log_files:
+            print(f"📝 发现 {len(log_files)} 个会话日志")
+    
     while True:
         try:
             print("\n当前项目目录:", project_dir)
             print("可用命令:")
             print("  - 输入任务描述继续工作")
             print("  - 输入 'list' 查看项目文件")
+            print("  - 输入 'todo' 查看待办清单")
+            print("  - 输入 'logs' 查看会话日志")
             print("  - 输入 'exit' 或 'quit' 退出")
             print("  - 输入 'clear' 清空项目目录")
+            print("  - 输入 '继续' 查看恢复任务说明")
+            print("  - 输入 'help' 查看帮助")
             
             user_input = input("\n> ").strip()
             
@@ -291,9 +343,62 @@ async def continue_session(coder, project_dir):
             elif user_input.lower() == 'list':
                 # 列出项目文件
                 print("\n📁 项目文件:")
-                for file in project_dir.glob("*"):
-                    if file.is_file():
-                        print(f"  - {file.name}")
+                files = list(project_dir.glob("*"))
+                if not files:
+                    print("  (空目录)")
+                else:
+                    for file in files:
+                        if file.is_file():
+                            size = file.stat().st_size
+                            print(f"  - {file.name} ({size} bytes)")
+                continue
+            elif user_input.lower() == 'todo':
+                # 查看待办清单
+                if todo_dir.exists():
+                    todo_files = list(todo_dir.glob("*.md"))
+                    if todo_files:
+                        print("\n📋 待办清单:")
+                        for i, todo_file in enumerate(todo_files, 1):
+                            with open(todo_file, 'r', encoding='utf-8') as f:
+                                first_line = f.readline().strip()
+                            print(f"  {i}. {todo_file.name}")
+                            print(f"     内容: {first_line[:80]}...")
+                        print("\n💡 输入待办清单编号查看详情，或输入 'back' 返回")
+                        choice = input("选择待办清单 (编号/back): ").strip()
+                        if choice.lower() != 'back' and choice.isdigit():
+                            idx = int(choice) - 1
+                            if 0 <= idx < len(todo_files):
+                                with open(todo_files[idx], 'r', encoding='utf-8') as f:
+                                    print(f"\n📄 {todo_files[idx].name}:")
+                                    print(f.read())
+                    else:
+                        print("📭 没有待办清单")
+                else:
+                    print("📭 待办目录不存在")
+                continue
+            elif user_input.lower() == 'logs':
+                # 查看会话日志
+                if log_dir.exists():
+                    log_files = list(log_dir.glob("*.log"))
+                    if log_files:
+                        print("\n📝 会话日志:")
+                        for i, log_file in enumerate(log_files[-5:], 1):  # 显示最近5个
+                            size = log_file.stat().st_size
+                            print(f"  {i}. {log_file.name} ({size} bytes)")
+                        print("\n💡 输入日志编号查看最后几行，或输入 'back' 返回")
+                        choice = input("选择日志 (编号/back): ").strip()
+                        if choice.lower() != 'back' and choice.isdigit():
+                            idx = int(choice) - 1
+                            if 0 <= idx < len(log_files):
+                                with open(log_files[idx], 'r', encoding='utf-8') as f:
+                                    lines = f.readlines()
+                                    print(f"\n📄 {log_files[idx].name} (最后20行):")
+                                    for line in lines[-20:]:
+                                        print(line.rstrip())
+                    else:
+                        print("📭 没有会话日志")
+                else:
+                    print("📭 日志目录不存在")
                 continue
             elif user_input.lower() == 'clear':
                 # 确认清空项目
@@ -304,22 +409,142 @@ async def continue_session(coder, project_dir):
                             file.unlink()
                     print("✅ 项目目录已清空")
                 continue
+            elif user_input.lower() in ['继续', 'continue']:
+                # 处理"继续"命令
+                print("\n" + "="*50)
+                print("🔄 恢复任务说明")
+                print("="*50)
+                print("\n要恢复之前中断的任务，有以下几种方式:")
+                print("\n1. 🎯 输入具体的任务描述")
+                print("   例如: '完成用户注册功能'")
+                print("   系统会自动参考之前的待办清单继续工作")
+                print("\n2. 🔄 使用会话ID恢复")
+                print("   重新运行程序时使用: --session <session_id>")
+                print("   会话ID会在任务开始时显示")
+                print("   例如: python main.py --session session_20260212_123548_3")
+                print("\n3. 📋 基于待办清单继续")
+                print("   输入 'todo' 查看现有待办清单")
+                print("   选择待办清单后，输入相关任务描述")
+                print("\n4. 🔍 查看项目状态")
+                print("   输入 'list' 查看项目文件")
+                print("   输入 'logs' 查看会话日志")
+                print("\n💡 建议: 输入具体的任务描述是最直接的方式")
+                continue
+            elif user_input.lower() == 'help':
+                print("\n" + "="*50)
+                print("📚 帮助文档")
+                print("="*50)
+                print("\n🔧 常用命令:")
+                print("  list    - 查看项目文件")
+                print("  todo    - 查看待办清单")
+                print("  logs    - 查看会话日志")
+                print("  clear   - 清空项目目录")
+                print("  exit    - 退出会话")
+                print("  help    - 显示帮助")
+                print("\n🎯 任务执行:")
+                print("  直接输入任务描述即可开始工作")
+                print("  例如: '添加用户登录功能'")
+                print("  系统会自动分析项目并制定计划")
+                print("\n🔄 恢复任务:")
+                print("  输入 '继续' 查看恢复任务说明")
+                print("  或直接输入任务描述继续工作")
+                print("\n⚠️  注意事项:")
+                print("  1. 确保API密钥已正确设置")
+                print("  2. 大型项目可能需要较长时间")
+                print("  3. 可以使用Ctrl+C中断当前任务")
+                print("  4. 中断后输入 'y' 可以继续会话")
+                continue
             elif user_input:
-                # 执行新任务
-                result = await coder.run(user_input)
-                print(f"\n✅ 任务完成!")
-                print(f"迭代次数: {result.get('iterations', 0)}")
-                print(f"执行时间: {result.get('execution_time', 0):.2f}秒")
+                # 检查是否是"继续任务"或类似命令
+                if user_input.lower() in ['继续任务', '继续之前的任务', '恢复任务']:
+                    # 尝试恢复最近的任务
+                    print(f"\n🔄 尝试恢复最近的任务...")
+                    
+                    # 检查待办清单目录
+                    todo_dir = project_dir / ".aacode" / "todos"
+                    if todo_dir.exists():
+                        todo_files = list(todo_dir.glob("*.md"))
+                        if todo_files:
+                            # 获取最新的待办清单
+                            latest_todo = max(todo_files, key=lambda f: f.stat().st_mtime)
+                            print(f"📋 找到待办清单: {latest_todo.name}")
+                            
+                            # 读取待办清单内容
+                            with open(latest_todo, 'r', encoding='utf-8') as f:
+                                todo_content = f.read()
+                            
+                            # 提取任务描述
+                            import re
+                            task_match = re.search(r'\*\*任务\*\*: (.+)', todo_content)
+                            if task_match:
+                                original_task = task_match.group(1)
+                                print(f"🎯 原始任务: {original_task}")
+                                
+                                # 询问用户是否继续这个任务
+                                confirm = input(f"是否继续这个任务? (y/n): ").strip().lower()
+                                if confirm == 'y':
+                                    user_input = original_task
+                                    print(f"🔄 继续任务: {original_task}")
+                                else:
+                                    print("请输入新的任务描述:")
+                                    user_input = input("> ").strip()
+                            else:
+                                print("❌ 无法从待办清单中提取任务描述")
+                                print("请输入任务描述:")
+                                user_input = input("> ").strip()
+                        else:
+                            print("📭 没有找到待办清单")
+                            print("请输入任务描述:")
+                            user_input = input("> ").strip()
+                    else:
+                        print("📭 待办目录不存在")
+                        print("请输入任务描述:")
+                        user_input = input("> ").strip()
+                
+                # 执行任务
+                print(f"\n🎯 开始执行任务: {user_input}")
+                print("正在准备...")
+                
+                try:
+                    result = await coder.run(user_input)
+                    
+                    # 检查任务是否成功
+                    if result.get('status') == 'error':
+                        print(f"\n❌ 任务执行失败: {result.get('error', '未知错误')}")
+                        print("💡 建议: 检查错误信息，或输入新任务重试")
+                    else:
+                        print(f"\n✅ 任务完成!")
+                        print(f"迭代次数: {result.get('iterations', 0)}")
+                        print(f"执行时间: {result.get('execution_time', 0):.2f}秒")
+                        
+                        # 显示会话ID以便后续恢复
+                        session_id = result.get('session_id')
+                        if session_id and not session_id.startswith('error_'):
+                            print(f"会话ID: {session_id}")
+                            print(f"使用 --session {session_id} 可以继续此会话")
+                except Exception as e:
+                    print(f"\n❌ 任务执行失败: {e}")
+                    print("💡 建议: 检查错误信息，或输入新任务重试")
+                
+                continue
             else:
                 print("❌ 请输入有效命令")
                 
         except KeyboardInterrupt:
-            print("\n⏹️ 用户中断")
-            break
+            print("\n\n⏸️  会话中断")
+            print("输入 'y' 继续当前会话，输入 'n' 退出程序")
+            choice = input("继续? (y/n): ").strip().lower()
+            if choice == 'y':
+                continue
+            else:
+                print("👋 退出程序")
+                break
         except Exception as e:
-            print(f"\n❌ 错误: {e}")
+            print(f"\n❌ 执行出错: {e}")
             import traceback
             traceback.print_exc()
+            print("\n💡 建议: 检查错误信息，或输入新任务重试")
+            print("   输入 'help' 查看帮助文档")
 
 
 async def main():
@@ -506,4 +731,8 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n\n⏹️ 程序被用户中断，正常退出")
+        sys.exit(0)

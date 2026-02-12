@@ -4,6 +4,7 @@
 代码执行和测试工具
 让Agent能够编写并测试自己的代码
 """
+
 import asyncio
 import tempfile
 import shutil
@@ -22,11 +23,9 @@ class CodeTools:
         self.test_dir = project_path / ".aacode" / "tests"
         self.test_dir.mkdir(parents=True, exist_ok=True)
 
-    async def execute_python(self,
-                             code: str,
-                             timeout: int = None,
-                             capture_output: bool = True,
-                             **kwargs) -> Dict[str, Any]:
+    async def execute_python(
+        self, code: str, timeout: Optional[int] = None, capture_output: bool = True, **kwargs
+    ) -> Dict[str, Any]:
         """
         执行Python代码
 
@@ -34,9 +33,9 @@ class CodeTools:
             code: Python代码
             timeout: 超时时间(秒),默认使用配置值
             capture_output: 是否捕获输出
-        
+
         注意:**kwargs 用于接收并忽略模型可能传入的额外参数
-        
+
         Returns:
             执行结果
         """
@@ -44,19 +43,23 @@ class CodeTools:
             # 使用配置的超时时间(来自 aacode_config.yaml)
             if timeout is None:
                 from config import settings
+
                 timeout = settings.timeouts.code_execution
             
+            # 确保timeout是float类型
+            timeout_float = float(timeout)
+
             # 安全检查
             if not self.safety_guard.is_safe_python_code(code):
                 return {"error": "代码安全检查失败"}
 
             # 创建临时文件
             with tempfile.NamedTemporaryFile(
-                    mode='w',
-                    suffix='.py',
-                    dir=self.test_dir,
-                    delete=False,
-                    encoding='utf-8'
+                mode="w",
+                suffix=".py",
+                dir=self.test_dir,
+                delete=False,
+                encoding="utf-8",
             ) as f:
                 # 添加必要的导入和上下文
                 wrapped_code = self._wrap_code(code)
@@ -71,32 +74,31 @@ class CodeTools:
                     *cmd,
                     stdout=asyncio.subprocess.PIPE if capture_output else None,
                     stderr=asyncio.subprocess.PIPE if capture_output else None,
-                    cwd=str(self.project_path)
+                    cwd=str(self.project_path),
                 )
 
                 try:
                     stdout, stderr = await asyncio.wait_for(
-                        process.communicate(),
-                        timeout=timeout
+                        process.communicate(), timeout=timeout_float
                     )
 
                     result = {
                         "success": process.returncode == 0,
                         "returncode": process.returncode,
-                        "file": str(temp_file.relative_to(self.project_path))
+                        "file": str(temp_file.relative_to(self.project_path)),
                     }
 
                     if capture_output:
-                        result["stdout"] = stdout.decode('utf-8', errors='ignore')
-                        result["stderr"] = stderr.decode('utf-8', errors='ignore')
+                        result["stdout"] = stdout.decode("utf-8", errors="ignore")
+                        result["stderr"] = stderr.decode("utf-8", errors="ignore")
 
                     return result
 
                 except asyncio.TimeoutError:
                     process.terminate()
                     return {
-                        "error": f"代码执行超时 ({timeout}秒)",
-                        "file": str(temp_file.relative_to(self.project_path))
+                        "error": f"代码执行超时 ({timeout_float}秒)",
+                        "file": str(temp_file.relative_to(self.project_path)),
                     }
 
             finally:
@@ -106,17 +108,16 @@ class CodeTools:
         except Exception as e:
             return {"error": str(e)}
 
-    async def run_tests(self,
-                        test_path: Optional[str] = None,
-                        pattern: str = "test_*.py",
-                        **kwargs) -> Dict[str, Any]:
+    async def run_tests(
+        self, test_path: Optional[str] = None, pattern: str = "test_*.py", **kwargs
+    ) -> Dict[str, Any]:
         """
         运行测试
 
         Args:
             test_path: 测试文件或目录路径
             pattern: 测试文件模式
-            
+
         注意:**kwargs 用于接收并忽略模型可能传入的额外参数
 
         Returns:
@@ -132,30 +133,34 @@ class CodeTools:
                 test_target = self.project_path
 
             # 使用pytest运行测试
-            cmd = [sys.executable, "-m", "pytest",
-                   str(test_target),
-                   "-v",
-                   "--tb=short",  # 简短的traceback
-                   "-q"]  # 安静模式
+            cmd = [
+                sys.executable,
+                "-m",
+                "pytest",
+                str(test_target),
+                "-v",
+                "--tb=short",  # 简短的traceback
+                "-q",
+            ]  # 安静模式
 
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd=str(self.project_path)
+                cwd=str(self.project_path),
             )
 
             try:
                 # 使用配置的超时时间(来自 aacode_config.yaml)
                 from config import settings
+
                 test_timeout = settings.timeouts.code_execution
-                
+
                 stdout, stderr = await asyncio.wait_for(
-                    process.communicate(),
-                    timeout=test_timeout
+                    process.communicate(), timeout=test_timeout
                 )
 
-                output = stdout.decode('utf-8', errors='ignore')
+                output = stdout.decode("utf-8", errors="ignore")
 
                 # 解析测试结果
                 test_results = self._parse_pytest_output(output)
@@ -165,22 +170,19 @@ class CodeTools:
                     "returncode": process.returncode,
                     "output": output[-2000:],  # 只返回最后部分
                     "summary": test_results,
-                    "stderr": stderr.decode('utf-8', errors='ignore')
+                    "stderr": stderr.decode("utf-8", errors="ignore"),
                 }
 
             except asyncio.TimeoutError:
                 process.terminate()
-                return {
-                    "error": "测试执行超时",
-                    "success": False
-                }
+                return {"error": "测试执行超时", "success": False}
 
         except Exception as e:
             return {"error": str(e)}
 
-    async def debug_code(self,
-                         code: str,
-                         test_inputs: Optional[List] = None) -> Dict[str, Any]:
+    async def debug_code(
+        self, code: str, test_inputs: Optional[List] = None
+    ) -> Dict[str, Any]:
         """
         调试代码
 
@@ -280,19 +282,16 @@ os.chdir(project_root)
         import re
 
         # 匹配测试结果
-        passed = len(re.findall(r'PASSED|passed', output))
-        failed = len(re.findall(r'FAILED|failed', output))
-        error = len(re.findall(r'ERROR|error', output))
+        passed = len(re.findall(r"PASSED|passed", output))
+        failed = len(re.findall(r"FAILED|failed", output))
+        error = len(re.findall(r"ERROR|error", output))
 
         # 匹配总结行
-        summary_match = re.search(r'(\d+) passed.*?(\d+) failed.*?(\d+) error', output)
+        summary_match = re.search(r"(\d+) passed.*?(\d+) failed.*?(\d+) error", output)
 
         return {
             "passed": passed,
             "failed": failed,
             "error": error,
-            "total": passed + failed + error
+            "total": passed + failed + error,
         }
-
-
-

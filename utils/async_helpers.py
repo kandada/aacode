@@ -3,13 +3,14 @@
 """
 异步辅助工具集
 """
+
 import asyncio
 import functools
 from typing import Any, Callable, TypeVar, Coroutine
 from concurrent.futures import ThreadPoolExecutor
 import inspect
 
-T = TypeVar('T')
+T = TypeVar("T")
 
 
 class AsyncHelpers:
@@ -120,11 +121,11 @@ class AsyncHelpers:
 
     @staticmethod
     async def retry_async(
-            func: Callable[..., Coroutine],
-            max_retries: int = 3,
-            delay: float = 1.0,
-            backoff: float = 2.0,
-            exceptions: tuple = (Exception,)
+        func: Callable[..., Coroutine],
+        max_retries: int = 3,
+        delay: float = 1.0,
+        backoff: float = 2.0,
+        exceptions: tuple = (Exception,),
     ) -> Any:
         """
         带重试的异步函数执行
@@ -151,8 +152,10 @@ class AsyncHelpers:
                     break
 
                 # 计算等待时间
-                wait_time = delay * (backoff ** attempt)
-                print(f"🔄 重试 {attempt + 1}/{max_retries}, 等待 {wait_time:.1f}秒: {str(e)[:100]}")
+                wait_time = delay * (backoff**attempt)
+                print(
+                    f"🔄 重试 {attempt + 1}/{max_retries}, 等待 {wait_time:.1f}秒: {str(e)[:100]}"
+                )
 
                 await asyncio.sleep(wait_time)
 
@@ -173,9 +176,9 @@ class AsyncHelpers:
 
     @staticmethod
     async def process_queue(
-            queue: asyncio.Queue,
-            processor: Callable[[Any], Coroutine],
-            worker_count: int = 3
+        queue: asyncio.Queue,
+        processor: Callable[[Any], Coroutine],
+        worker_count: int = 3,
     ):
         """
         处理队列中的项目
@@ -221,9 +224,7 @@ class AsyncHelpers:
 
     @staticmethod
     async def run_periodic(
-            func: Callable[[], Coroutine],
-            interval: float,
-            stop_event: asyncio.Event = None
+        func: Callable[[], Coroutine], interval: float, stop_event: asyncio.Event = None
     ):
         """
         定期运行函数
@@ -258,6 +259,3 @@ retry_async = AsyncHelpers.retry_async
 create_async_queue = AsyncHelpers.create_async_queue
 process_queue = AsyncHelpers.process_queue
 run_periodic = AsyncHelpers.run_periodic
-
-
-

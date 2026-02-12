@@ -3,6 +3,7 @@
 """
 子Agent实现，专注于特定任务
 """
+
 from typing import Dict, List, Any, Optional
 from core.agent import BaseAgent
 from core.react_loop import AsyncReActLoop
@@ -12,14 +13,16 @@ import asyncio
 class SubAgent(BaseAgent):
     """子Agent，专注于特定任务类型"""
 
-    def __init__(self,
-                 agent_id: str,
-                 system_prompt: str,
-                 model_caller: Any,
-                 tools: Dict[str, Any],
-                 context_manager: Any,
-                 parent_agent_id: str = None,
-                 **kwargs):
+    def __init__(
+        self,
+        agent_id: str,
+        system_prompt: str,
+        model_caller: Any,
+        tools: Dict[str, Any],
+        context_manager: Any,
+        parent_agent_id: str = None,
+        **kwargs,
+    ):
 
         super().__init__(
             agent_id=agent_id,
@@ -27,7 +30,7 @@ class SubAgent(BaseAgent):
             model_caller=model_caller,
             tools=tools,
             context_manager=context_manager,
-            max_iterations=kwargs.get('max_iterations', 15)
+            max_iterations=kwargs.get("max_iterations", 15),
         )
 
         self.parent_agent_id = parent_agent_id
@@ -38,7 +41,7 @@ class SubAgent(BaseAgent):
             model_caller=model_caller,
             tools=tools,
             context_manager=context_manager,
-            max_iterations=kwargs.get('max_iterations', 15)
+            max_iterations=kwargs.get("max_iterations", 15),
         )
 
     async def execute(self, task: str) -> Dict[str, Any]:
@@ -59,15 +62,16 @@ class SubAgent(BaseAgent):
         self.reset()
 
         # 添加任务描述
-        self.conversation_history.append({
-            "role": "user",
-            "content": f"任务：{task}\n\n请专注于完成这个特定任务。完成后使用submit_result工具提交结果。"
-        })
+        self.conversation_history.append(
+            {
+                "role": "user",
+                "content": f"任务：{task}\n\n请专注于完成这个特定任务。完成后使用submit_result工具提交结果。",
+            }
+        )
 
         # 运行ReAct循环
         result = await self.react_loop.run(
-            initial_prompt=self.system_prompt,
-            task_description=task
+            initial_prompt=self.system_prompt, task_description=task
         )
 
         # 更新统计
@@ -78,7 +82,7 @@ class SubAgent(BaseAgent):
             "agent_id": self.agent_id,
             "task": task,
             "agent_stats": self.get_stats(),
-            "execution_time": asyncio.get_event_loop().time() - self.start_time
+            "execution_time": asyncio.get_event_loop().time() - self.start_time,
         }
 
     async def submit_result(self, result: Dict) -> Dict[str, Any]:
@@ -96,7 +100,7 @@ class SubAgent(BaseAgent):
                 "task_description": self.task_description,
                 "submitted_at": asyncio.get_event_loop().time(),
                 "iterations": self.iterations,
-                "tool_calls": self.tool_calls
+                "tool_calls": self.tool_calls,
             }
 
             print(f"✅ 子Agent {self.agent_id} 提交结果")
@@ -104,7 +108,7 @@ class SubAgent(BaseAgent):
             return {
                 "success": True,
                 "result": result_with_metadata,
-                "message": "结果提交成功"
+                "message": "结果提交成功",
             }
 
         except Exception as e:
@@ -126,13 +130,10 @@ class SubAgent(BaseAgent):
 
         # 返回过滤后的工具
         focused_tools = {
-            name: func for name, func in self.tools.items()
-            if name in base_tools
+            name: func for name, func in self.tools.items() if name in base_tools
         }
 
         # 添加submit_result工具
         focused_tools["submit_result"] = self.submit_result
 
         return focused_tools
-
-
