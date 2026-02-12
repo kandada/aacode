@@ -74,7 +74,7 @@ export LLM_MODEL_NAME="your-model-name"
 ### MCP
 - 用户自行将MCP资源（支持stdio和sse）配置到aacode_config.yaml中 
 
-### 添加Skills
+### 增减Skills
 - 在skills目录下添加skill目录（包含SKILL.md和实现文件）
 - 在aacode_config.yaml中配置：添加到enabled_skills列表；在skills_metadata中添加元数据（名称、描述、触发关键词）
 - 完成配置后，Agent就会自主“渐进式披露”使用技能了。
