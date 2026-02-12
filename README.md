@@ -68,13 +68,13 @@ export LLM_API_KEY="your-api-key"
 export LLM_API_URL="https://your-api-endpoint/v1"
 export LLM_MODEL_NAME="your-model-name"
 ```
-### 搜索引擎、
+### 搜索引擎
 目前仅支持SearXNG，需要用户自己部署并将url配置到aacode_config.yaml中，但建议还是配置环境变量SEARCHXNG_URL
 
 ### MCP
 - 用户自行将MCP资源（支持stdio和sse）配置到aacode_config.yaml中 
 
-### Skills
+### 增减Skills
 - 在skills目录下添加skill目录（包含SKILL.md和实现文件）
 - 在aacode_config.yaml中配置：添加到enabled_skills列表；在skills_metadata中添加元数据（名称、描述、触发关键词）
 - 完成配置后，Agent就会自主“渐进式披露”使用技能了。你可以添加更多你认为对你的任务有用的Skills
