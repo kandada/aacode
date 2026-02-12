@@ -88,7 +88,7 @@ limits:
   prioritize_file_types: true   # 是否优先显示重要文件类型
 
 model:
-  api_key: your-api-key   # 建议最好是用deepseek-chat模型
+  api_key: your_api_key   # 建议最好是用deepseek-chat模型
   base_url: https://api.deepseek.com/v1   # https://api.openai.com/v1
   max_tokens: 8000   # 单次输出tokens长度
   name: deepseek-chat        # gpt-4-turbo-preview
