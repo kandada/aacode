@@ -112,6 +112,7 @@ class AICoder:
 - 函数尽量不超过60行
 - 添加必要的文档字符串
 - 错误处理要优雅
+
 """
             init_file.write_text(default_init)
 
