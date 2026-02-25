@@ -24,9 +24,10 @@ from utils.session_manager import SessionManager
 from utils.tool_registry import get_global_registry
 from utils.tool_schemas import get_all_schemas, get_schema
 from tools.skills_tools import SkillsManager
-import openai
+from tools.multimodal_tools import MultimodalTools, get_multimodal_tools_schema
 from core.sub_agent import SubAgent
 import subprocess
+import openai
 from config import settings
 
 
@@ -474,6 +475,18 @@ class MainAgent(BaseAgent):
         except:
             pass  # 沙箱工具可选
 
+        # 多模态工具（图片/视频理解）
+        multimodal_tools = MultimodalTools(project_path)
+        if getattr(settings.multimodal, "enabled", True):
+            tools.update(
+                {
+                    "understand_image": multimodal_tools.understand_image,
+                    "understand_video": multimodal_tools.understand_video,
+                    "understand_ui_design": multimodal_tools.understand_ui_design,
+                    "analyze_image_consistency": multimodal_tools.analyze_image_consistency,
+                }
+            )
+
         # 注册工具到全局注册表
         registry = get_global_registry()
         registered_count = 0
@@ -483,6 +496,34 @@ class MainAgent(BaseAgent):
             schema = get_schema(tool_name, self.skills_manager)
             if schema:
                 registry.register(tool_func, schema)
+                registered_count += 1
+
+        # 注册多模态工具的schema
+        from utils.tool_registry import ToolSchema, ToolParameter
+        multimodal_schema = get_multimodal_tools_schema()
+        for schema_dict in multimodal_schema:
+            func_name = schema_dict["function"]["name"]
+            if func_name in tools:
+                func_def = schema_dict["function"]
+                params_def = func_def.get("parameters", {})
+                properties = params_def.get("properties", {})
+                required_fields = params_def.get("required", [])
+                
+                # 将字典转换为 ToolSchema
+                schema = ToolSchema(
+                    name=func_name,
+                    description=func_def.get("description", ""),
+                    parameters=[
+                        ToolParameter(
+                            name=pname,
+                            type=str,
+                            required=pname in required_fields,
+                            description=properties[pname].get("description", "")
+                        )
+                        for pname in properties.keys()
+                    ]
+                )
+                registry.register(tools[func_name], schema)
                 registered_count += 1
 
         print(f"✅ 已注册 {registered_count} 个工具到注册表")

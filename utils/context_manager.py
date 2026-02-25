@@ -34,29 +34,29 @@ class ContextManager:
                     )
                     if init_content.strip():
                         context_parts.append(
-                            f"## 📋 项目初始化指令 (init.md)\n{init_content[:1500]}"
+                            f"# 📋 项目初始化指令 (init.md)\n{init_content[:20000]}"
                         )
                     else:
                         context_parts.append(
-                            "## 📋 项目初始化指令\n⚠️ init.md 文件为空"
+                            "# 📋 项目初始化指令\n⚠️ init.md 文件为空"
                         )
                 except UnicodeDecodeError:
                     context_parts.append(
-                        "## 📋 项目初始化指令\n⚠️ 文件编码错误，无法读取"
+                        "# 📋 项目初始化指令\n⚠️ 文件编码错误，无法读取"
                     )
                 except PermissionError:
-                    context_parts.append("## 📋 项目初始化指令\n⚠️ 权限不足，无法读取")
+                    context_parts.append("# 📋 项目初始化指令\n⚠️ 权限不足，无法读取")
                 except Exception as e:
                     context_parts.append(
-                        f"## 📋 项目初始化指令\n⚠️ 读取失败: {str(e)[:100]}"
+                        f"# 📋 项目初始化指令\n⚠️ 读取失败: {str(e)[:100]}"
                     )
             else:
                 context_parts.append(
-                    "## 📋 项目初始化指令\n⚠️ init.md 文件不存在，建议创建"
+                    "# 📋 项目初始化指令\n⚠️ init.md 文件不存在，建议创建"
                 )
         except Exception as e:
             context_parts.append(
-                f"## 📋 项目初始化指令\n⚠️ 检查文件失败: {str(e)[:100]}"
+                f"# 📋 项目初始化指令\n⚠️ 检查文件失败: {str(e)[:100]}"
             )
 
         # 优化1：待办文件路径始终在上下文中
@@ -64,7 +64,7 @@ class ContextManager:
             try:
                 todo_rel_path = self.current_todo_file.relative_to(self.project_path)
                 context_parts.append(
-                    f"## 📋 当前待办清单\n文件路径: {todo_rel_path}\n提示: 使用待办工具时会自动使用此文件"
+                    f"# 📋 当前待办清单\n文件路径: {todo_rel_path}\n提示: 使用待办工具时会自动使用此文件"
                 )
             except Exception:
                 pass
@@ -81,8 +81,8 @@ class ContextManager:
                         encoding="utf-8", errors="ignore"
                     )
                     if latest_obs and latest_obs.strip():
-                        # 显示更多观察内容（从500增加到1500字符）
-                        context_parts.append(f"## 最新观察\n{latest_obs[:1500]}")
+                        # 显示更多观察内容（从500增加到3000字符）
+                        context_parts.append(f"## 最新观察\n{latest_obs[:3000]}")
                 except Exception:
                     # 静默失败，不影响主流程
                     pass
