@@ -68,6 +68,10 @@ export LLM_API_KEY="your-api-key"
 export LLM_API_URL="https://your-api-endpoint/v1"
 export LLM_MODEL_NAME="your-model-name"
 ```
+
+### 多模态模型
+当前仅支持moonshot kimi-k2.5模型，请在aacode_config.yaml中配置api_key
+
 ### 搜索引擎
 目前仅支持SearXNG，需要用户自己部署并将url配置到aacode_config.yaml中，但建议还是配置环境变量SEARCHXNG_URL
 
