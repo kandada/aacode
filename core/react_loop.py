@@ -234,17 +234,14 @@ Action Input: {{"path": "config.py"}}
             )
             self.steps.append(step)
 
-            print(
-                f"💭 思考: {thought[:500]}..."
-                if len(thought) > 100
-                else f"💭 思考: {thought}"
-            )
+            # 注意：模型思考内容已在 main_agent.py 中流式打印，此处不再重复显示
 
             # 检查是否完成（没有action表示任务完成）
             if not actions or await self._is_task_completed(
                 thought, actions[0].action if actions else None, task_description
             ):
                 print("✅ 任务完成")
+                print(f"\n📋 任务总结:\n{thought}")
                 total_time = asyncio.get_event_loop().time() - start_time
                 if self.logger:
                     await self.logger.log_iteration(

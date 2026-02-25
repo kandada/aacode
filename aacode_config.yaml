@@ -88,11 +88,52 @@ limits:
   prioritize_file_types: true   # 是否优先显示重要文件类型
 
 model:
-  api_key: your_api_key   # 建议最好是用deepseek-chat模型
+  api_key: sk-ffc8aaccab294f7fa95e9592ddf99e6a   # 这是作者xiefujin自己的api key
   base_url: https://api.deepseek.com/v1   # https://api.openai.com/v1
   max_tokens: 8000   # 单次输出tokens长度
   name: deepseek-chat        # gpt-4-turbo-preview
   temperature: 0.1
+
+# 多模态模型配置（支持扩展多个多模态模型）
+multimodal:
+  # 是否启用多模态功能
+  enabled: true
+  
+  # 默认使用的多模态模型
+  default_model: moonshot_kimi_k2.5
+  
+  # 多模态模型列表（可扩展）
+  models:
+    # 月之暗面 Kimi K2.5（当前版本仅支持此模型）
+    moonshot_kimi_k2.5:
+      name: kimi-k2.5
+      provider: moonshot
+      base_url: https://api.moonshot.cn/v1
+      api_key: your_api_key
+      vision: true
+      video: true
+      max_image_size: 10485760  # 10MB
+      max_video_size: 104857600  # 100MB
+      supported_formats:
+        images: [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"]
+        videos: [".mp4", ".avi", ".mov", ".mkv", ".webm"]
+    
+    # 后续可扩展的模型（预留）
+    # qwen_vl:
+    #   name: qwen-vl-max
+    #   provider: alibaba
+    #   base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    #   api_key: your_api_key
+    #   vision: true
+    #   video: false
+    
+    # glm:
+    #   name: glm-4v-plus
+    #   provider: zhipu
+    #   base_url: https://open.bigmodel.cn/api/paas/v4
+    #   api_key: your_api_key
+    #   vision: true
+    #   video: false
 agent:
   max_react_iterations: 100
   max_sub_agent_iterations: 100
