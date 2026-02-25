@@ -93,25 +93,26 @@ class AICoder:
             init_file = self.project_path / "init.md"
         if not init_file.exists():
             # 创建默认指令
-            default_init = """# 项目指导原则
+            default_init = """## 项目指导原则
 
-## 核心规则
+### 核心规则
 1. 每个代码文件顶部必须用注释标注路径：`# {relative_path}`
 2. 优先修改现有文件而非创建新文件
 3. 所有文件操作必须在项目目录内
 4. 危险命令需要用户确认
 
-## 工作流程
+### 工作流程
 1. 先分析需求，制定计划
 2. 小步快跑，频繁测试
 3. 编写自包含的测试函数
 4. 使用工具前检查安全性
 
-## 代码质量
+### 代码质量
 - 遵循PEP 8/Python最佳实践
 - 函数尽量不超过60行
 - 添加必要的文档字符串
-- 错误处理要优雅"""
+- 错误处理要优雅
+"""
             init_file.write_text(default_init)
 
         self.init_instructions = init_file.read_text()
