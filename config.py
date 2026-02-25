@@ -205,6 +205,46 @@ class SkillsConfig:
     })
 
 
+@dataclass
+class MultimodalModelConfig:
+    """单个多模态模型配置"""
+    name: str = ""
+    provider: str = ""
+    base_url: str = ""
+    api_key: str = ""
+    vision: bool = True
+    video: bool = False
+    max_image_size: int = 10485760  # 10MB
+    max_video_size: int = 104857600  # 100MB
+    supported_formats: Dict[str, List[str]] = field(default_factory=lambda: {
+        "images": [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"],
+        "videos": [".mp4", ".avi", ".mov", ".mkv", ".webm"]
+    })
+
+
+@dataclass
+class MultimodalConfig:
+    """多模态模型配置"""
+    enabled: bool = True               # 是否启用多模态功能
+    default_model: str = "moonshot_kimi_k2.5"  # 默认使用的多模态模型
+    models: Dict[str, Any] = field(default_factory=lambda: {
+        "moonshot_kimi_k2.5": {
+            "name": "kimi-k2.5",
+            "provider": "moonshot",
+            "base_url": "https://api.moonshot.cn/v1",
+            "api_key": "",
+            "vision": True,
+            "video": True,
+            "max_image_size": 10485760,
+            "max_video_size": 104857600,
+            "supported_formats": {
+                "images": [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"],
+                "videos": [".mp4", ".avi", ".mov", ".mkv", ".webm"]
+            }
+        }
+    })
+
+
 class Settings:
     """全局设置"""
 
@@ -223,6 +263,7 @@ class Settings:
         self.timeouts = TimeoutConfig()  # 超时配置
         self.limits = LimitsConfig()  # 限制配置
         self.skills = SkillsConfig()  # Skills配置
+        self.multimodal = MultimodalConfig()  # 多模态配置
 
         # 从文件加载配置
         self.load_config()
@@ -325,6 +366,12 @@ class Settings:
                     for key, value in values.items():
                         if hasattr(self.skills, key):
                             setattr(self.skills, key, value)
+            elif section == "multimodal":
+                # 处理多模态配置
+                if isinstance(values, dict):
+                    for key, value in values.items():
+                        if hasattr(self.multimodal, key):
+                            setattr(self.multimodal, key, value)
             elif hasattr(self, section):
                 section_obj = getattr(self, section)
                 if hasattr(section_obj, '__dataclass_fields__'):
