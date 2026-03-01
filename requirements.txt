@@ -21,6 +21,9 @@ mypy>=1.5.0
 # 其他
 tiktoken
 
+# 可选：浏览器自动化，配套的chromium浏览器环境安装会比较慢
+# playwright>=1.40.0
+
 # 可选：向量数据库（用于高级上下文管理）
 # chromadb>=0.4.0
 # sentence-transformers>=2.2.0

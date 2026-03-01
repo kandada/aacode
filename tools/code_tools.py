@@ -85,7 +85,7 @@ class CodeTools:
                     result = {
                         "success": process.returncode == 0,
                         "returncode": process.returncode,
-                        "file": str(temp_file.relative_to(self.project_path)),
+                        "file": str(temp_file.relative_to(self.project_path.resolve())),
                     }
 
                     if capture_output:
@@ -253,6 +253,9 @@ if __name__ == '__main__':
 
     def _wrap_code(self, code: str) -> str:
         """包装代码,添加安全检查和上下文"""
+        # 使用绝对路径
+        project_path_abs = self.project_path.resolve()
+        
         wrapped = f"""#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
@@ -262,9 +265,10 @@ if __name__ == '__main__':
 import os
 from pathlib import Path
 
-# 设置项目路径
-project_root = Path(r'{self.project_path}')
+# 设置项目路径和Python路径
+project_root = Path(r'{project_path_abs}')
 os.chdir(project_root)
+sys.path.insert(0, str(project_root))
 
 """
 

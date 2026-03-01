@@ -962,7 +962,7 @@ Action Input: {{"path": "config.py"}}
 
             # 处理字典结果（增强错误检测）
             if isinstance(result, dict):
-                if "error" in result:
+                if result.get("error"):  # 只在有实际错误内容时才报错
                     error_msg = result["error"]
                     # 提供更友好的错误提示
                     if "permission" in error_msg.lower() or "权限" in error_msg:

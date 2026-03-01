@@ -4,11 +4,19 @@
 import aiohttp
 import asyncio
 import ssl
+import logging
 from typing import Dict, Any, List, Optional
 from urllib.parse import urljoin, urlparse
 import re
 import html
 from bs4 import BeautifulSoup
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger("web_scraper")
 
 
 async def scrape_web(url: str,
@@ -46,7 +54,7 @@ async def scrape_web(url: str,
 
             current_url = all_links[page_num] if page_num > 0 else url
 
-            print(f"抓取页面 {page_num + 1}/{max_pages}: {current_url}")
+            logger.info(f"抓取页面 {page_num + 1}/{max_pages}: {current_url}")
 
             page_data = await _fetch_page(current_url, timeout)
             if not page_data.get("success"):

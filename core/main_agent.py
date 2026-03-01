@@ -58,11 +58,9 @@ class MainAgent(BaseAgent):
         # 初始化工具（主Agent有更多工具）
         tools = self._create_tools(project_path, safety_guard)
 
-        # 系统提示
-        system_prompt = SYSTEM_PROMPT_FOR_MAIN_AGENT
         super().__init__(
             agent_id="main",
-            system_prompt=system_prompt,
+            system_prompt="",  # 先设置为空，稍后更新
             model_caller=model_caller,
             tools=tools,
             context_manager=context_manager,
@@ -71,6 +69,17 @@ class MainAgent(BaseAgent):
         
         # 初始化技能（需要在super().__init__之后，因为需要self.tools）
         self._init_skills()
+        
+        # 获取 Skills 工具名列表（用于提示词）- 在初始化技能之后
+        skills_tools_list = self._get_skills_tool_names(self.tools)
+        
+        # 系统提示（替换占位符，使用 replace 避免大括号转义问题）
+        system_prompt = SYSTEM_PROMPT_FOR_MAIN_AGENT.replace('{skills_tools_list}', skills_tools_list)
+        example_tool = skills_tools_list.split(',')[0] if ',' in skills_tools_list else "playwright_browser_automation"
+        system_prompt = system_prompt.replace('{skills_example}', example_tool)
+        
+        # 更新系统提示词
+        self.system_prompt = system_prompt
 
         self.project_path = project_path
         self.safety_guard = safety_guard
@@ -102,6 +111,43 @@ class MainAgent(BaseAgent):
             context_config=settings.context,
         )
 
+    def _get_skills_tool_names(self, tools: Dict[str, Any] = None) -> str:
+        """获取Skills相关工具名列表（用于提示词）"""
+        if tools is None:
+            tools = getattr(self, 'tools', {})
+        skill_tools = []
+        
+        # 动态获取技能名称列表
+        skill_names = []
+        if hasattr(self, 'skills_manager'):
+            skill_names = self.skills_manager.list_enabled_skills()
+        
+        # 如果无法动态获取，使用后备方法
+        if not skill_names:
+            # 方法1：从配置获取
+            from config import settings
+            if hasattr(settings, 'skills') and hasattr(settings.skills, 'skills_metadata'):
+                skill_names = list(settings.skills.skills_metadata.keys())
+            
+            # 方法2：从skills目录获取
+            if not skill_names and hasattr(self, 'project_path'):
+                import os
+                skills_dir = self.project_path / "skills"
+                if os.path.exists(skills_dir):
+                    for item in os.listdir(skills_dir):
+                        if os.path.isdir(os.path.join(skills_dir, item)) and not item.startswith('.'):
+                            skill_names.append(item)
+        
+        # 识别skills工具
+        for tool_name in tools.keys():
+            # 检查工具名是否包含任何技能名称
+            for skill_name in skill_names:
+                if skill_name in tool_name:
+                    skill_tools.append(tool_name)
+                    break
+        
+        return ', '.join(sorted(skill_tools)) if skill_tools else "无"
+
     async def _list_skills(self, include_details: bool = False) -> Dict[str, Any]:
         """列出所有可用的skills（支持渐进式披露）
 
@@ -119,12 +165,9 @@ class MainAgent(BaseAgent):
                     skill_data = {
                         "name": skill_name,
                         "display_name": skill_info.display_name or skill_name,
-                        "description": (
-                            skill_info.description[:100] + "..."
-                            if len(skill_info.description) > 100
-                            else skill_info.description
-                        ),
+                        "description": skill_info.description,
                         "trigger_keywords": skill_info.trigger_keywords,
+                        "usage_guide": skill_info.usage_guide,
                         "metadata_loaded": skill_info.metadata_loaded,
                         "full_instruction_loaded": skill_info.full_instruction_loaded,
                     }
@@ -209,6 +252,7 @@ class MainAgent(BaseAgent):
                 "success": True,
                 "name": skill_name,
                 "description": desc,
+                "full_md_content": skill_info.full_md_content if skill_info and skill_info.full_md_content else desc,
                 "parameters": params_info,
                 "examples": schema.examples if hasattr(schema, "examples") else [],
                 "loading_info": {"loaded_on_demand": True},
@@ -218,10 +262,34 @@ class MainAgent(BaseAgent):
             if skill_info:
                 result["display_name"] = skill_info.display_name or skill_name
                 result["trigger_keywords"] = skill_info.trigger_keywords
+                result["usage_guide"] = skill_info.usage_guide
                 result["loading_info"]["metadata_loaded"] = skill_info.metadata_loaded
                 result["loading_info"][
                     "full_instruction_loaded"
                 ] = skill_info.full_instruction_loaded
+
+                # 添加skill对应的工具列表（渐进式披露：让模型知道有哪些工具可用）
+                if skill_info.functions:
+                    tools_info = []
+                    for func_name, func_details in skill_info.functions.items():
+                        tool_name = f"{skill_name}_{func_name}"
+                        # 直接从 func_details 获取参数信息
+                        tool_params = []
+                        for param_name, param_details in func_details.get("parameters", {}).items():
+                            tool_params.append({
+                                "name": param_name,
+                                "type": "str",  # 统一使用 str 类型
+                                "required": param_details.get("required", False),
+                                "description": param_details.get("description", ""),
+                                "default": param_details.get("default")
+                            })
+                        tools_info.append({
+                            "name": tool_name,
+                            "description": f"执行 {func_name} 操作",
+                            "parameters": tool_params,
+                            "examples": func_details.get("examples", [])
+                        })
+                    result["tools"] = tools_info
 
             return result
         except Exception as e:
@@ -255,30 +323,78 @@ class MainAgent(BaseAgent):
             )
             print(f"   {status} {skill_name}: {desc}")
 
-        enabled = settings.skills.enabled_skills or []
+        # 自动启用在skills_metadata.yaml中配置了元数据的skill
+        # 只有配置了元数据的skill才会被启用，符合渐进式披露原则
+        configured_skills = list(settings.skills.skills_metadata.keys())
+        enabled = [s for s in configured_skills if s in discovered]
         self.skills_manager.enable_skills(enabled)
+        print(f"✅ 已自动启用 {len(enabled)} 个Skills（基于skills_metadata.yaml配置）")
         enabled_list = self.skills_manager.list_enabled_skills()
         print(f"✅ 启用 {len(enabled_list)} 个Skills: {', '.join(enabled_list)}")
 
         # 注册skill工具到注册表并添加到Agent工具字典
+        # 渐进式披露：启动时加载完整指令以便注册所有函数
         registry = get_global_registry()
+        tool_count = 0
+        
         for skill_name in enabled_list:
-            # 先确保技能已完全加载
+            # 加载完整指令以发现所有函数
             self.skills_manager._load_full_instruction(skill_name)
+            
+            skill_info = self.skills_manager.loaded_skills.get(skill_name)
+            if not skill_info:
+                continue
+            
+            # 检查是否有多函数支持
+            if skill_info.functions:
+                # 为每个函数创建独立工具
+                for func_name, func_info in skill_info.functions.items():
+                    tool_name = f"{skill_name}_{func_name}"
+                    
+                    # 创建简化的schema
+                    from utils.tool_schemas import get_schema
+                    schema = get_schema(tool_name, self.skills_manager)
+                    
+                    # 手动创建schema覆盖参数
+                    from utils.tool_registry import ToolSchema, ToolParameter
+                    params = []
+                    for param_name, param_info in func_info.get("parameters", {}).items():
+                        param = ToolParameter(
+                            name=param_name,
+                            type=str,
+                            required=param_info.get("required", False),
+                            default=param_info.get("default"),
+                            description=param_info.get("description", ""),
+                        )
+                        params.append(param)
+                    
+                    schema = ToolSchema(
+                        name=tool_name,
+                        description=f"{skill_info.description} - 函数: {func_name}",
+                        parameters=params,
+                        examples=func_info.get("examples", [])
+                    )
+                    
+                    func = self._create_skill_executor(skill_name, func_name)
+                    registry.register(func, schema)
+                    self.tools[tool_name] = func
+                    tool_count += 1
+            else:
+                # 兼容：单函数skill
+                schema = self.skills_manager.get_skill_schema(skill_name)
+                if schema:
+                    func = self._create_skill_executor(skill_name)
+                    registry.register(func, schema)
+                    self.tools[skill_name] = func
+                    tool_count += 1
 
-            schema = self.skills_manager.get_skill_schema(skill_name)
-            if schema:
-                func = self._create_skill_executor(skill_name)
-                registry.register(func, schema)
-                self.tools[skill_name] = func
+        print(f"✅ 已注册 {tool_count} 个Skill工具函数（支持多功能）")
 
-        print(f"✅ 已注册 {len(enabled_list)} 个Skill工具（按需加载完整指令）")
-
-    def _create_skill_executor(self, skill_name: str):
+    def _create_skill_executor(self, skill_name: str, func_name: str = None):
         """创建skill执行函数"""
 
         async def executor(**kwargs):
-            return await self.skills_manager.execute_skill(skill_name, **kwargs)
+            return await self.skills_manager.execute_skill(skill_name, func_name=func_name, **kwargs)
 
         return executor
 
@@ -411,6 +527,37 @@ class MainAgent(BaseAgent):
         
         # 保存web_tools引用以便后续清理
         self.web_tools = web_tools
+        
+        # 包装fetch_url函数以保存结果
+        async def wrapped_fetch_url(url: str, timeout: Optional[int] = None, max_content_length: int = 100000, **kwargs) -> Dict[str, Any]:
+            # 调用原始fetch_url函数
+            result = await web_tools.fetch_url(url, timeout, max_content_length, **kwargs)
+            
+            # 如果成功获取到内容，保存到上下文文件
+            if result.get("success") and "content" in result:
+                try:
+                    # 创建上下文目录
+                    context_dir = project_path / ".aacode" / "context"
+                    context_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    # 保存结果到web_fetch_result.txt
+                    result_file = context_dir / "web_fetch_result.txt"
+                    result_file.write_text(result["content"], encoding="utf-8")
+                    print(f"📁 已保存web_fetch结果到: {result_file.relative_to(project_path)}")
+                except Exception as e:
+                    print(f"⚠️  保存web_fetch结果失败: {str(e)}")
+            
+            return result
+        """创建工具集并注册到工具注册表"""
+
+        atomic_tools = AtomicTools(project_path, safety_guard)
+        code_tools = CodeTools(project_path, safety_guard)
+        web_tools = WebTools(project_path, safety_guard)
+        todo_tools = TodoTools(project_path, safety_guard)
+        incremental_tools = IncrementalTools(project_path, safety_guard)
+        
+        # 保存web_tools引用以便后续清理
+        self.web_tools = web_tools
 
         # 主Agent的特殊工具
         tools = {
@@ -426,7 +573,7 @@ class MainAgent(BaseAgent):
             "debug_code": code_tools.debug_code,
             # 网络工具
             "search_web": web_tools.search_web,
-            "fetch_url": web_tools.fetch_url,
+            "fetch_url": wrapped_fetch_url,
             "search_code": web_tools.search_code,
             # To-Do List工具
             "add_todo_item": todo_tools.add_todo_item,
