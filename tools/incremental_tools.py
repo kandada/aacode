@@ -12,6 +12,46 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 import asyncio
 
+# 尝试导入light_ast模块，如果失败则提供降级方案
+LIGHT_AST_AVAILABLE = False
+
+# 定义降级函数
+def _fallback_validate_update(code: str, new_code: str, update_type: str, **kwargs) -> Dict[str, Any]:
+    return {"valid": True, "warnings": ["light_ast模块不可用，跳过AST验证"], "errors": []}
+
+def _fallback_analyze_for_update(code: str, update_type: str, **kwargs) -> Dict[str, Any]:
+    return {"ast_available": False, "error": "light_ast模块不可用"}
+
+try:
+    from utils.light_ast import IncrementalASTHelper, LightAST
+    LIGHT_AST_AVAILABLE = True
+    print("✅ light_ast模块导入成功")
+except ImportError as e:
+    LIGHT_AST_AVAILABLE = False
+    print(f"⚠️  light_ast模块导入失败: {e}")
+    print("📝 将使用降级方案，部分AST增强功能不可用")
+    
+    # 创建降级类
+    class IncrementalASTHelper:
+        @staticmethod
+        def validate_update(code: str, new_code: str, update_type: str, **kwargs) -> Dict[str, Any]:
+            return _fallback_validate_update(code, new_code, update_type, **kwargs)
+        
+        @staticmethod
+        def analyze_for_update(code: str, update_type: str, **kwargs) -> Dict[str, Any]:
+            return _fallback_analyze_for_update(code, update_type, **kwargs)
+    
+    # 创建降级LightAST类
+    class LightAST:
+        def parse(self, code: str):
+            return None
+        def find_node_at_line(self, line: int):
+            return None
+        def find_functions(self):
+            return []
+        def find_classes(self):
+            return []
+
 
 class IncrementalTools:
     """增量更新工具类"""
@@ -19,6 +59,45 @@ class IncrementalTools:
     def __init__(self, project_path: Path, safety_guard: Any = None):
         self.project_path = project_path
         self.safety_guard = safety_guard
+        self.ast_log_enabled = True  # 启用AST日志记录
+    
+    def _log_ast_info(self, message: str, level: str = "info"):
+        """记录AST相关信息"""
+        if not self.ast_log_enabled:
+            return
+        
+        prefix = {
+            "info": "🔍",
+            "warning": "⚠️ ",
+            "error": "❌",
+            "success": "✅"
+        }.get(level, "📝")
+        
+        print(f"{prefix} [AST] {message}")
+    
+    def _log_ast_analysis(self, analysis: Dict[str, Any], context: str = ""):
+        """记录AST分析结果"""
+        if not self.ast_log_enabled or not analysis:
+            return
+        
+        context_prefix = f"[{context}] " if context else ""
+        
+        if analysis.get("ast_available", False):
+            functions = analysis.get("functions", [])
+            classes = analysis.get("classes", [])
+            suggestions = analysis.get("suggestions", [])
+            
+            self._log_ast_info(f"{context_prefix}分析完成: {len(functions)}函数, {len(classes)}类")
+            
+            if functions:
+                self._log_ast_info(f"{context_prefix}函数: {', '.join(functions[:5])}" + 
+                                  ("..." if len(functions) > 5 else ""))
+            
+            if suggestions:
+                for suggestion in suggestions[:3]:  # 只显示前3个建议
+                    self._log_ast_info(f"{context_prefix}建议: {suggestion}")
+        else:
+            self._log_ast_info(f"{context_prefix}AST分析不可用: {analysis.get('error', '未知错误')}", "warning")
 
     async def incremental_update(
         self, path: str, new_content: Optional[str] = None, update_type: str = "smart", 
@@ -125,6 +204,24 @@ class IncrementalTools:
             print(f"❌ 参数验证失败: {validation_error}")
             return {"error": validation_error}
         
+        # AST增强：验证更新参数（基本参数验证）
+        # 注意：此时还没有读取旧内容，只进行基本参数验证
+        # 完整的AST验证在读取旧内容后进行
+        try:
+            # 只验证基本参数，不验证代码内容
+            basic_validation = IncrementalASTHelper.validate_update(
+                "dummy",  # 虚拟内容，避免"原始代码为空"警告
+                final_content if final_content else "dummy",
+                update_type,
+                **kwargs
+            )
+            if not basic_validation["valid"]:
+                self._log_ast_info(f"基本参数验证失败: {basic_validation['errors']}", "error")
+                return {"error": f"参数验证失败: {', '.join(basic_validation['errors'])}"}
+            # 忽略警告，因为使用的是虚拟内容
+        except Exception as e:
+            self._log_ast_info(f"参数验证异常: {e}", "warning")
+        
         # 源文件参数检查：当使用source参数时，必须使用source_前缀
         if source:
             # 检查行范围参数 - 不告警，只记录信息
@@ -181,6 +278,39 @@ class IncrementalTools:
                 self._restore_backup(full_path, backup_path)
             return {"error": f"读取文件失败: 尝试了多种编码({', '.join(encodings_to_try)})均失败"}
 
+        # AST增强：读取旧内容后，进行完整的AST验证和分析
+        try:
+            # 完整的AST验证（使用实际的旧内容）
+            ast_validation = IncrementalASTHelper.validate_update(
+                old_content,
+                final_content if final_content else "",
+                update_type,
+                **kwargs
+            )
+            if not ast_validation["valid"]:
+                self._log_ast_info(f"验证失败: {ast_validation['errors']}", "error")
+                # 不直接返回错误，记录日志继续执行
+                self._log_ast_info("验证失败，但继续执行更新操作", "warning")
+            if ast_validation["warnings"]:
+                for warning in ast_validation["warnings"]:
+                    self._log_ast_info(f"验证警告: {warning}", "warning")
+            
+            # AST分析，为不同update_type提供智能建议
+            ast_analysis = IncrementalASTHelper.analyze_for_update(
+                old_content,
+                update_type,
+                **kwargs
+            )
+            
+            # 记录AST分析结果
+            self._log_ast_analysis(ast_analysis, f"update_type={update_type}")
+            
+            # 将AST分析结果传递给具体方法
+            if ast_analysis.get("ast_available", False):
+                kwargs["_ast_analysis"] = ast_analysis
+        except Exception as e:
+            self._log_ast_info(f"分析异常: {e}", "warning")
+
         # 执行更新操作
         result = None
         try:
@@ -233,7 +363,7 @@ class IncrementalTools:
                     print(f"   如需部分替换，请使用start_line/end_line或line_range参数")
                     
                     result = await self._replace_file(
-                        full_path, final_content, path, old_content
+                        full_path, final_content, path, old_content, **kwargs
                     )
             elif update_type == "append":
                 # 追加内容
@@ -539,13 +669,13 @@ class IncrementalTools:
     
     def _split_lines_preserving_newlines(self, content: str) -> List[str]:
         """
-        分割内容为行，每行以换行符结尾
+        分割内容为行，保留原始换行符
         
         Args:
             content: 文本内容
             
         Returns:
-            行列表，每行以换行符结尾
+            行列表，每行包含原始换行符（如果有的话）
         """
         if not content:
             return []
@@ -567,19 +697,17 @@ class IncrementalTools:
                 if content[j] == '\r':
                     if j + 1 < n and content[j + 1] == '\n':
                         # \r\n 换行
-                        line += '\n'
+                        line += '\r\n'
                         j += 2
                     else:
                         # 单独的 \r 换行
-                        line += '\n'
+                        line += '\r'
                         j += 1
                 else:
                     # \n 换行
                     line += '\n'
                     j += 1
-            else:
-                # 最后一行没有换行符，添加一个
-                line += '\n'
+            # 注意：最后一行没有换行符时，不添加换行符
             
             lines.append(line)
             i = j
@@ -588,10 +716,10 @@ class IncrementalTools:
     
     def _join_lines_preserving_newlines(self, lines: List[str]) -> str:
         """
-        合并行为内容，确保行与行正确分隔
+        合并行为内容，保留原始换行符格式
         
         Args:
-            lines: 行列表（每行以换行符结尾）
+            lines: 行列表（每行可能包含换行符）
             
         Returns:
             合并后的内容
@@ -599,22 +727,8 @@ class IncrementalTools:
         if not lines:
             return ''
         
-        # 确保每行都有换行符，然后连接
-        result_lines = []
-        for line in lines:
-            if line.endswith('\n'):
-                result_lines.append(line)
-            else:
-                result_lines.append(line + '\n')
-        
-        # 连接所有行
-        result = ''.join(result_lines)
-        
-        # 确保最后一行有换行符（保持一致性）
-        if result and not result.endswith('\n'):
-            result += '\n'
-            
-        return result
+        # 简单连接所有行，保留原始换行符
+        return ''.join(lines)
     
     def _parse_line_range(self, line_range: str, total_lines: int) -> Tuple[int, int]:
         """
@@ -923,7 +1037,7 @@ class IncrementalTools:
             return {"error": f"创建文件失败: {str(e)}"}
 
     async def _replace_file(
-        self, full_path: Path, new_content: str, rel_path: str, old_content: str
+        self, full_path: Path, new_content: str, rel_path: str, old_content: str, **kwargs
     ) -> Dict[str, Any]:
         """替换整个文件"""
         try:
@@ -937,14 +1051,40 @@ class IncrementalTools:
                     "message": f"文件内容未变化: {rel_path}",
                 }
 
+            # AST增强：分析替换前后的代码结构
+            ast_info = None
+            if LIGHT_AST_AVAILABLE:
+                try:
+                    # 使用IncrementalASTHelper分析代码结构
+                    old_analysis = IncrementalASTHelper.analyze_for_update(old_content, "replace")
+                    new_analysis = IncrementalASTHelper.analyze_for_update(new_content, "replace")
+                    
+                    old_func_count = len(old_analysis.get("functions", []))
+                    new_func_count = len(new_analysis.get("functions", []))
+                    old_class_count = len(old_analysis.get("classes", []))
+                    new_class_count = len(new_analysis.get("classes", []))
+                    
+                    ast_info = {
+                        "old_functions": old_func_count,
+                        "new_functions": new_func_count,
+                        "old_classes": old_class_count,
+                        "new_classes": new_class_count,
+                        "analysis_available": True
+                    }
+                    
+                    self._log_ast_info(f"函数 {old_func_count}→{new_func_count}, 类 {old_class_count}→{new_class_count}")
+                    
+                except Exception as e:
+                    print(f"⚠️  AST分析异常（继续执行）: {e}")
+
             # 原子性写入新内容
             if not self._atomic_write(full_path, new_content):
                 return {"error": "原子性写入失败"}
 
             # 计算差异
             diff_count = self._count_differences(old_content, new_content)
-
-            return {
+            
+            result = {
                 "success": True,
                 "path": rel_path,
                 "action": "replaced",
@@ -952,6 +1092,17 @@ class IncrementalTools:
                 "diff_count": diff_count,
                 "message": f"替换文件: {rel_path} ({diff_count} 处差异)",
             }
+            
+            # 添加AST信息到结果
+            if ast_info:
+                result["ast_info"] = ast_info
+                # 根据AST分析调整消息
+                if ast_info["new_functions"] > 0 or ast_info["new_classes"] > 0:
+                    func_msg = f"{ast_info['old_functions']}→{ast_info['new_functions']}函数"
+                    class_msg = f"{ast_info['old_classes']}→{ast_info['new_classes']}类"
+                    result["message"] += f" ({func_msg}, {class_msg})"
+            
+            return result
         except Exception as e:
             return {"error": f"替换文件失败: {str(e)}"}
 
@@ -1048,6 +1199,37 @@ class IncrementalTools:
     ) -> Dict[str, Any]:
         """行级别更新：更新指定行或行范围"""
         try:
+            # AST增强：分析目标位置的代码结构
+            ast_info = None
+            if LIGHT_AST_AVAILABLE:
+                try:
+                    # 创建AST分析器
+                    ast_tool = LightAST()
+                    ast_tool.parse(old_content)
+                    
+                    # 根据参数分析目标位置
+                    target_line = None
+                    if line_number is not None:
+                        target_line = line_number
+                    elif line_range is not None:
+                        # 解析行范围获取起始行
+                        if '-' in line_range:
+                            parts = line_range.split('-')
+                            if parts[0].strip():
+                                target_line = int(parts[0].strip())
+                    
+                    if target_line:
+                        node = ast_tool.find_node_at_line(target_line)
+                        if node:
+                            ast_info = {
+                                "node_type": node.node_type,
+                                "position": node.position.to_range(),
+                                "line": target_line
+                            }
+                            self._log_ast_info(f"第{target_line}行是{node.node_type}节点，范围{node.position.to_range()}")
+                except Exception as e:
+                    print(f"⚠️  AST分析异常（继续执行）: {e}")
+            
             # 使用保留换行符的方式分割行
             old_lines = self._split_lines_preserving_newlines(old_content)
             total_lines = len(old_lines)
@@ -1173,7 +1355,7 @@ class IncrementalTools:
             display_start = start_index + 1
             display_end = end_index  # end_index是0-based不包含，作为显示给用户的结束行号（不包含）
             
-            return {
+            result = {
                 "success": True,
                 "path": rel_path,
                 "action": "line_updated",
@@ -1183,6 +1365,17 @@ class IncrementalTools:
                 "line_range": f"{display_start}-{display_end}",
                 "message": f"行级别更新 {rel_path}: 更新了第 {display_start}-{display_end} 行 ({lines_updated} 行 → {new_lines_count} 行)",
             }
+            
+            # 添加AST信息到结果
+            if ast_info:
+                result["ast_info"] = ast_info
+                # 根据AST节点类型调整消息
+                if ast_info["node_type"] in ["FunctionDef", "AsyncFunctionDef"]:
+                    result["message"] += f" (在{ast_info['node_type']}节点内)"
+                elif ast_info["node_type"] == "ClassDef":
+                    result["message"] += f" (在类定义内)"
+            
+            return result
             
         except Exception as e:
             return {"error": f"行级别更新失败: {str(e)}"}
@@ -1198,6 +1391,37 @@ class IncrementalTools:
     ) -> Dict[str, Any]:
         """在指定行之前插入内容"""
         try:
+            # AST增强：分析插入位置的代码结构
+            ast_info = None
+            if LIGHT_AST_AVAILABLE:
+                try:
+                    ast_tool = LightAST()
+                    ast_tool.parse(old_content)
+                    
+                    target_line = None
+                    if line_number is not None:
+                        target_line = line_number
+                    elif reference_content is not None:
+                        # 尝试使用AST查找参考内容
+                        old_lines = old_content.split('\n')
+                        for i, line in enumerate(old_lines):
+                            if reference_content.strip() in line:
+                                target_line = i + 1
+                                break
+                    
+                    if target_line:
+                        node = ast_tool.find_node_at_line(target_line)
+                        if node:
+                            ast_info = {
+                                "node_type": node.node_type,
+                                "position": node.position.to_range(),
+                                "line": target_line,
+                                "insert_position": "before"
+                            }
+                            self._log_ast_info(f"在第{target_line}行({node.node_type})之前插入")
+                except Exception as e:
+                    print(f"⚠️  AST分析异常（继续执行）: {e}")
+            
             # 使用保留换行符的方式分割行
             old_lines = self._split_lines_preserving_newlines(old_content)
             total_lines = len(old_lines)
@@ -1246,7 +1470,7 @@ class IncrementalTools:
                 # 使用reference_content找到的行号
                 display_line = insert_index + 1 if insert_index is not None else 1
             
-            return {
+            result = {
                 "success": True,
                 "path": rel_path,
                 "action": "inserted_before",
@@ -1255,6 +1479,14 @@ class IncrementalTools:
                 "insert_position": f"第{display_line}行之前",
                 "message": f"在 {rel_path} 的第{display_line}行之前插入了 {lines_inserted} 行",
             }
+            
+            # 添加AST信息到结果
+            if ast_info:
+                result["ast_info"] = ast_info
+                if ast_info["node_type"] in ["FunctionDef", "AsyncFunctionDef", "ClassDef"]:
+                    result["message"] += f" ({ast_info['node_type']}之前)"
+            
+            return result
             
         except Exception as e:
             return {"error": f"插入内容失败: {str(e)}"}
@@ -1270,6 +1502,37 @@ class IncrementalTools:
     ) -> Dict[str, Any]:
         """在指定行之后插入内容"""
         try:
+            # AST增强：分析插入位置的代码结构
+            ast_info = None
+            if LIGHT_AST_AVAILABLE:
+                try:
+                    ast_tool = LightAST()
+                    ast_tool.parse(old_content)
+                    
+                    target_line = None
+                    if line_number is not None:
+                        target_line = line_number
+                    elif reference_content is not None:
+                        # 尝试使用AST查找参考内容
+                        old_lines_temp = old_content.split('\n')
+                        for i, line in enumerate(old_lines_temp):
+                            if reference_content.strip() in line:
+                                target_line = i + 1
+                                break
+                    
+                    if target_line:
+                        node = ast_tool.find_node_at_line(target_line)
+                        if node:
+                            ast_info = {
+                                "node_type": node.node_type,
+                                "position": node.position.to_range(),
+                                "line": target_line,
+                                "insert_position": "after"
+                            }
+                            self._log_ast_info(f"在第{target_line}行({node.node_type})之后插入")
+                except Exception as e:
+                    print(f"⚠️  AST分析异常（继续执行）: {e}")
+            
             # 使用保留换行符的方式分割行
             old_lines = self._split_lines_preserving_newlines(old_content)
             total_lines = len(old_lines)
@@ -1319,7 +1582,7 @@ class IncrementalTools:
             # 显示给用户的行号（插入位置之前的行号）
             display_line = line_number if line_number is not None else (target_index + 1 if target_index is not None else 1)
             
-            return {
+            result = {
                 "success": True,
                 "path": rel_path,
                 "action": "inserted_after",
@@ -1328,6 +1591,14 @@ class IncrementalTools:
                 "insert_position": f"第{display_line}行之后",
                 "message": f"在 {rel_path} 的第{display_line}行之后插入了 {lines_inserted} 行",
             }
+            
+            # 添加AST信息到结果
+            if ast_info:
+                result["ast_info"] = ast_info
+                if ast_info["node_type"] in ["FunctionDef", "AsyncFunctionDef", "ClassDef"]:
+                    result["message"] += f" ({ast_info['node_type']}之后)"
+            
+            return result
             
         except Exception as e:
             return {"error": f"插入内容失败: {str(e)}"}
@@ -1385,11 +1656,31 @@ class IncrementalTools:
         file_ext: str,
     ) -> Dict[str, Any]:
         """智能代码更新"""
+        # AST增强：使用light_ast进行更精确的代码结构分析
+        ast_enhanced = False
+        if LIGHT_AST_AVAILABLE and file_ext == ".py":
+            try:
+                # 使用light_ast分析代码结构
+                old_analysis = IncrementalASTHelper.analyze_for_update(old_content, "smart")
+                new_analysis = IncrementalASTHelper.analyze_for_update(new_content, "smart")
+                
+                if old_analysis.get("ast_available") and new_analysis.get("ast_available"):
+                    self._log_ast_info(f"旧代码有{len(old_analysis.get('functions', []))}函数/{len(old_analysis.get('classes', []))}类, "
+                          f"新代码有{len(new_analysis.get('functions', []))}函数/{len(new_analysis.get('classes', []))}类")
+                    
+                    # 如果AST分析可用，可以基于AST进行更智能的更新
+                    # 这里只是记录信息，实际更新逻辑仍然使用原有方法
+                    ast_enhanced = True
+            except Exception as e:
+                print(f"⚠️  AST智能分析异常（使用原有逻辑）: {e}")
+        
         # 分析新旧内容的函数/类结构
         old_entities = self._extract_code_entities(old_content, file_ext)
         new_entities = self._extract_code_entities(new_content, file_ext)
         
         print(f"🔍 智能更新分析: 旧实体 {len(old_entities)} 个, 新实体 {len(new_entities)} 个")
+        if ast_enhanced:
+            print(f"💡 已启用AST增强分析")
 
         # 情况1: 实体数量相同且名称相同 - 逐实体更新
         if len(old_entities) == len(new_entities) and len(old_entities) > 0:
@@ -1453,10 +1744,46 @@ class IncrementalTools:
         entities = []
         
         if file_ext == ".py":
-            # 尝试使用ast模块进行准确解析
+            # AST增强：优先使用light_ast进行解析
+            if LIGHT_AST_AVAILABLE:
+                try:
+                    ast_tool = LightAST()
+                    root = ast_tool.parse(content)
+                    if root:
+                        # 使用light_ast提取实体
+                        functions = ast_tool.find_functions()
+                        classes = ast_tool.find_classes()
+                        
+                        for func in functions:
+                            entities.append({
+                                "type": "function",
+                                "name": func.attributes.get("name", "unnamed"),
+                                "line": func.position.line,
+                                "start": func.position.line - 1,  # 转换为0-based
+                                "end": func.position.end_line - 1 if func.position.end_line else func.position.line,
+                                "signature": str(func.attributes.get("args", []))
+                            })
+                        
+                        for cls in classes:
+                            entities.append({
+                                "type": "class",
+                                "name": cls.attributes.get("name", "unnamed"),
+                                "line": cls.position.line,
+                                "start": cls.position.line - 1,  # 转换为0-based
+                                "end": cls.position.end_line - 1 if cls.position.end_line else cls.position.line,
+                                "bases": cls.attributes.get("bases", [])
+                            })
+                        
+                        if entities:
+                            self._log_ast_info(f"使用light_ast提取了 {len(entities)} 个实体")
+                            return entities
+                except Exception as e:
+                    print(f"⚠️  light_ast解析异常（使用回退方案）: {e}")
+            
+            # 回退方案：尝试使用ast模块进行准确解析
             entities = self._extract_python_entities_ast(content)
             if entities:
-                print(f"🔍 使用AST解析提取了 {len(entities)} 个实体")
+                print(f"🔍 使用标准AST解析提取了 {len(entities)} 个实体")
                 return entities
             
             # 如果AST解析失败，回退到基于行的解析
