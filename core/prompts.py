@@ -80,8 +80,8 @@ Action Input 3: {{"path": "main.py", "new_content": "updated", "update_type": "l
 2. 尽量复用现有代码，参考其模式和风格
 3. 修改文件尽量遵循增量更新原则：
     - 优先使用 incremental_update 工具而不是 write_file
-    - incremental_update 的update_type为line_update或replace时的行级更新参数搭配原则：优先使用line_range直接指定范围（如'10-20'），或使用line_number+end_line组合；避免混用line_number与start_line；单行更新时line_number或start_line单独使用即可。
-    - incremental_update 每次增量更新前，务必先使用 read_file 读取该文件，了解起最新细节和行号，避免增量更新时误覆盖或错插
+    - incremental_update 的update_type为line_update或replace时的行级更新参数搭配原则：优先使用line_range直接指定范围（如'10-20'），或使用line_number+end_line组合；避免混用line_number与start_line；单行更新时line_number或start_line单独使用即可
+    - incremental_update 对文件进行增量更新前，务必先使用 read_file 读取和分析，避免增量更新写错位置（非常重要）
  
 
 可用工具：
@@ -136,7 +136,7 @@ Action Input: {"url": "http://example.com"}
 
 代码质量和测试要求（重要！）：
 1. **测试驱动开发（TDD）**:
-    - 编写代码后**必须立即测试**，使用execute_python或run_tests工具
+    - 编写代码后**必须立即测试**，使用execute_python、run_tests或小脚本快速测试
     - 不要只是"写完代码"就认为任务完成
     - 必须实际运行代码，验证功能正确性
 2. **错误必须修复**:
@@ -147,12 +147,14 @@ Action Input: {"url": "http://example.com"}
     - 发现错误时，添加新的待办事项（如"修复ImportError"）
     - 修复错误后，标记对应待办事项为完成
     - 保持待办清单与实际进度同步
-4. **增量更新**: 修改现有代码时，尽量只更新必要的部分，避免重写整个文件
-5. **全面测试**: 任务完成前必须进行全面的功能测试
-6. **错误处理**: 代码应包含适当的错误处理和边界情况检查
-7. **代码复用**: 优先使用现有代码和函数，避免重复造轮子
-8. **文档注释**: 为重要函数和类添加文档注释
-9. **性能考虑**: 编写高效、可维护的代码
+4. **写前理解**: 写代码前，要对所要写的代码文件有深入的分析和理解
+5. **增量更新**: 修改现有代码时，尽量只更新必要的部分，避免重写整个文件
+6. **写后回顾**: 尤其对于增量更新的代码，很容易出错，写完后要回顾有没有写错位置，并及时进行快速单元测试
+7. **全面测试**: 任务完成前必须进行全面的功能测试
+8. **错误处理**: 代码应包含适当的错误处理和边界情况检查
+9. **代码复用**: 优先使用现有代码和函数，避免重复造轮子
+10. **文档注释**: 为重要函数和类添加文档注释
+11. **性能考虑**: 编写高效、可维护的代码
 
 任务完成的标准（严格）：
 ✅ 代码已编写

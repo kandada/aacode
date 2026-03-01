@@ -66,10 +66,10 @@ WRITE_FILE_SCHEMA = ToolSchema(
 - tool_result:fetch_url - fetch_url工具结果
 
 **源文件过滤参数**（当使用source参数时）：
-- source_start_line: 源文件起始行号（1-based）- **必须使用**
-- source_end_line: 源文件结束行号（1-based）- **必须使用**
-- source_pattern: 源文件正则表达式模式，只保留匹配的行 - **必须使用**
-- source_exclude_pattern: 源文件正则表达式模式，排除匹配的行 - **必须使用**
+- source_start_line: 源文件起始行号（1-based）
+- source_end_line: 源文件结束行号（1-based）
+- source_pattern: 源文件正则表达式模式，只保留匹配的行 
+- source_exclude_pattern: 源文件正则表达式模式，排除匹配的行 
 
 **重要规则**：当使用source参数时，所有源文件过滤参数必须使用source_前缀。
              使用不带前缀的参数将触发警告。
@@ -570,62 +570,74 @@ LIST_TODOS_SCHEMA = GET_TODO_SUMMARY_SCHEMA
 
 INCREMENTAL_UPDATE_SCHEMA = ToolSchema(
     name="incremental_update",
-    description="""增量更新文件。智能分析差异，最小化更改。支持多种更新模式：
-- smart(智能): 智能分析差异，最小化更改
-- replace(替换): 替换整个文件或指定行范围
-- append(追加): 追加到文件末尾
-- prepend(前置): 前置到文件开头
-- line_update(行级别更新): 更新指定行或行范围
-- insert_before(在指定行之前插入): 在指定行或匹配内容之前插入
-- insert_after(在指定行之后插入): 在指定行或匹配内容之后插入
+    description="""增量更新文件内容。支持多种更新模式，优先使用此工具而不是write_file修改现有文件。
 
-**增强功能**：
-- 支持从上下文引用内容，节省token
-- 两种使用方式：
-  1. 直接提供内容：new_content="文件内容"
-  2. 从上下文引用：source="引用标识符"
-  
-**source参数支持格式**：
-- content:<直接内容> - 例如：source="content:def new_func():..."
-- file:<文件路径> - 例如：source="file:template.py"
-- 上下文文件名 - 例如：source="code_snippet"
-- last_web_fetch - 最近web_fetch结果
-- tool_result:fetch_url - fetch_url工具结果
+📋 **使用场景分类**（根据需求选择一种模式）：
 
-**源文件过滤参数**（当使用source参数时）：
-- source_start_line: 源文件起始行号（1-based）- **必须使用**
-- source_end_line: 源文件结束行号（1-based）- **必须使用**
-- source_pattern: 源文件正则表达式模式，只保留匹配的行 - **必须使用**
-- source_exclude_pattern: 源文件正则表达式模式，排除匹配的行 - **必须使用**
+1. **智能更新**（推荐）：update_type="smart"
+   - 自动分析差异，最小化更改
+   - 适合大多数代码修改场景
 
-**重要规则**：当使用source参数时，所有源文件过滤参数必须使用source_前缀。
-             使用不带前缀的参数将触发警告。
+2. **追加/前置内容**：update_type="append" 或 "prepend"
+   - append: 追加到文件末尾
+   - prepend: 前置到文件开头
+   - 适合添加日志、注释、导入语句等
 
-**行级别更新**：
-- 使用 update_type="line_update" 进行精确的行级别更新
-- 配合 line_number 或 line_range 参数指定要更新的行
-- line_number: 单行更新，如 line_number=10
-- line_range: 行范围更新，如 line_range="10-20"
+3. **行级别更新**：update_type="line_update"
+   - 精确更新指定行或行范围
+   - 需要 line_number（单行）或 line_range（多行，如"10-20"）
+   - 适合修复bug、修改特定函数
 
-**替换操作**：
-- 使用 update_type="replace" 替换文件内容
-- **默认行为**：不指定行范围时替换整个文件
-- **部分替换**：配合 start_line 和 end_line 参数替换指定行范围
-- **示例**：{"update_type": "replace", "start_line": 5, "end_line": 10} 替换第5-10行
-- **安全提示**：不指定行范围将替换整个文件，请谨慎使用
+4. **插入内容**：update_type="insert_before" 或 "insert_after"
+   - 在指定位置插入内容
+   - 需要 reference_content（匹配内容）或 line_number（行号）
+   - 适合添加新函数、配置项
 
-**插入操作**：
-- 使用 update_type="insert_before" 在指定行之前插入内容
-- 使用 update_type="insert_after" 在指定行之后插入内容
-- 配合 line_number 或 reference_content 参数定位插入位置
-- line_number: 行号定位，如 line_number=10
-- reference_content: 内容匹配定位，如 reference_content="if __name__"
+5. **替换内容**：update_type="replace"
+   - 替换整个文件或指定行范围
+   - ⚠️ 危险：不指定行范围会替换整个文件！
+   - 部分替换：使用 start_line + end_line 参数
 
-**使用建议**：
-- 当内容已经在上下文中时，使用source参数节省token
-- 优先使用incremental_update而不是write_file修改现有代码
-- 需要精确更新特定行时，使用line_update模式
-- 需要在特定位置插入内容时，使用insert_before或insert_after模式""",
+🔧 **参数使用规则**：
+
+**内容参数（二选一）**：
+- new_content: 直接提供新内容（字符串）
+- source: 引用现有内容节省token（格式：content:<内容> 或 file:<路径> 或 上下文标识符）
+
+**位置参数**（根据update_type选择）：
+- line_update模式 → line_number 或 line_range
+- insert模式 → reference_content 或 line_number
+- replace模式（部分替换） → start_line + end_line
+
+**源过滤参数**（仅当使用source时，必须带source_前缀）：
+- source_start_line: 起始行号
+- source_end_line: 结束行号
+- source_pattern: 只保留匹配的行
+- source_exclude_pattern: 排除匹配的行
+
+🚨 **重要约束**：
+1. new_content和source参数二选一，不能同时使用
+2. line_update必须指定line_number或line_range
+3. insert模式必须指定reference_content或line_number
+4. 使用source参数时，过滤参数必须带source_前缀
+5. 不指定行范围时，replace会替换整个文件（谨慎！）
+
+📏 **行号计算规则**（重要共识）：
+- **行号从1开始**：第1行是文件的第一行
+- **包含性范围**：line_range="10-20" 包含第10行和第20行
+- **插入位置**：
+  - insert_before line_number=10：在第10行之前插入
+  - insert_after line_number=10：在第10行之后插入
+- **替换范围**：start_line=5, end_line=10 替换第5-10行（包含）
+- **空行计数**：空行也计入行号
+- **引用匹配**：reference_content匹配时，插入在匹配行的前/后
+
+💡 **最佳实践**：
+1. 先用read_file查看文件内容
+2. 分析需要修改的位置
+3. 选择最合适的update_type
+4. 优先使用source参数引用现有内容节省token
+5. 复杂修改可分多次增量更新""",
     parameters=[
         ToolParameter(
             name="path",
@@ -734,22 +746,77 @@ INCREMENTAL_UPDATE_SCHEMA = ToolSchema(
         ),
     ],
     examples=[
+        # 场景1：智能更新（推荐）
         {
             "path": "src/main.py",
             "new_content": "def main():\n    print('Hello')",
             "update_type": "smart",
+            "description": "智能分析差异，自动更新文件"
         },
-        {"path": "config.py", "new_content": "# 配置更新", "update_type": "append"},
-        {"path": "README.md", "new_content": "# 新标题", "update_type": "replace"},
+        
+        # 场景2：追加/前置内容
+        {
+            "path": "config.py", 
+            "new_content": "# 配置更新\nDEBUG = True",
+            "update_type": "append",
+            "description": "追加内容到文件末尾"
+        },
+        {
+            "path": "main.py",
+            "source": "content:import sys\nimport os",
+            "update_type": "prepend",
+            "description": "前置导入语句到文件开头"
+        },
+        
+        # 场景3：行级别更新
+        {
+            "path": "src/main.py",
+            "new_content": "    print('Updated line')",
+            "update_type": "line_update",
+            "line_number": 10,
+            "description": "更新第10行的内容（行号从1开始）"
+        },
+        {
+            "path": "src/utils.py",
+            "new_content": "def updated_function():\n    return 'new'",
+            "update_type": "line_update",
+            "line_range": "20-25",
+            "description": "更新第20-25行的内容（包含第20和25行）"
+        },
+        
+        # 场景4：插入内容
+        {
+            "path": "src/main.py",
+            "new_content": "@app.post(\"/hello\")\ndef hello_post():\n    return {\"message\": \"Hello\"}",
+            "update_type": "insert_before",
+            "reference_content": "if __name__ == \"__main__\":",
+            "description": "在匹配内容前插入新函数（匹配行前插入）"
+        },
+        {
+            "path": "src/main.py",
+            "new_content": "    # 新增功能注释",
+            "update_type": "insert_after",
+            "line_number": 15,
+            "description": "在第15行后插入注释（行号从1开始）"
+        },
+        
+        # 场景5：替换内容（部分替换）
         {
             "path": "src/main.py",
             "new_content": "def replaced_function():\n    return 'replaced'",
             "update_type": "replace",
             "start_line": 5,
             "end_line": 10,
+            "description": "替换第5-10行的内容（包含第5和10行）"
         },
-        {"path": "updated.py", "source": "content:def updated():\n    pass", "update_type": "smart"},
-        {"path": "appended.txt", "source": "file:source.txt", "update_type": "append"},
+        
+        # 场景6：使用source参数节省token
+        {
+            "path": "appended.txt",
+            "source": "file:source.txt",
+            "update_type": "append",
+            "description": "引用现有文件内容追加"
+        },
         {
             "path": "functions_only.py",
             "source": "file:source.py",
@@ -758,39 +825,27 @@ INCREMENTAL_UPDATE_SCHEMA = ToolSchema(
             "source_pattern": "^def ",
             "update_type": "line_update",
             "line_number": 1,
+            "description": "从源文件提取函数定义更新"
         },
+        
+        # 场景7：行号计算示例
         {
-            "path": "clean_code.py",
-            "source": "file:original.py",
-            "source_exclude_pattern": "^#",
-            "update_type": "replace",
-        },
-        {
-            "path": "src/main.py",
-            "new_content": "    print('Updated line')",
-            "update_type": "line_update",
-            "line_number": 10,
-        },
-        {
-            "path": "src/utils.py",
-            "new_content": "def updated_function():\n    return 'new'",
-            "update_type": "line_update",
-            "line_range": "20-25",
-        },
-        {
-            "path": "src/main.py",
-            "new_content": "@app.post(\"/hello\")\ndef hello_post():\n    return {\"message\": \"Hello\"}",
-            "update_type": "insert_before",
-            "reference_content": "if __name__ == \"__main__\":",
-        },
-        {
-            "path": "src/main.py",
-            "new_content": "    # 新增功能",
+            "path": "example.py",
+            "new_content": "# 在第3行后插入",
             "update_type": "insert_after",
-            "line_number": 15,
+            "line_number": 3,
+            "description": "示例：文件有5行，在第3行后插入，新文件第4行是插入内容"
         },
+        
+        # 场景8：错误示例（避免这样做）
+        {
+            "path": "README.md",
+            "new_content": "# 新标题",
+            "update_type": "replace",
+            "description": "⚠️ 危险：不指定行范围会替换整个文件！"
+        }
     ],
-    returns="返回字典，包含 success, path, action, message, diff_count 等字段。智能更新时会显示更新的实体数量，行级别更新时会显示更新的行范围。",
+    returns="返回字典，包含 success, path, action, message, diff_count 等字段。不同模式返回不同信息：\n- smart模式：显示更新的实体数量\n- line_update模式：显示更新的行范围\n- 其他模式：显示执行的具体操作",
 )
 
 PATCH_FILE_SCHEMA = ToolSchema(
