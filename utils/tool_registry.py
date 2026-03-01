@@ -89,30 +89,6 @@ class ToolSchema:
                     error_msg += f"    💡 示例: {param.example}\n"
             return False, error_msg
 
-        # 警告未知参数（但不阻止执行）
-        if unknown_params:
-            # 尝试建议正确的参数名
-            suggestions = []
-            for unknown in unknown_params:
-                # 查找相似的参数名
-                all_param_names = [p.name for p in self.parameters]
-                all_aliases = []
-                for p in self.parameters:
-                    all_aliases.extend(p.aliases)
-                all_names = all_param_names + all_aliases
-
-                from difflib import get_close_matches
-
-                matches = get_close_matches(unknown, all_names, n=1, cutoff=0.6)
-                if matches:
-                    suggestions.append(f"{unknown} -> {matches[0]}")
-
-            if suggestions:
-                warning_msg = f"⚠️  未知参数: {', '.join(unknown_params)}\n"
-                warning_msg += f"💡 建议: {', '.join(suggestions)}\n"
-                # 这里只是警告，不返回错误
-                print(warning_msg)
-
         # 检查参数类型
         type_errors = []
         for param_name, param_value in normalized_params.items():

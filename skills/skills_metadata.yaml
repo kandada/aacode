@@ -1,0 +1,68 @@
+# Skills配置 - 包含元数据和启用状态
+# enabled: 启用的skills列表（skill目录下的子目录名）
+# metadata: skills元数据配置，用于渐进式披露
+
+enabled:
+  - data_cleaning
+  - api_client
+  - data_converter
+  - file_organizer
+  - web_scraper
+  - playwright
+
+metadata:
+  data_cleaning:
+    name: "数据清洗"
+    description: "清洗CSV/Excel数据，处理缺失值、去除重复项"
+    trigger_keywords: ["清洗", "data cleaning", "clean", "csv", "excel"]
+    usage_guide: |
+      调用方式：
+      1. 直接调用 data_cleaning_clean_data 工具
+      2. 提供文件路径和清洗配置参数
+
+  data_converter:
+    name: "数据转换"
+    description: "转换数据格式：JSON/YAML/CSV/XML等"
+    trigger_keywords: ["转换", "格式转换", "convert", "json", "yaml", "xml"]
+    usage_guide: |
+      调用方式：
+      1. 调用 data_converter_convert_format 工具
+      2. 指定源格式、目标格式和文件路径
+
+  api_client:
+    name: "API客户端"
+    description: "调用REST API，支持GET/POST/PUT/DELETE请求"
+    trigger_keywords: ["api", "接口", "调用", "request", "http"]
+    usage_guide: |
+      调用方式：
+      1. 调用 api_client_make_request 工具
+      2. 提供URL、方法、参数和认证信息
+
+  file_organizer:
+    name: "文件组织器"
+    description: "文件组织和管理工具，提供文件分类、重命名、批量操作等功能"
+    trigger_keywords: ["文件", "组织", "整理", "file", "organize"]
+    usage_guide: |
+      调用方式：
+      1. 调用 file_organizer_organize_files 工具
+      2. 指定目录路径和组织规则
+
+  web_scraper:
+    name: "网页抓取器"
+    description: "网页抓取和数据提取工具，提供网页内容抓取、HTML解析、数据提取等功能"
+    trigger_keywords: ["网页", "抓取", "爬虫", "web", "scrape", "爬取"]
+    usage_guide: |
+      调用方式：
+      1. 调用 web_scraper_scrape_page 工具
+      2. 提供URL和提取规则（CSS选择器/XPath）
+
+  playwright:
+    name: "浏览器自动化"
+    description: "强大的浏览器自动化工具，支持动态网页处理、数据提取、前端测试、截图等功能"
+    trigger_keywords: ["浏览器", "自动化", "playwright", "动态网页", "截图", "前端测试", "browser", "automation"]
+    usage_guide: |
+      可用工具
+      - playwright_scrape_dynamic_page: 抓取动态页面（最常用）
+      - playwright_browser_automation: 通用浏览器自动化
+      - playwright_take_screenshot: 网页截图
+      - playwright_test_element_exists: 元素存在性测试（前端测试）

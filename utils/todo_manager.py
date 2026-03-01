@@ -133,8 +133,8 @@ class TodoManager:
                 return False
 
             # 简化格式：只保留核心信息
-            priority_mark = {"high": "!", "medium": "", "low": "-"}.get(priority, "")
-            new_item = f"- [ ] {priority_mark}{item}"
+            priority_mark = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(priority, "")
+            new_item = f"- [ ] {priority_mark} **{category}**: {item}"
             lines.insert(insert_pos, new_item)
 
             # 写回文件
@@ -184,7 +184,6 @@ class TodoManager:
 
                 # 提取事项描述
                 item_desc = line.replace("- [ ]", "").strip()
-                # 移除优先级emoji和分类
                 item_desc = re.sub(r"^[🔴🟡🟢]\s*\*\*.*?\*\*:\s*", "", item_desc)
 
                 # 添加到已完成部分
@@ -206,7 +205,7 @@ class TodoManager:
         # 查找已完成部分
         completed_section_start = -1
         for i, line in enumerate(lines):
-            if line.strip() == "### 已完成":
+            if line.strip() == "## 已完成":
                 completed_section_start = i
                 break
 
@@ -250,15 +249,15 @@ class TodoManager:
 
         for i, line in enumerate(lines):
             if line.strip().startswith("- [ ]") and old_pattern.lower() in line.lower():
-                # 提取优先级和分类
-                match = re.match(r"^- \[ \]\s*([🔴🟡🟢])\s*\*\*(.*?)\*\*:\s*(.*)", line)
+                match = re.match(r"^- \[ \]\s*([🔴🟡🟢])?\s*\*\*(.*?)\*\*:\s*(.*)", line)
                 if match:
-                    priority_emoji = match.group(1)
+                    priority_emoji = match.group(1) or ""
                     category = match.group(2)
-                    # 更新事项描述
                     lines[i] = f"- [ ] {priority_emoji} **{category}**: {new_item}"
-                    updated = True
-                    print(f"🔄 更新待办事项: {new_item[:50]}...")
+                else:
+                    lines[i] = f"- [ ] {new_item}"
+                updated = True
+                print(f"🔄 更新待办事项: {new_item[:50]}...")
 
         if updated:
             # 写入文件
@@ -307,9 +306,14 @@ class TodoManager:
             # 限制记录数量（最多保留最近20条）
             record_lines = [l for l in lines[record_pos:] if l.strip().startswith("-")]
             if len(record_lines) > 20:
-                # 移除最旧的记录
-                for line in record_lines[20:]:
-                    lines.remove(line)
+                # 找到需要保留的行范围
+                keep_count = 20
+                delete_count = len(record_lines) - keep_count
+                # 找到所有记录行的位置
+                record_positions = [j for j, l in enumerate(lines) if l.strip().startswith("-")]
+                # 删除最旧的记录（前面的）
+                for pos in sorted(record_positions[:delete_count], reverse=True):
+                    lines.pop(pos)
 
             async with aiofiles.open(
                 self.current_todo_file, "w", encoding="utf-8"
@@ -328,8 +332,17 @@ class TodoManager:
         Returns:
             摘要信息
         """
-        if not self.current_todo_file:
-            return {"error": "没有活动的待办清单文件"}
+        # 如果没有活动的待办清单文件，尝试恢复最近的
+        if not self.current_todo_file or not self.current_todo_file.exists():
+            files = await self.list_todo_files()
+            if files:
+                latest_file = self.todo_dir / files[0]["filename"]
+                self.current_todo_file = latest_file
+            else:
+                return {
+                    "empty": True,
+                    "message": "暂无待办清单，使用 /newtodo 创建新任务"
+                }
 
         try:
             async with aiofiles.open(

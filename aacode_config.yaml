@@ -109,7 +109,7 @@ multimodal:
       name: kimi-k2.5
       provider: moonshot
       base_url: https://api.moonshot.cn/v1
-      api_key: your_api_key
+      api_key: your-api-key
       vision: true
       video: true
       max_image_size: 10485760  # 10MB
@@ -207,36 +207,3 @@ skills:
   
   # 是否自动发现skills目录下的技能
   auto_discover: true
-  
-  # 启用的skills列表（ skills目录下的子目录名）
-  enabled_skills:
-    - data_cleaning
-    - api_client
-    - data_converter
-    - file_organizer
-    - web_scraper
-  
-  # Skills元数据配置 - 用于渐进式披露，提高token效率
-  # 格式：skill_name: {name: 显示名称, description: 简短描述, trigger_keywords: [关键词列表]}
-  # 注释：这些元数据会在启动时加载到Agent上下文（约100 tokens/技能），详细指令在需要时才加载
-  skills_metadata:
-     data_cleaning:
-       name: "数据清洗"
-       description: "清洗CSV/Excel数据，处理缺失值、去除重复项"
-       trigger_keywords: ["清洗", "数据清洗", "clean", "data cleaning", "csv", "excel"]
-     data_converter:
-       name: "数据转换"
-       description: "转换数据格式：JSON/YAML/CSV/XML等"
-       trigger_keywords: ["转换", "格式转换", "convert", "json", "yaml", "xml"]
-     api_client:
-       name: "API客户端"
-       description: "调用REST API，支持GET/POST/PUT/DELETE请求"
-       trigger_keywords: ["api", "接口", "调用", "request", "http"]
-     file_organizer:
-       name: "文件组织器"
-       description: "文件组织和管理工具，提供文件分类、重命名、批量操作等功能"
-       trigger_keywords: ["文件", "组织", "整理", "file", "organize", "整理文件"]
-     web_scraper:
-       name: "网页抓取器"
-       description: "网页抓取和数据提取工具，提供网页内容抓取、HTML解析、数据提取等功能"
-       trigger_keywords: ["网页", "抓取", "爬虫", "web", "scrape", "爬取"]

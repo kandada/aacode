@@ -93,26 +93,26 @@ class AICoder:
             init_file = self.project_path / "init.md"
         if not init_file.exists():
             # 创建默认指令
-            default_init = """## 项目指导原则
+            default_init = """# 项目指导原则
 
-### 核心规则
+## 核心规则
 1. 每个代码文件顶部必须用注释标注路径：`# {relative_path}`
 2. 优先修改现有文件而非创建新文件
 3. 所有文件操作必须在项目目录内
 4. 危险命令需要用户确认
 
-### 工作流程
+## 工作流程
 1. 先分析需求，制定计划
 2. 小步快跑，频繁测试
 3. 编写自包含的测试函数
 4. 使用工具前检查安全性
 
-### 代码质量
+## 代码质量
 - 遵循PEP 8/Python最佳实践
 - 函数尽量不超过60行
 - 添加必要的文档字符串
 - 错误处理要优雅
-
+------
 """
             init_file.write_text(default_init)
 
@@ -163,9 +163,14 @@ class AICoder:
                         print(f"   - {lang}: {stats['file_count']} 个文件, {stats['total_lines']} 行")
                 print(f"   - 结构文件: {map_file.name}")
                 
-                # 返回语言摘要和映射内容
+                # 返回前2000字符的摘要（包含最有价值的信息）
                 map_content = map_file.read_text(encoding='utf-8')
-                return f"{language_summary}\n\n完整结构见文件: {map_file.name}"
+                # 获取前2000字符作为摘要
+                summary_content = map_content[:2000]
+                # 如果截断了，添加提示
+                if len(map_content) > 2000:
+                    summary_content += "...\n\n（完整结构见文件，共{}字符）".format(len(map_content))
+                return summary_content
                 
             except AttributeError:
                 # 回退到基础版方法

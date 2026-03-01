@@ -90,40 +90,11 @@ class MCPConfig:
     """MCP服务器配置"""
     enabled: bool = True
     # STD类型MCP服务器配置
-    std_servers: List[Dict[str, Any]] = field(default_factory=lambda: [
-        {
-            "name": "local_tools",
-            "command": "python",
-            "args": ["-m", "mcp.server.cli"],
-            "enabled": True,
-            "timeout": 30,
-            "retry_count": 3
-        }
-    ])
+    # 注意：具体配置从aacode_config.yaml文件加载，这里只保留空列表
+    std_servers: List[Dict[str, Any]] = field(default_factory=list)
     # SSE类型MCP服务器配置
-    sse_servers: List[Dict[str, Any]] = field(default_factory=lambda: [
-        {
-            "name": "filesystem",
-            "url": "http://localhost:3001",
-            "enabled": False,
-            "timeout": 30,
-            "retry_count": 3
-        },
-        {
-            "name": "database",
-            "url": "http://localhost:3002",
-            "enabled": False,
-            "timeout": 30,
-            "retry_count": 3
-        },
-        {
-            "name": "web_search",
-            "url": "http://localhost:3003",
-            "enabled": False,
-            "timeout": 30,
-            "retry_count": 3
-        }
-    ])
+    # 注意：具体配置从aacode_config.yaml文件加载，这里只保留空列表
+    sse_servers: List[Dict[str, Any]] = field(default_factory=list)
     # 通用配置
     auto_connect: bool = True
     connection_timeout: int = 30
@@ -136,7 +107,7 @@ class OutputConfig:
     # 截断阈值（放宽限制，减少过度截断）
     test_output_threshold: int = 15000      # 测试输出阈值（从10000放宽）
     code_content_threshold: int = 30000     # 代码内容阈值（从20000放宽）
-    normal_output_threshold: int = 8000     # 普通输出阈值（从5000放宽）
+    normal_output_threshold: int = 15000     # 普通输出阈值（放宽以支持长HTML内容）
     
     # 预览长度（增加预览内容）
     test_output_preview: int = 5000         # 测试输出预览长度（从3000增加）
@@ -179,30 +150,11 @@ class SkillsConfig:
     enabled: bool = True                # 是否启用skills功能
     skills_dir: str = "skills"          # Skills目录（相对于项目根目录）
     auto_discover: bool = True          # 是否自动发现skills
-    enabled_skills: List[str] = field(default_factory=lambda: [
-        "data_cleaning",
-        "api_client",
-        "data_converter"
-    ])                                   # 默认启用的skills列表
+    enabled_skills: List[str] = field(default_factory=list)  # 默认启用的skills列表（空列表，从文件加载）
     # Skills元数据配置 - 用于渐进式披露，提高token效率
     # 格式：skill_name: {name: 显示名称, description: 简短描述, trigger_keywords: [关键词列表]}
-    skills_metadata: Dict[str, Dict[str, Any]] = field(default_factory=lambda: {
-        "data_cleaning": {
-            "name": "数据清洗",
-            "description": "清洗CSV/Excel数据，处理缺失值、去除重复项",
-            "trigger_keywords": ["清洗", "数据清洗", "clean", "data cleaning", "csv", "excel"]
-        },
-        "data_converter": {
-            "name": "数据转换", 
-            "description": "转换数据格式：JSON/YAML/CSV/XML等",
-            "trigger_keywords": ["转换", "格式转换", "convert", "json", "yaml", "xml"]
-        },
-        "api_client": {
-            "name": "API客户端",
-            "description": "调用REST API，支持GET/POST/PUT/DELETE请求",
-            "trigger_keywords": ["api", "接口", "调用", "request", "http"]
-        }
-    })
+    # 注意：具体配置从skills/skills_metadata.yaml文件加载，这里只保留空字典
+    skills_metadata: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass
@@ -366,12 +318,18 @@ class Settings:
                     for key, value in values.items():
                         if hasattr(self.skills, key):
                             setattr(self.skills, key, value)
-            elif section == "multimodal":
+            
+            # 加载skills/skills_metadata.yaml作为元数据源（优先级高于aacode_config.yaml中的配置）
+            self._load_skills_metadata_from_file()
+            
+            if section == "multimodal":
                 # 处理多模态配置
                 if isinstance(values, dict):
                     for key, value in values.items():
                         if hasattr(self.multimodal, key):
                             setattr(self.multimodal, key, value)
+            elif section == "model":
+                pass  # model已在上面处理
             elif hasattr(self, section):
                 section_obj = getattr(self, section)
                 if hasattr(section_obj, '__dataclass_fields__'):
@@ -400,6 +358,29 @@ class Settings:
     def MAX_SUB_AGENT_ITERATIONS(self):
         """获取子Agent最大迭代次数"""
         return self.agent.max_sub_agent_iterations
+
+    def _load_skills_metadata_from_file(self):
+        """从skills/skills_metadata.yaml加载配置（优先级最高）"""
+        project_root = Path(__file__).parent
+        skills_metadata_file = project_root / "skills" / "skills_metadata.yaml"
+        
+        if skills_metadata_file.exists():
+            try:
+                with open(skills_metadata_file, 'r', encoding='utf-8') as f:
+                    file_config = yaml.safe_load(f)
+                
+                if file_config and isinstance(file_config, dict):
+                    # 读取enabled列表（文件优先）
+                    file_enabled = file_config.get('enabled', [])
+                    if file_enabled:
+                        self.skills.enabled_skills = file_enabled
+                    
+                    # 读取metadata（文件优先）
+                    file_metadata = file_config.get('metadata', {})
+                    if file_metadata:
+                        self.skills.skills_metadata = file_metadata
+            except Exception as e:
+                print(f"⚠️ Skills配置文件加载失败: {e}")
 
 
 # 全局设置实例
