@@ -2495,7 +2495,7 @@ class IncrementalTools:
     def _filter_content(self, content: str, kwargs: Dict[str, Any]) -> str:
         """
          根据过滤参数处理内容（仅用于源文件过滤）
-        
+         
         Args:
             content: 原始内容
             kwargs: 过滤参数，支持：
@@ -2510,6 +2510,8 @@ class IncrementalTools:
         Returns:
             过滤后的内容
         """
+        # 去除末尾换行符，避免split后多出一个空元素
+        content = content.rstrip("\n")
         lines = content.split('\n')
         filtered_lines = []
         

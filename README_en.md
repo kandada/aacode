@@ -12,7 +12,7 @@
 * Bash universal adapter: flexible system access through safety guardrails
 * Context management: smart reduction strategies borrowed from Cursor and Manus
 * Asynchronous design: all blocking operations are asynchronous
-* Layered tool system: atomic tools, sandbox tools, code package three-layer architecture
+* Layered tool system: atomic tools, code package，skills.. multi-layer architecture
 * Safety guardrails: comprehensive command and path security checks
 * Extensible architecture: support for custom tools and model backends
 

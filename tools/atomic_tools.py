@@ -82,6 +82,10 @@ class AtomicTools:
                 return {"error": f"读取文件失败: {error_msg}"}
 
             content = stdout.decode("utf-8", errors="ignore")
+            # 保留原始content用于返回
+            original_content = content
+            # 计算行数时去除末尾换行符，避免split后多出一个空元素
+            content = content.rstrip("\n")
             lines = content.split("\n")
             total_lines = len(lines)
 
@@ -95,11 +99,14 @@ class AtomicTools:
                 start_idx = max(0, min(start_idx, total_lines))
                 end_idx = max(0, min(end_idx, total_lines))
 
+                # 计算实际返回的最后一行行号
+                actual_end_line = line_end if line_end is not None else end_idx
+
                 # 检查是否有效的范围
                 if start_idx <= end_idx:
                     # 提取行 (end_idx需要+1因为切片不包含结束索引)
                     selected_lines = lines[start_idx:end_idx + 1]
-                    content = "\n".join(selected_lines)
+                    content = "\n".join(selected_lines) + "\n"
 
                     return {
                         "success": True,
@@ -107,7 +114,7 @@ class AtomicTools:
                         "content": content,
                         "size": len(content),
                         "lines": len(selected_lines),
-                        "line_range": f"{start_idx + 1}-{end_idx + 1}",
+                        "line_range": f"{start_idx + 1}-{actual_end_line}",
                         "total_lines": total_lines,
                     }
                 else:
@@ -131,8 +138,8 @@ class AtomicTools:
             return {
                 "success": True,
                 "path": display_path,
-                "content": content,
-                "size": len(content),
+                "content": original_content,
+                "size": len(original_content),
                 "lines": total_lines,  # 使用 total_lines 而不是 len(lines)
             }
         except Exception as e:
