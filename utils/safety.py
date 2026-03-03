@@ -103,6 +103,7 @@ class SafetyGuard:
             "gunicorn",
             "celery",
             "celery-worker",
+            "playwright",
             # Node.js生态
             "node",
             "npm",
@@ -921,6 +922,9 @@ class SafetyGuard:
                 return {"allowed": True, "reason": f"{cmd_name}操作"}
 
             # 检查路径参数（使用新的is_safe_path方法）
+            # 对于awk, sed, grep等命令，它们的参数可能是正则表达式而非路径，需要特殊处理
+            regex_commands = {"awk", "sed", "grep", "rg", "ag", "find"}
+            
             for i, part in enumerate(parts):
                 # 跳过命令本身
                 if i == 0:
@@ -928,6 +932,10 @@ class SafetyGuard:
 
                 # 检查路径参数
                 if ".." in part or part.startswith("/"):
+                    # 对于awk/sed/grep等命令，跳过正则表达式参数（以/开头且包含空格或特殊字符的是正则）
+                    if cmd_name in regex_commands and "/" in part and ("{" in part or "'" in part or '"' in part):
+                        continue
+                    
                     try:
                         # 解析路径
                         if not part.startswith("/"):

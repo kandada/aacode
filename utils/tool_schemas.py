@@ -168,8 +168,8 @@ RUN_SHELL_SCHEMA = ToolSchema(
 - 完整返回 stdout 和 stderr，让你自行判断如何处理
 
 **常用场景**：
-1. 文件操作：grep, glob, ls, cat, cp, mv, mkdir, rm, find
-2. 包管理：pip install, npm install, apt-get install
+1. 文件操作：grep, glob, ls, cat, cp, mv, mkdir, rm, find, nano, vim
+2. 包管理：pip install, npm install, apt-get install, brew
 3. 代码执行：python script.py, node app.js, bash run.sh
 4. 测试运行：pytest, npm test, python -m unittest
 5. 版本检查：python --version, node --version, git --version
@@ -185,7 +185,7 @@ RUN_SHELL_SCHEMA = ToolSchema(
 - 命令在项目目录下执行，使用相对路径即可
 
 **安全限制**：
-- 危险命令会被拒绝（如 rm -rf /）
+- 危险命令要谨慎（如 rm -rf /）
 - 绝对路径必须在项目范围内
 - 某些系统命令可能被限制""",
     parameters=[
@@ -570,7 +570,7 @@ LIST_TODOS_SCHEMA = GET_TODO_SUMMARY_SCHEMA
 
 INCREMENTAL_UPDATE_SCHEMA = ToolSchema(
     name="incremental_update",
-    description="""增量更新文件内容。支持多种更新模式，优先使用此工具而不是write_file修改现有文件。
+    description="""增量更新文件内容。支持多种更新模式，优先使用run_shell工具增量更新或此工具而不是write_file修改现有文件。
 
 📋 **使用场景分类**（根据需求选择一种模式）：
 
@@ -633,11 +633,10 @@ INCREMENTAL_UPDATE_SCHEMA = ToolSchema(
 - **引用匹配**：reference_content匹配时，插入在匹配行的前/后
 
 💡 **最佳实践**：
-1. 先用read_file查看文件内容
-2. 分析需要修改的位置
-3. 选择最合适的update_type
-4. 优先使用source参数引用现有内容节省token
-5. 复杂修改可分多次增量更新""",
+1. 先查看文件内容
+2. 选择最合适的update_type
+3. 优先使用source参数引用现有内容节省token
+4. 复杂修改可分多次增量更新""",
     parameters=[
         ToolParameter(
             name="path",
