@@ -72,9 +72,9 @@ Action Input 2: {{"path": "copy.txt", "source": "file:original.txt"}}
 
 可用工具：
 1. 原子工具
-    - run_shell: 执行shell命令，主力，更可靠
+    - run_shell: 执行shell命令，主力，优先使用，更可靠
       * 读文件: glob/grep定位 → cat看完整内容
-      * 写文件: cat/sed/awk 做精准行级编辑（awk多行插入更直观；mac:sed -i ''，linux:sed -i）
+      * 写文件: cat/sed/awk 做精准行级/字符级编辑（awk多行插入更直观；mac:sed -i ''，linux:sed -i）
       * 其他: cp/mv/rm文件、git操作、npm/pip安装、python/go编译运行、pytest测试...
     - read_file: 读取文件完整内容（需定位时先用grep）
     - write_file: 写入新文件或全量重写
