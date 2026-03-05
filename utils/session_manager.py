@@ -8,11 +8,78 @@
 import asyncio
 import json
 import os
+import sys
 from typing import Dict, List, Any, Optional
 from pathlib import Path
 from datetime import datetime
-import tiktoken
+import requests
 from dataclasses import dataclass
+
+
+TIKTOKEN_MIRRORS = [
+    "https://raw.githubusercontent.com/openai/tiktoken/main/tiktoken/bpe/cl100k_base.tiktoken",
+    "https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken",
+    "https://raw.fastgit.org/openai/tiktoken/raw/main/tiktoken/bpe/cl100k_base.tiktoken",
+    "https://gitclone.com/github.com/openai/tiktoken/raw/main/tiktoken/bpe/cl100k_base.tiktoken",
+    "https://github.moeyy.xyz/https://raw.githubusercontent.com/openai/tiktoken/main/tiktoken/bpe/cl100k_base.tiktoken",
+    "https://ghproxy.net/https://raw.githubusercontent.com/openai/tiktoken/main/tiktoken/bpe/cl100k_base.tiktoken",
+    "https://mirror.ghproxy.com/https://raw.githubusercontent.com/openai/tiktoken/main/tiktoken/bpe/cl100k_base.tiktoken",
+    "https://ghproxy.com/https://raw.githubusercontent.com/openai/tiktoken/main/tiktoken/bpe/cl100k_base.tiktoken",
+]
+
+TIKTOKEN_HASH = "223921b76ee99bde995b7ff738513eef100fb51d18c93597a113bcffe865b2a7"
+
+
+def _download_tiktoken_file() -> Optional[str]:
+    """尝试从多个镜像下载 tiktoken 文件"""
+    import tempfile
+    import hashlib
+
+    cache_dir = os.path.join(tempfile.gettempdir(), "data-gym-cache")
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_path = os.path.join(cache_dir, "cl100k_base.tiktoken")
+
+    if os.path.exists(cache_path):
+        with open(cache_path, "rb") as f:
+            data = f.read()
+        if hashlib.sha256(data).hexdigest() == TIKTOKEN_HASH:
+            return cache_path
+
+    for url in TIKTOKEN_MIRRORS:
+        try:
+            print(f"🔄 尝试从镜像下载 tiktoken: {url[:60]}...")
+            resp = requests.get(url, timeout=10)
+            resp.raise_for_status()
+            data = resp.content
+
+            actual_hash = hashlib.sha256(data).hexdigest()
+            if actual_hash != TIKTOKEN_HASH:
+                print(f"⚠️  hash 不匹配，跳过")
+                continue
+
+            with open(cache_path, "wb") as f:
+                f.write(data)
+            print(f"✅ tiktoken 文件下载成功: {cache_path}")
+            return cache_path
+        except Exception as e:
+            print(f"❌ 下载失败: {e}")
+            continue
+
+    return None
+
+
+def _load_tiktoken_encoding():
+    """加载 tiktoken 编码，支持镜像下载"""
+    try:
+        import tiktoken
+        return tiktoken.get_encoding("cl100k_base")
+    except Exception as e:
+        error_msg = str(e)
+        if "Connection" in error_msg or "ConnectionResetError" in error_msg or "HTTPError" in error_msg or "404" in error_msg:
+            print(f"\n⚠️  tiktoken 文件下载失败，将使用简单估算")
+            print(f"   手动解决: https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken")
+            print(f"   保存到: ~/Library/Caches/tiktoken/cl100k_base.tiktoken")
+        return None
 
 
 @dataclass
@@ -57,7 +124,7 @@ class SessionManager:
         self.sessions_index: Dict[str, SessionSummary] = {}
 
         # token计数器
-        self.encoding = tiktoken.get_encoding("cl100k_base")
+        self.encoding = _load_tiktoken_encoding()
 
         # 加载会话索引
         self._load_sessions_index()
@@ -98,11 +165,13 @@ class SessionManager:
 
     def _count_tokens(self, text: str) -> int:
         """计算文本的token数量"""
-        try:
-            return len(self.encoding.encode(text))
-        except Exception:
-            # 回退到简单估算（大致4字符=1token）
-            return len(text) // 4
+        if self.encoding:
+            try:
+                return len(self.encoding.encode(text))
+            except Exception:
+                pass
+        # 回退到简单估算（大致4字符=1token）
+        return len(text) // 4
 
     def _get_total_tokens(self) -> int:
         """获取当前会话的总token数"""
