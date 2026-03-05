@@ -160,22 +160,50 @@ WRITE_FILE_SCHEMA = ToolSchema(
 
 RUN_SHELL_SCHEMA = ToolSchema(
     name="run_shell",
-    description="""执行shell命令 - 万能的系统命令执行工具
+    description="""执行shell命令 - 万能的系统命令执行工具，你的瑞士军刀！
 
 **核心理念**：
 - 工具总是成功（success=True），除非工具本身异常
 - 命令的成功/失败通过 returncode 判断（0=成功，非0=失败）
 - 完整返回 stdout 和 stderr，让你自行判断如何处理
+- **大胆使用**：在安全范围内，不要害怕使用bash命令解决问题
 
-**常用场景**：
-1. 文件操作：grep, glob, ls, cat, cp, mv, mkdir, rm, find, nano, vim
-2. 包管理：pip install, npm install, apt-get install, brew
-3. 代码执行：python script.py, node app.js, bash run.sh
-4. 测试运行：pytest, npm test, python -m unittest
-5. 版本检查：python --version, node --version, git --version
-6. 进程管理：ps aux, kill, pkill
-7. 网络操作：curl, wget, ping
-8. 系统信息：uname, df, du, free
+**强大能力展示**：
+1. **文本处理专家**：
+   - grep/glob/awk/sed/cat：精准搜索、提取、写入、替换
+   - sort/uniq：排序、去重、统计
+   - cut/tr/wc：字段切割、字符转换、行数统计
+   - diff/patch：文件差异比较、补丁应用
+
+2. **文件系统大师**：
+   - find/locate：智能文件搜索
+   - tar/zip/gzip：压缩解压
+   - rsync/scp：同步传输
+   - chmod/chown：权限管理
+
+3. **系统监控能手**：
+   - ps/top/htop：进程监控
+   - df/du：磁盘空间分析
+   - free/vmstat：内存监控
+   - netstat/ss：网络连接查看
+
+4. **开发工作流**：
+   - git：版本控制全套操作
+   - docker/docker-compose：容器管理
+   - make/cmake：构建系统
+   - npm/pip/cargo：包管理
+
+5. **网络工具集**：
+   - curl/wget：HTTP请求、下载
+   - ping/traceroute：网络诊断
+   - ssh/scp：远程连接
+   - netcat：网络调试
+
+6. **数据处理管道**：
+   - command1 | command2 | command3：组合威力
+   - > file.txt：输出重定向
+   - < input.txt：输入重定向
+   - 2>&1：错误输出合并
 
 **重要提示**：
 - returncode=0 表示命令成功
@@ -183,11 +211,13 @@ RUN_SHELL_SCHEMA = ToolSchema(
 - 检查 stderr 判断是否有真正的错误
 - 支持管道、重定向等 shell 特性：command1 | command2, command > file.txt
 - 命令在项目目录下执行，使用相对路径即可
+- **大胆尝试**：命令失败很正常，从错误中学习，调整后重试
 
 **安全限制**：
-- 危险命令要谨慎（如 rm -rf /）
+- 危险命令要谨慎（如 rm -rf /）但可用
 - 绝对路径必须在项目范围内
-- 某些系统命令可能被限制""",
+- 某些系统命令可能被限制
+- **但请记住**：正常的系统操作、开发命令都可以大胆使用！""",
     parameters=[
         ToolParameter(
             name="command",
@@ -224,7 +254,32 @@ RUN_SHELL_SCHEMA = ToolSchema(
         {"command": "grep 'pattern' file.txt", "description": "搜索文件内容"},
         {"command": "find . -name '*.py'", "description": "查找 Python 文件"},
         {"command": "ls -la | grep '.py'", "description": "列出 Python 文件"},
-        {"command": "ls -la | grep '.py'", "description": "列出 Python 文件"},
+        # 新增更多实用命令示例
+        {"command": "grep -r 'def main' .", "description": "递归搜索包含'main'函数的文件"},
+        {"command": "awk '/^def/ {print NR\": \"$0}' file.py", "description": "提取Python文件中的所有函数定义"},
+        {"command": "sed -i '' 's/old/new/g' file.txt", "description": "替换文件中的文本（macOS）"},
+        {"command": "sed -i 's/old/new/g' file.txt", "description": "替换文件中的文本（Linux）"},
+        {"command": "find . -type f -name '*.py' -exec wc -l {} +", "description": "统计所有Python文件的总行数"},
+        {"command": "ps aux | grep python", "description": "查找正在运行的Python进程"},
+        {"command": "df -h", "description": "查看磁盘使用情况（人类可读格式）"},
+        {"command": "du -sh .", "description": "查看当前目录总大小"},
+        {"command": "free -h", "description": "查看内存使用情况"},
+        {"command": "curl -s https://api.github.com/users/octocat", "description": "获取API数据"},
+        {"command": "git status", "description": "查看git状态"},
+        {"command": "git log --oneline -5", "description": "查看最近5次提交"},
+        {"command": "sort file.txt | uniq -c | sort -nr", "description": "统计文件中单词出现频率"},
+        {"command": "cat access.log | awk '{print $1}' | sort | uniq -c | sort -nr | head -10", "description": "分析日志文件，找出前10个访问IP"},
+        {"command": "python -m http.server 8000 &", "description": "启动简单的HTTP服务器（后台运行）"},
+        {"command": "kill $(lsof -ti:8000)", "description": "关闭占用8000端口的进程"},
+        {"command": "tar -czf backup.tar.gz directory/", "description": "压缩目录"},
+        {"command": "rsync -av source/ destination/", "description": "同步目录"},
+        {"command": "docker ps", "description": "查看运行中的容器"},
+        {"command": "npm run build", "description": "运行npm构建脚本"},
+        {"command": "make clean", "description": "运行make清理"},
+        {"command": "ssh user@host 'ls -la'", "description": "远程执行命令"},
+        {"command": "echo 'Hello World' > output.txt", "description": "创建文件并写入内容"},
+        {"command": "tail -f logfile.log", "description": "实时查看日志文件"},
+        {"command": "watch -n 1 'ps aux | grep python'", "description": "每秒监控Python进程"},
     ],
     returns="""返回字典，包含以下字段：
 - success (bool): 工具是否成功执行（总是True，除非工具本身异常）

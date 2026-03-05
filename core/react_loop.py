@@ -78,13 +78,8 @@ class AsyncReActLoop:
         self.context_config = context_config
 
         # Token计数器（用于智能缩减）
-        try:
-            import tiktoken
-
-            self.encoding = tiktoken.get_encoding("cl100k_base")
-        except:
-            self.encoding = None
-            print("⚠️  tiktoken未安装，将使用简单的token估算")
+        from utils.session_manager import _load_tiktoken_encoding
+        self.encoding = _load_tiktoken_encoding()
 
     async def run(
         self,
