@@ -255,31 +255,67 @@ RUN_SHELL_SCHEMA = ToolSchema(
         {"command": "find . -name '*.py'", "description": "查找 Python 文件"},
         {"command": "ls -la | grep '.py'", "description": "列出 Python 文件"},
         # 新增更多实用命令示例
-        {"command": "grep -r 'def main' .", "description": "递归搜索包含'main'函数的文件"},
-        {"command": "awk '/^def/ {print NR\": \"$0}' file.py", "description": "提取Python文件中的所有函数定义"},
-        {"command": "sed -i '' 's/old/new/g' file.txt", "description": "替换文件中的文本（macOS）"},
-        {"command": "sed -i 's/old/new/g' file.txt", "description": "替换文件中的文本（Linux）"},
-        {"command": "find . -type f -name '*.py' -exec wc -l {} +", "description": "统计所有Python文件的总行数"},
+        {
+            "command": "grep -r 'def main' .",
+            "description": "递归搜索包含'main'函数的文件",
+        },
+        {
+            "command": "awk '/^def/ {print NR\": \"$0}' file.py",
+            "description": "提取Python文件中的所有函数定义",
+        },
+        {
+            "command": "sed -i '' 's/old/new/g' file.txt",
+            "description": "替换文件中的文本（macOS）",
+        },
+        {
+            "command": "sed -i 's/old/new/g' file.txt",
+            "description": "替换文件中的文本（Linux）",
+        },
+        {
+            "command": "find . -type f -name '*.py' -exec wc -l {} +",
+            "description": "统计所有Python文件的总行数",
+        },
         {"command": "ps aux | grep python", "description": "查找正在运行的Python进程"},
         {"command": "df -h", "description": "查看磁盘使用情况（人类可读格式）"},
         {"command": "du -sh .", "description": "查看当前目录总大小"},
         {"command": "free -h", "description": "查看内存使用情况"},
-        {"command": "curl -s https://api.github.com/users/octocat", "description": "获取API数据"},
+        {
+            "command": "curl -s https://api.github.com/users/octocat",
+            "description": "获取API数据",
+        },
         {"command": "git status", "description": "查看git状态"},
         {"command": "git log --oneline -5", "description": "查看最近5次提交"},
-        {"command": "sort file.txt | uniq -c | sort -nr", "description": "统计文件中单词出现频率"},
-        {"command": "cat access.log | awk '{print $1}' | sort | uniq -c | sort -nr | head -10", "description": "分析日志文件，找出前10个访问IP"},
-        {"command": "python -m http.server 8000 &", "description": "启动简单的HTTP服务器（后台运行）"},
-        {"command": "kill $(lsof -ti:8000)", "description": "关闭占用8000端口的进程"},
+        {
+            "command": "sort file.txt | uniq -c | sort -nr",
+            "description": "统计文件中单词出现频率",
+        },
+        {
+            "command": "cat access.log | awk '{print $1}' | sort | uniq -c | sort -nr | head -10",
+            "description": "分析日志文件，找出前10个访问IP",
+        },
+        {
+            "command": "python -m http.server 8000 &",
+            "description": "启动简单的HTTP服务器（后台运行）",
+        },
+        {
+            "command": "kill $(lsof -ti:8000)",
+            "description": "关闭占用8000端口的进程（需要用户同意）",
+        },
         {"command": "tar -czf backup.tar.gz directory/", "description": "压缩目录"},
         {"command": "rsync -av source/ destination/", "description": "同步目录"},
         {"command": "docker ps", "description": "查看运行中的容器"},
         {"command": "npm run build", "description": "运行npm构建脚本"},
         {"command": "make clean", "description": "运行make清理"},
         {"command": "ssh user@host 'ls -la'", "description": "远程执行命令"},
-        {"command": "echo 'Hello World' > output.txt", "description": "创建文件并写入内容"},
+        {
+            "command": "echo 'Hello World' > output.txt",
+            "description": "创建文件并写入内容",
+        },
         {"command": "tail -f logfile.log", "description": "实时查看日志文件"},
-        {"command": "watch -n 1 'ps aux | grep python'", "description": "每秒监控Python进程"},
+        {
+            "command": "watch -n 1 'ps aux | grep python'",
+            "description": "每秒监控Python进程",
+        },
     ],
     returns="""返回字典，包含以下字段：
 - success (bool): 工具是否成功执行（总是True，除非工具本身异常）
@@ -621,343 +657,6 @@ COMPLETE_TODO_SCHEMA = MARK_TODO_COMPLETED_SCHEMA
 LIST_TODOS_SCHEMA = GET_TODO_SUMMARY_SCHEMA
 
 
-# ==================== Incremental Tools Schemas ====================
-
-INCREMENTAL_UPDATE_SCHEMA = ToolSchema(
-    name="incremental_update",
-    description="""增量更新文件内容。支持多种更新模式，优先使用run_shell工具增量更新或此工具而不是write_file修改现有文件。
-
-📋 **使用场景分类**（根据需求选择一种模式）：
-
-1. **智能更新**（推荐）：update_type="smart"
-   - 自动分析差异，最小化更改
-   - 适合大多数代码修改场景
-
-2. **追加/前置内容**：update_type="append" 或 "prepend"
-   - append: 追加到文件末尾
-   - prepend: 前置到文件开头
-   - 适合添加日志、注释、导入语句等
-
-3. **行级别更新**：update_type="line_update"
-   - 精确更新指定行或行范围
-   - 需要 line_number（单行）或 line_range（多行，如"10-20"）
-   - 适合修复bug、修改特定函数
-
-4. **插入内容**：update_type="insert_before" 或 "insert_after"
-   - 在指定位置插入内容
-   - 需要 reference_content（匹配内容）或 line_number（行号）
-   - 适合添加新函数、配置项
-
-5. **替换内容**：update_type="replace"
-   - 替换整个文件或指定行范围
-   - ⚠️ 危险：不指定行范围会替换整个文件！
-   - 部分替换：使用 start_line + end_line 参数
-
-🔧 **参数使用规则**：
-
-**内容参数（二选一）**：
-- new_content: 直接提供新内容（字符串）
-- source: 引用现有内容节省token（格式：content:<内容> 或 file:<路径> 或 上下文标识符）
-
-**位置参数**（根据update_type选择）：
-- line_update模式 → line_number 或 line_range
-- insert模式 → reference_content 或 line_number
-- replace模式（部分替换） → start_line + end_line
-
-**源过滤参数**（仅当使用source时，必须带source_前缀）：
-- source_start_line: 起始行号
-- source_end_line: 结束行号
-- source_pattern: 只保留匹配的行
-- source_exclude_pattern: 排除匹配的行
-
-🚨 **重要约束**：
-1. new_content和source参数二选一，不能同时使用
-2. line_update必须指定line_number或line_range
-3. insert模式必须指定reference_content或line_number
-4. 使用source参数时，过滤参数必须带source_前缀
-5. 不指定行范围时，replace会替换整个文件（谨慎！）
-
-📏 **行号计算规则**（重要共识）：
-- **行号从1开始**：第1行是文件的第一行
-- **包含性范围**：line_range="10-20" 包含第10行和第20行
-- **插入位置**：
-  - insert_before line_number=10：在第10行之前插入
-  - insert_after line_number=10：在第10行之后插入
-- **替换范围**：start_line=5, end_line=10 替换第5-10行（包含）
-- **空行计数**：空行也计入行号
-- **引用匹配**：reference_content匹配时，插入在匹配行的前/后
-
-💡 **最佳实践**：
-1. 先查看文件内容
-2. 选择最合适的update_type
-3. 优先使用source参数引用现有内容节省token
-4. 复杂修改可分多次增量更新""",
-    parameters=[
-        ToolParameter(
-            name="path",
-            type=str,
-            required=True,
-            description="文件路径（相对或绝对）",
-            example="src/main.py",
-            aliases=["file", "filepath", "target"],
-        ),
-        ToolParameter(
-            name="new_content",
-            type=str,
-            required=False,
-            description="新的文件内容（与source二选一）",
-            example="def new_function():\n    return 'new'",
-            aliases=["content", "code", "text", "data"],
-        ),
-        ToolParameter(
-            name="update_type",
-            type=str,
-            required=False,
-            default="smart",
-            description="更新类型：smart(智能分析差异)、replace(替换整个文件或指定行范围)、append(追加到末尾)、prepend(前置到开头)、line_update(行级别更新)、insert_before(在指定行之前插入)、insert_after(在指定行之后插入)",
-            example="smart",
-            aliases=["type", "mode", "update_mode"],
-        ),
-        ToolParameter(
-            name="source",
-            type=str,
-            required=False,
-            description="内容来源标识符（与new_content二选一）",
-            example="content:def new_func():\n    return 'new'",
-            aliases=["from", "src", "reference"],
-        ),
-        ToolParameter(
-            name="line_number",
-            type=int,
-            required=False,
-            description="要更新的行号（1-based）。当update_type为line_update时使用",
-            example=10,
-            aliases=["line", "row", "line_no"],
-        ),
-        ToolParameter(
-            name="line_range",
-            type=str,
-            required=False,
-            description="要更新的行范围，格式如 '10-20'。当update_type为line_update时使用",
-            example="10-20",
-            aliases=["range", "lines", "line_range_str"],
-        ),
-        ToolParameter(
-            name="reference_content",
-            type=str,
-            required=False,
-            description="参考内容，用于定位插入位置。当update_type为insert_before或insert_after时使用",
-            example="if __name__ == \"__main__\":",
-            aliases=["reference", "ref_content", "target_content"],
-        ),
-        ToolParameter(
-            name="start_line",
-            type=int,
-            required=False,
-            description="目标文件起始行号（1-based）。当update_type为replace时，指定要替换的起始行。与end_line一起使用进行部分替换。",
-            example=5,
-            aliases=["from_line", "line_start"],
-        ),
-        ToolParameter(
-            name="end_line",
-            type=int,
-            required=False,
-            description="目标文件结束行号（1-based，包含）。当update_type为replace时，指定要替换的结束行。与start_line一起使用进行部分替换。",
-            example=10,
-            aliases=["to_line", "line_end"],
-        ),
-        ToolParameter(
-            name="source_start_line",
-            type=int,
-            required=False,
-            description="源文件起始行号（1-based）。当使用source参数时，指定要提取的起始行。",
-            example=1,
-            aliases=[],
-        ),
-        ToolParameter(
-            name="source_end_line",
-            type=int,
-            required=False,
-            description="源文件结束行号（1-based，包含）。当使用source参数时，指定要提取的结束行。",
-            example=10,
-            aliases=[],
-        ),
-        ToolParameter(
-            name="source_pattern",
-            type=str,
-            required=False,
-            description="源文件正则表达式模式。当使用source参数时，只保留匹配此模式的行。",
-            example="^def ",
-            aliases=[],
-        ),
-        ToolParameter(
-            name="source_exclude_pattern",
-            type=str,
-            required=False,
-            description="源文件正则表达式模式。当使用source参数时，排除匹配此模式的行。",
-            example="^#",
-            aliases=[],
-        ),
-    ],
-    examples=[
-        # 场景1：智能更新（推荐）
-        {
-            "path": "src/main.py",
-            "new_content": "def main():\n    print('Hello')",
-            "update_type": "smart",
-            "description": "智能分析差异，自动更新文件"
-        },
-        
-        # 场景2：追加/前置内容
-        {
-            "path": "config.py", 
-            "new_content": "# 配置更新\nDEBUG = True",
-            "update_type": "append",
-            "description": "追加内容到文件末尾"
-        },
-        {
-            "path": "main.py",
-            "source": "content:import sys\nimport os",
-            "update_type": "prepend",
-            "description": "前置导入语句到文件开头"
-        },
-        
-        # 场景3：行级别更新
-        {
-            "path": "src/main.py",
-            "new_content": "    print('Updated line')",
-            "update_type": "line_update",
-            "line_number": 10,
-            "description": "更新第10行的内容（行号从1开始）"
-        },
-        {
-            "path": "src/utils.py",
-            "new_content": "def updated_function():\n    return 'new'",
-            "update_type": "line_update",
-            "line_range": "20-25",
-            "description": "更新第20-25行的内容（包含第20和25行）"
-        },
-        
-        # 场景4：插入内容
-        {
-            "path": "src/main.py",
-            "new_content": "@app.post(\"/hello\")\ndef hello_post():\n    return {\"message\": \"Hello\"}",
-            "update_type": "insert_before",
-            "reference_content": "if __name__ == \"__main__\":",
-            "description": "在匹配内容前插入新函数（匹配行前插入）"
-        },
-        {
-            "path": "src/main.py",
-            "new_content": "    # 新增功能注释",
-            "update_type": "insert_after",
-            "line_number": 15,
-            "description": "在第15行后插入注释（行号从1开始）"
-        },
-        
-        # 场景5：替换内容（部分替换）
-        {
-            "path": "src/main.py",
-            "new_content": "def replaced_function():\n    return 'replaced'",
-            "update_type": "replace",
-            "start_line": 5,
-            "end_line": 10,
-            "description": "替换第5-10行的内容（包含第5和10行）"
-        },
-        
-        # 场景6：使用source参数节省token
-        {
-            "path": "appended.txt",
-            "source": "file:source.txt",
-            "update_type": "append",
-            "description": "引用现有文件内容追加"
-        },
-        {
-            "path": "functions_only.py",
-            "source": "file:source.py",
-            "source_start_line": 1,
-            "source_end_line": 100,
-            "source_pattern": "^def ",
-            "update_type": "line_update",
-            "line_number": 1,
-            "description": "从源文件提取函数定义更新"
-        },
-        
-        # 场景7：行号计算示例
-        {
-            "path": "example.py",
-            "new_content": "# 在第3行后插入",
-            "update_type": "insert_after",
-            "line_number": 3,
-            "description": "示例：文件有5行，在第3行后插入，新文件第4行是插入内容"
-        },
-        
-        # 场景8：错误示例（避免这样做）
-        {
-            "path": "README.md",
-            "new_content": "# 新标题",
-            "update_type": "replace",
-            "description": "⚠️ 危险：不指定行范围会替换整个文件！"
-        }
-    ],
-    returns="返回字典，包含 success, path, action, message, diff_count 等字段。不同模式返回不同信息：\n- smart模式：显示更新的实体数量\n- line_update模式：显示更新的行范围\n- 其他模式：显示执行的具体操作",
-)
-
-PATCH_FILE_SCHEMA = ToolSchema(
-    name="patch_file",
-    description="使用补丁（unified diff格式）更新文件。适用于精确的代码修改。",
-    parameters=[
-        ToolParameter(
-            name="path",
-            type=str,
-            required=True,
-            description="文件路径",
-            example="src/main.py",
-            aliases=["file", "filepath"],
-        ),
-        ToolParameter(
-            name="patch_content",
-            type=str,
-            required=True,
-            description="补丁内容（unified diff格式）",
-            example="--- src/main.py\n+++ src/main.py\n@@ -1,3 +1,3 @@\n def main():\n-    print('Old')\n+    print('New')",
-            aliases=["patch", "diff", "unified_diff"],
-        ),
-    ],
-    examples=[
-        {
-            "path": "src/main.py",
-            "patch_content": "--- src/main.py\n+++ src/main.py\n@@ -1,3 +1,3 @@\n def main():\n-    print('Old')\n+    print('New')",
-        }
-    ],
-    returns="返回字典，包含 success, path, action, message 等字段",
-)
-
-GET_FILE_DIFF_SCHEMA = ToolSchema(
-    name="get_file_diff",
-    description="获取文件差异。比较当前文件内容与新内容，返回unified diff格式的差异。",
-    parameters=[
-        ToolParameter(
-            name="path",
-            type=str,
-            required=True,
-            description="文件路径",
-            example="src/main.py",
-            aliases=["file", "filepath"],
-        ),
-        ToolParameter(
-            name="new_content",
-            type=str,
-            required=True,
-            description="新的文件内容",
-            example="def main():\n    print('New')",
-            aliases=["content", "code", "text"],
-        ),
-    ],
-    examples=[{"path": "src/main.py", "new_content": "def main():\n    print('New')"}],
-    returns="返回字典，包含 success, path, diff_count, diff, old_size, new_size 等字段",
-)
-
-
 # ==================== MCP Tools Schemas ====================
 
 LIST_MCP_TOOLS_SCHEMA = ToolSchema(
@@ -1051,10 +750,6 @@ ALL_SCHEMAS = {
     # Code Tools
     "execute_python": EXECUTE_PYTHON_SCHEMA,
     "run_tests": RUN_TESTS_SCHEMA,
-    # Incremental Tools
-    "incremental_update": INCREMENTAL_UPDATE_SCHEMA,
-    "patch_file": PATCH_FILE_SCHEMA,
-    "get_file_diff": GET_FILE_DIFF_SCHEMA,
     # Todo Tools (新名称)
     "add_todo_item": ADD_TODO_ITEM_SCHEMA,
     "mark_todo_completed": MARK_TODO_COMPLETED_SCHEMA,

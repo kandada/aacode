@@ -21,10 +21,16 @@ class SafetyGuard:
     RISK_DANGEROUS = "dangerous"  # 危险命令，直接拒绝
     RISK_UNKNOWN = "unknown"  # 未知命令，拒绝
 
-    def __init__(self, project_path: Path, interactive: bool = True):
+    def __init__(
+        self,
+        project_path: Path,
+        interactive: bool = True,
+        dangerous_command_action: str = "log",
+    ):
         self.project_path = project_path
         self.project_root = str(project_path)
         self.interactive = interactive  # 是否启用交互式确认
+        self.dangerous_command_action = dangerous_command_action  # reject, ask, log
 
         # 危险命令模式（注意：rm -rf 已移到特殊检查中，允许在项目目录内使用）
         self.dangerous_patterns = [
@@ -37,6 +43,7 @@ class SafetyGuard:
             (r"shutdown\s+", "关闭系统"),
             (r"halt\s+", "停止系统"),
             (r"reboot\s+", "重启系统"),
+            (r"poweroff\s+", "关闭电源"),
             (r"^\s*init\s+", "init进程"),  # 只匹配开头的init命令
             # 网络危险操作
             (r"iptables\s+", "防火墙规则"),
@@ -44,6 +51,16 @@ class SafetyGuard:
             # Shell危险操作
             (r":\(\)\{.*?;\s*\}.*?;", "fork炸弹"),
             (r"exec\s+/dev/", "设备执行"),
+            (r"pkill\s+", "进程终止"),  # pkill需要用户确认
+            (r"kill\s+", "进程终止"),  # kill需要用户确认
+            (
+                r"systemctl\s+(stop|restart|start|disable|enable|mask|unmask)",
+                "系统服务管理",
+            ),  # systemctl危险操作需要用户确认
+            (
+                r"service\s+\S+\s+(stop|restart|start)",
+                "服务管理",
+            ),  # service危险操作需要用户确认
             # 特别危险的权限操作（放宽chmod和chown，但限制特定模式）
             (r"chmod\s+[0-7]{3,4}\s+/\S*", "系统目录权限设置"),
             (r"chown\s+.*?:\s+/\S*", "系统文件所有权更改"),
@@ -68,6 +85,12 @@ class SafetyGuard:
             "cp",
             "mv",
             "rm",  # rm需特别检查
+            "pkill",  # pkill需要用户确认
+            "kill",  # kill需要用户确认
+            "shutdown",  # 需要用户确认
+            "halt",  # 需要用户确认
+            "reboot",  # 需要用户确认
+            "poweroff",  # 需要用户确认
             "head",
             "tail",
             "less",
@@ -673,12 +696,48 @@ class SafetyGuard:
         # 检查危险模式
         for pattern, description in self.dangerous_patterns:
             if re.search(pattern, command, re.IGNORECASE):
-                return self._build_result(
-                    allowed=False,
-                    reason=f"检测到危险操作: {description}",
-                    risk_level=self.RISK_DANGEROUS,
-                    pattern=pattern,
-                )
+                # 根据配置处理危险命令
+                if self.dangerous_command_action == "reject":
+                    return self._build_result(
+                        allowed=False,
+                        reason=f"检测到危险操作: {description}",
+                        risk_level=self.RISK_DANGEROUS,
+                        pattern=pattern,
+                    )
+                elif self.dangerous_command_action == "ask":
+                    # 询问用户确认
+                    if self.interactive and ask_confirmation:
+                        if self._ask_user_confirmation(
+                            command, f"危险操作: {description}"
+                        ):
+                            print(f"✅ 用户确认执行危险命令")
+                            return self._build_result(
+                                allowed=True,
+                                reason=f"危险操作已确认: {description}",
+                                risk_level=self.RISK_WARNING,
+                            )
+                        else:
+                            return self._build_result(
+                                allowed=False,
+                                reason="用户取消操作",
+                                risk_level=self.RISK_DANGEROUS,
+                            )
+                    else:
+                        # 非交互模式，拒绝执行
+                        return self._build_result(
+                            allowed=False,
+                            reason=f"检测到危险操作: {description} (请在交互模式下确认)",
+                            risk_level=self.RISK_DANGEROUS,
+                            pattern=pattern,
+                        )
+                elif self.dangerous_command_action == "log":
+                    # 记录日志但允许执行
+                    print(f"⚠️  警告: 检测到危险操作 (已记录): {description}")
+                    return self._build_result(
+                        allowed=True,
+                        reason=f"危险操作已记录: {description}",
+                        risk_level=self.RISK_WARNING,
+                    )
 
         # 解析命令
         try:
@@ -741,8 +800,23 @@ class SafetyGuard:
                         target_path = part
 
                         # 检查是否是极度危险的删除目标
-                        dangerous_patterns = ["/", "/*", "~", "~/*", "/etc", "/var", "/usr", "/bin", "/sbin", "/lib"]
-                        if any(target_path == pattern or target_path.startswith(pattern + "/") for pattern in dangerous_patterns):
+                        dangerous_patterns = [
+                            "/",
+                            "/*",
+                            "~",
+                            "~/*",
+                            "/etc",
+                            "/var",
+                            "/usr",
+                            "/bin",
+                            "/sbin",
+                            "/lib",
+                        ]
+                        if any(
+                            target_path == pattern
+                            or target_path.startswith(pattern + "/")
+                            for pattern in dangerous_patterns
+                        ):
                             return {
                                 "allowed": False,
                                 "reason": f"rm命令目标过于危险: {target_path}",
@@ -924,7 +998,7 @@ class SafetyGuard:
             # 检查路径参数（使用新的is_safe_path方法）
             # 对于awk, sed, grep等命令，它们的参数可能是正则表达式而非路径，需要特殊处理
             regex_commands = {"awk", "sed", "grep", "rg", "ag", "find"}
-            
+
             for i, part in enumerate(parts):
                 # 跳过命令本身
                 if i == 0:
@@ -933,9 +1007,13 @@ class SafetyGuard:
                 # 检查路径参数
                 if ".." in part or part.startswith("/"):
                     # 对于awk/sed/grep等命令，跳过正则表达式参数（以/开头且包含空格或特殊字符的是正则）
-                    if cmd_name in regex_commands and "/" in part and ("{" in part or "'" in part or '"' in part):
+                    if (
+                        cmd_name in regex_commands
+                        and "/" in part
+                        and ("{" in part or "'" in part or '"' in part)
+                    ):
                         continue
-                    
+
                     try:
                         # 解析路径
                         if not part.startswith("/"):

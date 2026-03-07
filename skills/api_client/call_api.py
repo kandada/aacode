@@ -54,27 +54,47 @@ async def call_api(method: str,
                 if params:
                     url = f"{url}?{urlencode(params)}"
 
-                request_kwargs = {
-                    "headers": default_headers
-                }
-
-                if data is not None:
-                    if isinstance(data, dict):
-                        request_kwargs["json"] = data
-                    else:
-                        request_kwargs["data"] = str(data)
-
+                # 构建aiohttp请求参数
                 if method.upper() == "GET":
-                    async with session.get(url, **request_kwargs) as response:
+                    # aiohttp类型注解问题，使用type: ignore
+                    request_kwargs = {"headers": default_headers}
+                    if data is not None:
+                        if isinstance(data, dict):
+                            request_kwargs["json"] = data
+                        else:
+                            request_kwargs["data"] = str(data)
+                    
+                    async with session.get(url, **request_kwargs) as response:  # type: ignore
                         return await _format_response(response)
                 elif method.upper() == "POST":
-                    async with session.post(url, **request_kwargs) as response:
+                    request_kwargs = {"headers": default_headers}
+                    if data is not None:
+                        if isinstance(data, dict):
+                            request_kwargs["json"] = data
+                        else:
+                            request_kwargs["data"] = str(data)
+                    
+                    async with session.post(url, **request_kwargs) as response:  # type: ignore
                         return await _format_response(response)
                 elif method.upper() == "PUT":
-                    async with session.put(url, **request_kwargs) as response:
+                    request_kwargs = {"headers": default_headers}
+                    if data is not None:
+                        if isinstance(data, dict):
+                            request_kwargs["json"] = data
+                        else:
+                            request_kwargs["data"] = str(data)
+                    
+                    async with session.put(url, **request_kwargs) as response:  # type: ignore
                         return await _format_response(response)
                 elif method.upper() == "DELETE":
-                    async with session.delete(url, **request_kwargs) as response:
+                    request_kwargs = {"headers": default_headers}
+                    if data is not None:
+                        if isinstance(data, dict):
+                            request_kwargs["json"] = data
+                        else:
+                            request_kwargs["data"] = str(data)
+                    
+                    async with session.delete(url, **request_kwargs) as response:  # type: ignore
                         return await _format_response(response)
                 else:
                     return {"success": False, "error": f"不支持的HTTP方法: {method}"}

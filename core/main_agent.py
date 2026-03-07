@@ -18,16 +18,16 @@ from tools.code_tools import CodeTools
 from tools.sandbox_tools import SandboxTools
 from tools.web_tools import WebTools
 from tools.todo_tools import TodoTools
-from tools.incremental_tools import IncrementalTools
 from utils.mcp_manager import MCPManager
 from utils.session_manager import SessionManager
 from utils.tool_registry import get_global_registry
 from utils.tool_schemas import get_all_schemas, get_schema
-from tools.skills_tools import SkillsManager
+from tools.skills_tools import SkillsManager, SkillInfo
 from tools.multimodal_tools import MultimodalTools, get_multimodal_tools_schema
 from core.sub_agent import SubAgent
 import subprocess
 import openai
+import anthropic
 from config import settings
 
 
@@ -66,18 +66,24 @@ class MainAgent(BaseAgent):
             context_manager=context_manager,
             max_iterations=kwargs.get("max_iterations", 50),
         )
-        
+
         # 初始化技能（需要在super().__init__之后，因为需要self.tools）
         self._init_skills()
-        
+
         # 获取 Skills 工具名列表（用于提示词）- 在初始化技能之后
         skills_tools_list = self._get_skills_tool_names(self.tools)
-        
+
         # 系统提示（替换占位符，使用 replace 避免大括号转义问题）
-        system_prompt = SYSTEM_PROMPT_FOR_MAIN_AGENT.replace('{skills_tools_list}', skills_tools_list)
-        example_tool = skills_tools_list.split(',')[0] if ',' in skills_tools_list else "playwright_browser_automation"
-        system_prompt = system_prompt.replace('{skills_example}', example_tool)
-        
+        system_prompt = SYSTEM_PROMPT_FOR_MAIN_AGENT.replace(
+            "{skills_tools_list}", skills_tools_list
+        )
+        example_tool = (
+            skills_tools_list.split(",")[0]
+            if "," in skills_tools_list
+            else "playwright_browser_automation"
+        )
+        system_prompt = system_prompt.replace("{skills_example}", example_tool)
+
         # 更新系统提示词
         self.system_prompt = system_prompt
 
@@ -111,42 +117,52 @@ class MainAgent(BaseAgent):
             context_config=settings.context,
         )
 
-    def _get_skills_tool_names(self, tools: Dict[str, Any] = None) -> str:
+    def _get_skills_tool_names(self, tools: Optional[Dict[str, Any]] = None) -> str:
         """获取Skills相关工具名列表（用于提示词）"""
         if tools is None:
-            tools = getattr(self, 'tools', {})
+            tools = getattr(self, "tools", {})
+        if not tools:
+            return ""
         skill_tools = []
-        
+
         # 动态获取技能名称列表
         skill_names = []
-        if hasattr(self, 'skills_manager'):
+        if hasattr(self, "skills_manager"):
             skill_names = self.skills_manager.list_enabled_skills()
-        
+
         # 如果无法动态获取，使用后备方法
         if not skill_names:
             # 方法1：从配置获取
             from config import settings
-            if hasattr(settings, 'skills') and hasattr(settings.skills, 'skills_metadata'):
+
+            if hasattr(settings, "skills") and hasattr(
+                settings.skills, "skills_metadata"
+            ):
                 skill_names = list(settings.skills.skills_metadata.keys())
-            
+
             # 方法2：从skills目录获取
-            if not skill_names and hasattr(self, 'project_path'):
+            if not skill_names and hasattr(self, "project_path"):
                 import os
+
                 skills_dir = self.project_path / "skills"
                 if os.path.exists(skills_dir):
                     for item in os.listdir(skills_dir):
-                        if os.path.isdir(os.path.join(skills_dir, item)) and not item.startswith('.'):
+                        if os.path.isdir(
+                            os.path.join(skills_dir, item)
+                        ) and not item.startswith("."):
                             skill_names.append(item)
-        
+
         # 识别skills工具
+        if not tools:
+            return ""
         for tool_name in tools.keys():
             # 检查工具名是否包含任何技能名称
             for skill_name in skill_names:
                 if skill_name in tool_name:
                     skill_tools.append(tool_name)
                     break
-        
-        return ', '.join(sorted(skill_tools)) if skill_tools else "无"
+
+        return ", ".join(sorted(skill_tools)) if skill_tools else "无"
 
     async def _list_skills(self, include_details: bool = False) -> Dict[str, Any]:
         """列出所有可用的skills（支持渐进式披露）
@@ -178,7 +194,11 @@ class MainAgent(BaseAgent):
                         skill_info = self.skills_manager.loaded_skills.get(skill_name)
 
                     # 添加详细信息
-                    if include_details and skill_info and skill_info.full_instruction_loaded:
+                    if (
+                        include_details
+                        and skill_info
+                        and skill_info.full_instruction_loaded
+                    ):
                         schema = self.skills_manager.get_skill_schema(skill_name)
                         if schema:
                             skill_data["parameters"] = [
@@ -213,9 +233,10 @@ class MainAgent(BaseAgent):
         """获取特定skill的详细信息（按需加载完整指令）"""
         try:
             # 确保技能已完全加载
+            loaded_skill_info = None
             if skill_name in self.skills_manager.loaded_skills:
-                skill_info = self.skills_manager.loaded_skills[skill_name]
-                if not skill_info.full_instruction_loaded:
+                loaded_skill_info = self.skills_manager.loaded_skills[skill_name]
+                if not loaded_skill_info.full_instruction_loaded:
                     self.skills_manager._load_full_instruction(skill_name)
 
             schema = self.skills_manager.get_skill_schema(skill_name)
@@ -223,7 +244,7 @@ class MainAgent(BaseAgent):
                 return {"success": False, "error": f"Skill不存在: {skill_name}"}
 
             # 获取技能元数据
-            skill_info = self.skills_manager.loaded_skills.get(skill_name)
+            skill_info: Optional[SkillInfo] = self.skills_manager.loaded_skills.get(skill_name)
 
             # 清理描述
             desc = schema.description.strip()
@@ -252,7 +273,11 @@ class MainAgent(BaseAgent):
                 "success": True,
                 "name": skill_name,
                 "description": desc,
-                "full_md_content": skill_info.full_md_content if skill_info and skill_info.full_md_content else desc,
+                "full_md_content": (
+                    skill_info.full_md_content
+                    if skill_info and skill_info.full_md_content
+                    else desc
+                ),
                 "parameters": params_info,
                 "examples": schema.examples if hasattr(schema, "examples") else [],
                 "loading_info": {"loaded_on_demand": True},
@@ -263,6 +288,7 @@ class MainAgent(BaseAgent):
                 result["display_name"] = skill_info.display_name or skill_name
                 result["trigger_keywords"] = skill_info.trigger_keywords
                 result["usage_guide"] = skill_info.usage_guide
+                # 类型提示: loading_info是字典
                 result["loading_info"]["metadata_loaded"] = skill_info.metadata_loaded
                 result["loading_info"][
                     "full_instruction_loaded"
@@ -275,20 +301,26 @@ class MainAgent(BaseAgent):
                         tool_name = f"{skill_name}_{func_name}"
                         # 直接从 func_details 获取参数信息
                         tool_params = []
-                        for param_name, param_details in func_details.get("parameters", {}).items():
-                            tool_params.append({
-                                "name": param_name,
-                                "type": "str",  # 统一使用 str 类型
-                                "required": param_details.get("required", False),
-                                "description": param_details.get("description", ""),
-                                "default": param_details.get("default")
-                            })
-                        tools_info.append({
-                            "name": tool_name,
-                            "description": f"执行 {func_name} 操作",
-                            "parameters": tool_params,
-                            "examples": func_details.get("examples", [])
-                        })
+                        for param_name, param_details in func_details.get(
+                            "parameters", {}
+                        ).items():
+                            tool_params.append(
+                                {
+                                    "name": param_name,
+                                    "type": "str",  # 统一使用 str 类型
+                                    "required": param_details.get("required", False),
+                                    "description": param_details.get("description", ""),
+                                    "default": param_details.get("default"),
+                                }
+                            )
+                        tools_info.append(
+                            {
+                                "name": tool_name,
+                                "description": f"执行 {func_name} 操作",
+                                "parameters": tool_params,
+                                "examples": func_details.get("examples", []),
+                            }
+                        )
                     result["tools"] = tools_info
 
             return result
@@ -336,29 +368,33 @@ class MainAgent(BaseAgent):
         # 渐进式披露：启动时加载完整指令以便注册所有函数
         registry = get_global_registry()
         tool_count = 0
-        
+
         for skill_name in enabled_list:
             # 加载完整指令以发现所有函数
             self.skills_manager._load_full_instruction(skill_name)
-            
+
             skill_info = self.skills_manager.loaded_skills.get(skill_name)
             if not skill_info:
                 continue
-            
+
             # 检查是否有多函数支持
             if skill_info.functions:
                 # 为每个函数创建独立工具
                 for func_name, func_info in skill_info.functions.items():
                     tool_name = f"{skill_name}_{func_name}"
-                    
+
                     # 创建简化的schema
                     from utils.tool_schemas import get_schema
+
                     schema = get_schema(tool_name, self.skills_manager)
-                    
+
                     # 手动创建schema覆盖参数
                     from utils.tool_registry import ToolSchema, ToolParameter
+
                     params = []
-                    for param_name, param_info in func_info.get("parameters", {}).items():
+                    for param_name, param_info in func_info.get(
+                        "parameters", {}
+                    ).items():
                         param = ToolParameter(
                             name=param_name,
                             type=str,
@@ -367,14 +403,14 @@ class MainAgent(BaseAgent):
                             description=param_info.get("description", ""),
                         )
                         params.append(param)
-                    
+
                     schema = ToolSchema(
                         name=tool_name,
                         description=f"{skill_info.description} - 函数: {func_name}",
                         parameters=params,
-                        examples=func_info.get("examples", [])
+                        examples=func_info.get("examples", []),
                     )
-                    
+
                     func = self._create_skill_executor(skill_name, func_name)
                     registry.register(func, schema)
                     self.tools[tool_name] = func
@@ -390,16 +426,18 @@ class MainAgent(BaseAgent):
 
         print(f"✅ 已注册 {tool_count} 个Skill工具函数（支持多功能）")
 
-    def _create_skill_executor(self, skill_name: str, func_name: str = None):
+    def _create_skill_executor(self, skill_name: str, func_name: Optional[str] = None):
         """创建skill执行函数"""
 
         async def executor(**kwargs):
-            return await self.skills_manager.execute_skill(skill_name, func_name=func_name, **kwargs)
+            return await self.skills_manager.execute_skill(
+                skill_name, func_name=func_name, **kwargs
+            )
 
         return executor
 
     def _create_model_caller(self, model_config: Dict):
-        """创建模型调用器（支持流式输出）"""
+        """创建模型调用器（支持流式输出和多网关）"""
 
         async def model_caller(messages: List[Dict]) -> str:
             try:
@@ -415,54 +453,45 @@ class MainAgent(BaseAgent):
                     or os.getenv("OPENAI_BASE_URL")
                 )
                 model_name = model_config.get("name") or os.getenv(
-                    "LLM_MODEL_NAME", "gpt-4"
-                )
+                    "LLM_MODEL_NAME", "deepseek-chat"
+                ) or "deepseek-chat"
+                gateway = model_config.get("gateway", "openai")
 
                 if not api_key:
                     # 回退到简单响应
                     return "错误：未设置API密钥。请设置 LLM_API_KEY 环境变量。"
 
-                client = openai.OpenAI(api_key=api_key, base_url=base_url)
+                # 确保base_url不为None
+                if not base_url:
+                    if gateway == "anthropic":
+                        base_url = "https://api.minimax.chat/v1"
+                    else:
+                        base_url = "https://api.openai.com/v1"
 
-                # 确保消息格式正确
-                formatted_messages = []
-                for msg in messages:
-                    role = msg.get("role", "user")
-                    content = msg.get("content", "")
-                    if role and content:
-                        formatted_messages.append({"role": role, "content": content})
-
-                # 流式输出
-                print("🤖 模型思考中", end="", flush=True)
-                full_response = ""
-
-                stream = client.chat.completions.create(
-                    model=model_name,
-                    messages=formatted_messages,
-                    temperature=model_config.get("temperature", 0.1),
-                    max_tokens=model_config.get("max_tokens", 8000),
-                    stream=True,  # 启用流式输出
-                )
-
-                # 处理流式响应 - 模型输出什么就打印什么
-                for chunk in stream:
-                    if chunk.choices[0].delta.content is not None:
-                        content_chunk = chunk.choices[0].delta.content
-                        full_response += content_chunk
-                        # 实时打印
-                        print(content_chunk, end="", flush=True)
-
-                print()  # 换行
-                return full_response if full_response is not None else ""
+                # 根据网关类型创建客户端
+                if gateway == "anthropic":
+                    # Anthropic网关需要特殊处理
+                    return await self._call_anthropic_api(
+                        api_key, base_url, model_name, messages, model_config
+                    )
+                else:
+                    # OpenAI兼容网关
+                    return await self._call_openai_api(
+                        api_key, base_url, model_name, messages, model_config
+                    )
 
             except Exception as e:
                 # 详细的错误信息
                 error_msg = f"模型调用失败: {str(e)}"
                 print(f"\n❌ {error_msg}")
-                
+
                 # 检查是否为认证错误
                 error_str = str(e).lower()
-                if "401" in error_str or "authentication" in error_str or "invalid api key" in error_str:
+                if (
+                    "401" in error_str
+                    or "authentication" in error_str
+                    or "invalid api key" in error_str
+                ):
                     print("\n🔑 API认证失败！请检查：")
                     print("1. API密钥是否正确")
                     print("2. 环境变量 LLM_API_KEY 是否设置")
@@ -474,9 +503,13 @@ class MainAgent(BaseAgent):
                     print("- 确认API服务端点是否正确")
                     # 抛出异常，停止执行
                     raise RuntimeError(f"API认证失败: {error_msg}")
-                
+
                 # 检查是否为网络错误
-                elif "connection" in error_str or "timeout" in error_str or "network" in error_str:
+                elif (
+                    "connection" in error_str
+                    or "timeout" in error_str
+                    or "network" in error_str
+                ):
                     print("\n🌐 网络连接失败！请检查：")
                     print("1. 网络连接是否正常")
                     print("2. API服务端点是否可达")
@@ -487,9 +520,13 @@ class MainAgent(BaseAgent):
                     print("- 尝试使用 `curl` 测试API端点")
                     # 抛出异常，停止执行
                     raise RuntimeError(f"网络连接失败: {error_msg}")
-                
+
                 # 检查是否为配额错误
-                elif "quota" in error_str or "limit" in error_str or "rate limit" in error_str:
+                elif (
+                    "quota" in error_str
+                    or "limit" in error_str
+                    or "rate limit" in error_str
+                ):
                     print("\n📊 API配额或限制错误！请检查：")
                     print("1. API配额是否用完")
                     print("2. 是否达到速率限制")
@@ -500,7 +537,7 @@ class MainAgent(BaseAgent):
                     print("- 升级API套餐")
                     # 抛出异常，停止执行
                     raise RuntimeError(f"API配额错误: {error_msg}")
-                
+
                 # 其他错误，提供通用建议
                 else:
                     print("\n⚠️  模型调用遇到问题！请检查：")
@@ -516,6 +553,147 @@ class MainAgent(BaseAgent):
 
         return model_caller
 
+    async def _call_openai_api(
+        self,
+        api_key: str,
+        base_url: str,
+        model_name: str,
+        messages: List[Dict],
+        model_config: Dict,
+    ) -> str:
+        """调用OpenAI兼容API"""
+        client = openai.OpenAI(api_key=api_key, base_url=base_url)
+
+        # 确保消息格式正确
+        formatted_messages = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if role and content:
+                formatted_messages.append({"role": role, "content": content})
+
+        # 流式输出
+        print("🤖 模型思考中", end="", flush=True)
+        full_response = ""
+
+        stream = client.chat.completions.create(
+            model=model_name,
+            messages=formatted_messages,
+            temperature=model_config.get("temperature", 0.1),
+            max_tokens=model_config.get("max_tokens", 8000),
+            stream=True,  # 启用流式输出
+        )
+
+        # 处理流式响应
+        for chunk in stream:
+            if chunk.choices[0].delta.content is not None:
+                content_chunk = chunk.choices[0].delta.content
+                full_response += content_chunk
+                print(content_chunk, end="", flush=True)
+
+        print()  # 换行
+        return full_response if full_response is not None else ""
+
+    async def _call_anthropic_api(
+        self,
+        api_key: str,
+        base_url: str,
+        model_name: str,
+        messages: List[Dict],
+        model_config: Dict,
+    ) -> str:
+        """调用真正的Anthropic兼容API（如MiniMax）"""
+        # 处理MiniMax的特殊URL格式
+        # MiniMax的Anthropic兼容端点需要特殊处理
+        adjusted_base_url = base_url
+        
+        # 对于MiniMax，处理Anthropic兼容端点
+        if base_url and "minimax" in base_url.lower():
+            # Anthropic SDK会自动添加/v1/messages，所以我们需要确保base_url正确
+            if base_url.endswith("/v1"):
+                # /v1 会导致重复的/v1路径，改为 /anthropic
+                adjusted_base_url = base_url[:-3] + "/anthropic"
+                print(f"🔧 调整MiniMax URL避免重复/v1: {base_url} -> {adjusted_base_url}")
+            elif base_url.endswith("/v1/anthropic"):
+                # 已经是 /v1/anthropic，这会导致重复/v1，需要调整
+                # Anthropic SDK会添加/v1/messages，所以实际路径会是 /v1/anthropic/v1/messages
+                # 应该改为 /anthropic
+                adjusted_base_url = base_url.replace("/v1/anthropic", "/anthropic")
+                print(f"🔧 调整MiniMax URL避免重复路径: {base_url} -> {adjusted_base_url}")
+            elif not base_url.endswith("/anthropic"):
+                # 确保以 /anthropic 结尾
+                adjusted_base_url = base_url.rstrip("/") + "/anthropic"
+                print(f"🔧 添加Anthropic路径: {base_url} -> {adjusted_base_url}")
+        
+        # 使用真正的Anthropic客户端
+        client = anthropic.Anthropic(
+            api_key=api_key,
+            base_url=adjusted_base_url,
+        )
+
+        # Anthropic格式的消息转换
+        # Anthropic使用不同的消息格式：system参数和messages数组
+        system_message = ""
+        formatted_messages = []
+        
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if role and content:
+                if role == "system":
+                    # 系统消息单独处理
+                    system_message = content
+                else:
+                    # Anthropic使用"user"和"assistant"角色
+                    # 注意：Anthropic要求role必须是"user"或"assistant"
+                    anth_role = "user" if role == "user" else "assistant"
+                    formatted_messages.append({"role": anth_role, "content": content})
+
+        # 流式输出
+        print("🤖 模型思考中", end="", flush=True)
+        full_response = ""
+
+        try:
+            # 使用异步方式处理流式响应
+            import asyncio
+            
+            # 在异步环境中运行同步的流式调用
+            loop = asyncio.get_event_loop()
+            
+            def sync_stream_call():
+                response = ""
+                # 准备stream参数
+                stream_kwargs = {
+                    "model": model_name,
+                    "max_tokens": model_config.get("max_tokens", 8000),
+                    "temperature": model_config.get("temperature", 0.1),
+                    "messages": formatted_messages,
+                }
+                
+                # 只有在有系统消息时才添加system参数
+                if system_message:
+                    stream_kwargs["system"] = system_message
+                
+                with client.messages.stream(**stream_kwargs) as stream:
+                    for text in stream.text_stream:
+                        response += text
+                        print(text, end="", flush=True)
+                return response
+            
+            full_response = await loop.run_in_executor(None, sync_stream_call)
+            print()
+            return full_response
+
+        except Exception as e:
+            # 如果Anthropic格式失败，尝试OpenAI格式作为后备
+            error_str = str(e).lower()
+            if "unsupported" in error_str or "invalid" in error_str or "404" in error_str:
+                print(f"\n⚠️  Anthropic格式失败 ({error_str[:50]}...)，尝试OpenAI格式...")
+                return await self._call_openai_api(
+                    api_key, base_url, model_name, messages, model_config
+                )
+            raise
+
     def _create_tools(self, project_path: Path, safety_guard) -> Dict[str, Any]:
         """创建工具集并注册到工具注册表"""
 
@@ -523,41 +701,39 @@ class MainAgent(BaseAgent):
         code_tools = CodeTools(project_path, safety_guard)
         web_tools = WebTools(project_path, safety_guard)
         todo_tools = TodoTools(project_path, safety_guard)
-        incremental_tools = IncrementalTools(project_path, safety_guard)
-        
+
         # 保存web_tools引用以便后续清理
         self.web_tools = web_tools
-        
+
         # 包装fetch_url函数以保存结果
-        async def wrapped_fetch_url(url: str, timeout: Optional[int] = None, max_content_length: int = 100000, **kwargs) -> Dict[str, Any]:
+        async def wrapped_fetch_url(
+            url: str,
+            timeout: Optional[int] = None,
+            max_content_length: int = 100000,
+            **kwargs,
+        ) -> Dict[str, Any]:
             # 调用原始fetch_url函数
-            result = await web_tools.fetch_url(url, timeout, max_content_length, **kwargs)
-            
+            result = await web_tools.fetch_url(
+                url, timeout, max_content_length, **kwargs
+            )
+
             # 如果成功获取到内容，保存到上下文文件
             if result.get("success") and "content" in result:
                 try:
                     # 创建上下文目录
                     context_dir = project_path / ".aacode" / "context"
                     context_dir.mkdir(parents=True, exist_ok=True)
-                    
+
                     # 保存结果到web_fetch_result.txt
                     result_file = context_dir / "web_fetch_result.txt"
                     result_file.write_text(result["content"], encoding="utf-8")
-                    print(f"📁 已保存web_fetch结果到: {result_file.relative_to(project_path)}")
+                    print(
+                        f"📁 已保存web_fetch结果到: {result_file.relative_to(project_path)}"
+                    )
                 except Exception as e:
                     print(f"⚠️  保存web_fetch结果失败: {str(e)}")
-            
-            return result
-        """创建工具集并注册到工具注册表"""
 
-        atomic_tools = AtomicTools(project_path, safety_guard)
-        code_tools = CodeTools(project_path, safety_guard)
-        web_tools = WebTools(project_path, safety_guard)
-        todo_tools = TodoTools(project_path, safety_guard)
-        incremental_tools = IncrementalTools(project_path, safety_guard)
-        
-        # 保存web_tools引用以便后续清理
-        self.web_tools = web_tools
+            return result
 
         # 主Agent的特殊工具
         tools = {
@@ -582,10 +758,6 @@ class MainAgent(BaseAgent):
             "get_todo_summary": todo_tools.get_todo_summary,
             "list_todo_files": todo_tools.list_todo_files,
             "add_execution_record": todo_tools.add_execution_record,
-            # 增量更新工具
-            "incremental_update": incremental_tools.incremental_update,
-            "patch_file": incremental_tools.patch_file,
-            "get_file_diff": incremental_tools.get_file_diff,
             # 管理工具
             "delegate_task": self.delegate_task,
             "check_task_status": self.check_task_status,
@@ -647,6 +819,7 @@ class MainAgent(BaseAgent):
 
         # 注册多模态工具的schema
         from utils.tool_registry import ToolSchema, ToolParameter
+
         multimodal_schema = get_multimodal_tools_schema()
         for schema_dict in multimodal_schema:
             func_name = schema_dict["function"]["name"]
@@ -655,7 +828,7 @@ class MainAgent(BaseAgent):
                 params_def = func_def.get("parameters", {})
                 properties = params_def.get("properties", {})
                 required_fields = params_def.get("required", [])
-                
+
                 # 将字典转换为 ToolSchema
                 schema = ToolSchema(
                     name=func_name,
@@ -665,10 +838,10 @@ class MainAgent(BaseAgent):
                             name=pname,
                             type=str,
                             required=pname in required_fields,
-                            description=properties[pname].get("description", "")
+                            description=properties[pname].get("description", ""),
                         )
                         for pname in properties.keys()
-                    ]
+                    ],
                 )
                 registry.register(tools[func_name], schema)
                 registered_count += 1
@@ -741,13 +914,14 @@ class MainAgent(BaseAgent):
             # 记录错误
             print(f"❌ ReAct循环执行失败: {e}")
             import traceback
+
             traceback.print_exc()
             # 重新抛出异常
             raise
         finally:
             # 确保资源被清理，即使发生异常
             try:
-                if hasattr(self, 'web_tools'):
+                if hasattr(self, "web_tools"):
                     await self.web_tools.cleanup()
             except Exception as e:
                 print(f"⚠️  清理web_tools时出错: {e}")
@@ -755,11 +929,15 @@ class MainAgent(BaseAgent):
         # 更新统计
         self.iterations = len(self.react_loop.steps)
 
+        execution_time = 0.0
+        if self.start_time is not None:
+            execution_time = asyncio.get_event_loop().time() - self.start_time
+            
         return {
             **result,
             "session_id": session_id,
             "agent_stats": self.get_stats(),
-            "execution_time": asyncio.get_event_loop().time() - self.start_time,
+            "execution_time": execution_time,
         }
 
     async def delegate_task(
@@ -1029,11 +1207,10 @@ class MainAgent(BaseAgent):
                     cwd=self.project_path,
                 )
                 if result.returncode == 0:
-                    git_status["changed_files"] = (
-                        len(result.stdout.strip().split("\n"))
-                        if result.stdout.strip()
-                        else 0
-                    )
+                    if result.stdout.strip():
+                        git_status["changed_files"] = len(result.stdout.strip().split("\n"))
+                    else:
+                        git_status["changed_files"] = 0
                     git_status["has_changes"] = bool(result.stdout.strip())
             except:
                 git_status["error"] = "Git未初始化或不可用"
@@ -1059,13 +1236,14 @@ class MainAgent(BaseAgent):
 
         except Exception as e:
             return {"error": str(e)}
-    
+
     def __del__(self):
         """析构函数，确保资源被清理"""
         try:
-            if hasattr(self, 'web_tools'):
+            if hasattr(self, "web_tools"):
                 # 尝试同步清理
                 import asyncio
+
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
                     # 如果事件循环正在运行，安排异步清理

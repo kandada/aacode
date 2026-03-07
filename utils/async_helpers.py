@@ -224,7 +224,9 @@ class AsyncHelpers:
 
     @staticmethod
     async def run_periodic(
-        func: Callable[[], Coroutine], interval: float, stop_event: asyncio.Event = None
+        func: Callable[[], Coroutine],
+        interval: float,
+        stop_event: asyncio.Event | None = None,
     ):
         """
         定期运行函数

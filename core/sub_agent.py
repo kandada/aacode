@@ -5,6 +5,7 @@
 """
 
 from typing import Dict, List, Any, Optional
+from pathlib import Path
 from core.agent import BaseAgent
 from core.react_loop import AsyncReActLoop
 import asyncio
@@ -20,7 +21,7 @@ class SubAgent(BaseAgent):
         model_caller: Any,
         tools: Dict[str, Any],
         context_manager: Any,
-        parent_agent_id: str = None,
+        parent_agent_id: Optional[str] = None,
         **kwargs,
     ):
 
@@ -30,11 +31,11 @@ class SubAgent(BaseAgent):
             model_caller=model_caller,
             tools=tools,
             context_manager=context_manager,
-            max_iterations=kwargs.get("max_iterations", 15),
+            max_iterations=max_iterations,
         )
 
         self.parent_agent_id = parent_agent_id
-        self.task_description = None
+        self.task_description: Optional[str] = None
 
         # 创建专用的ReAct循环
         self.react_loop = AsyncReActLoop(
@@ -44,19 +45,28 @@ class SubAgent(BaseAgent):
             max_iterations=kwargs.get("max_iterations", 15),
         )
 
-    async def execute(self, task: str) -> Dict[str, Any]:
+    async def execute(
+        self,
+        task: str,
+        init_instructions: str = "",
+        task_dir: Optional[Path] = None,
+        max_iterations: int = 20,
+    ) -> Dict[str, Any]:
         """
         执行任务（子Agent通常执行单一任务）
 
         Args:
             task: 任务描述
+            init_instructions: 初始化指令
+            task_dir: 任务目录
+            max_iterations: 最大迭代次数
 
         Returns:
             执行结果
         """
         print(f"\n🔄 子Agent {self.agent_id} 开始任务")
         self.task_description = task
-        self.start_time = asyncio.get_event_loop().time()
+        self.start_time = float(asyncio.get_event_loop().time())
 
         # 重置会话历史
         self.reset()
@@ -77,12 +87,16 @@ class SubAgent(BaseAgent):
         # 更新统计
         self.iterations = len(self.react_loop.steps)
 
+        execution_time = 0.0
+        if self.start_time is not None:
+            execution_time = asyncio.get_event_loop().time() - self.start_time
+            
         return {
             **result,
             "agent_id": self.agent_id,
             "task": task,
             "agent_stats": self.get_stats(),
-            "execution_time": asyncio.get_event_loop().time() - self.start_time,
+            "execution_time": execution_time,
         }
 
     async def submit_result(self, result: Dict) -> Dict[str, Any]:

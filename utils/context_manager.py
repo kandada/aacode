@@ -37,9 +37,7 @@ class ContextManager:
                             f"# 📋 项目初始化指令 (init.md)\n{init_content[:20000]}"
                         )
                     else:
-                        context_parts.append(
-                            "# 📋 项目初始化指令\n⚠️ init.md 文件为空"
-                        )
+                        context_parts.append("# 📋 项目初始化指令\n⚠️ init.md 文件为空")
                 except UnicodeDecodeError:
                     context_parts.append(
                         "# 📋 项目初始化指令\n⚠️ 文件编码错误，无法读取"

@@ -88,7 +88,7 @@ limits:
   prioritize_file_types: true   # 是否优先显示重要文件类型
 
 model:
-  api_key: sk-ffc8aaccab294f7fa95e9592ddf99e6a   # 这是作者xiefujin自己的api key
+  api_key: ""   # 从环境变量 LLM_API_KEY 或 OPENAI_API_KEY 读取
   base_url: https://api.deepseek.com/v1   # https://api.openai.com/v1
   max_tokens: 8000   # 单次输出tokens长度
   name: deepseek-chat        # gpt-4-turbo-preview
@@ -104,12 +104,28 @@ multimodal:
   
   # 多模态模型列表（可扩展）
   models:
-    # 月之暗面 Kimi K2.5（当前版本仅支持此模型）
+    # Kimi K2.5 多模态模型
     moonshot_kimi_k2.5:
       name: kimi-k2.5
       provider: moonshot
-      base_url: https://api.moonshot.cn/v1
-      api_key: your-api-key
+      gateway: openai
+      base_url: "https://api.moonshot.cn/v1"  # 从环境变量 MULTIMODAL_API_URL 读取，默认 https://api.moonshot.cn/v1
+      api_key: ""  # 从环境变量 MULTIMODAL_API_KEY 读取 或 LLM_API_KEY 读取
+      vision: true
+      video: true
+      max_image_size: 10485760  # 10MB
+      max_video_size: 104857600  # 100MB
+      supported_formats:
+        images: [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"]
+        videos: [".mp4", ".avi", ".mov", ".mkv", ".webm"]
+    
+    # MiniMax M2.5 多模态模型
+    minimax_m2.5:
+      name: MiniMax-M2.5
+      provider: minimax
+      gateway: anthropic
+      base_url: "https://api.minimax.chat/v1"  # 从环境变量 MULTIMODAL_API_URL 读取，默认 https://api.minimax.chat/v1
+      api_key: ""  # 从环境变量 MULTIMODAL_API_KEY 或 LLM_API_KEY 读取
       vision: true
       video: true
       max_image_size: 10485760  # 10MB
@@ -122,6 +138,7 @@ multimodal:
     # qwen_vl:
     #   name: qwen-vl-max
     #   provider: alibaba
+    #   gateway: openai
     #   base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
     #   api_key: your_api_key
     #   vision: true
@@ -130,6 +147,7 @@ multimodal:
     # glm:
     #   name: glm-4v-plus
     #   provider: zhipu
+    #   gateway: openai
     #   base_url: https://open.bigmodel.cn/api/paas/v4
     #   api_key: your_api_key
     #   vision: true

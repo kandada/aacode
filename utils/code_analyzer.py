@@ -52,7 +52,7 @@ class CodeAnalyzer:
 
     def __init__(self, project_path: Path):
         self.project_path = project_path
-        self.analysis_cache = {}
+        self.analysis_cache: dict[str, AnalysisResult] = {}
 
     def analyze_file(self, file_path: Path) -> AnalysisResult:
         """分析单个文件"""

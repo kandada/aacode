@@ -15,7 +15,6 @@ from datetime import datetime
 import requests
 from dataclasses import dataclass
 
-
 TIKTOKEN_MIRRORS = [
     "https://raw.githubusercontent.com/openai/tiktoken/main/tiktoken/bpe/cl100k_base.tiktoken",
     "https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken",
@@ -72,12 +71,20 @@ def _load_tiktoken_encoding():
     """加载 tiktoken 编码，支持镜像下载"""
     try:
         import tiktoken
+
         return tiktoken.get_encoding("cl100k_base")
     except Exception as e:
         error_msg = str(e)
-        if "Connection" in error_msg or "ConnectionResetError" in error_msg or "HTTPError" in error_msg or "404" in error_msg:
+        if (
+            "Connection" in error_msg
+            or "ConnectionResetError" in error_msg
+            or "HTTPError" in error_msg
+            or "404" in error_msg
+        ):
             print(f"\n⚠️  tiktoken 文件下载失败，将使用简单估算")
-            print(f"   手动解决: https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken")
+            print(
+                f"   手动解决: https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken"
+            )
             print(f"   保存到: ~/Library/Caches/tiktoken/cl100k_base.tiktoken")
         return None
 
@@ -437,8 +444,8 @@ class SessionManager:
                 }
             )
 
-        # 按最后活动时间排序
-        sessions.sort(key=lambda x: x["last_activity"], reverse=True)
+        # 按最后活动时间排序（处理None值）
+        sessions.sort(key=lambda x: float(x.get("last_activity", 0) or 0), reverse=True)
         return sessions
 
     async def switch_session(self, session_id: str) -> bool:

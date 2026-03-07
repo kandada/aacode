@@ -27,6 +27,7 @@ class AtomicTools:
     ) -> Dict[str, Any]:
         """
         读取文件内容 - 支持行范围读取和智能分段提示
+        **最佳实践**：read_file时，如果有目标内容，请往上多读几行，往下也多读几行，确保对目标内容有更充足的认知
 
         Args:
             path: 文件路径(相对或绝对)
@@ -91,22 +92,27 @@ class AtomicTools:
 
             # 如果指定了行范围,提取相应的行
             if line_start is not None or line_end is not None:
-                # 处理行号(从1开始转换为从0开始的索引)
-                start_idx = (line_start - 1) if line_start is not None else 0
-                end_idx = (line_end - 1) if line_end is not None else total_lines
-
-                # 边界检查
-                start_idx = max(0, min(start_idx, total_lines))
-                end_idx = max(0, min(end_idx, total_lines))
-
-                # 计算实际返回的最后一行行号
-                actual_end_line = line_end if line_end is not None else end_idx
-
-                # 检查是否有效的范围
+                # 1. 先调整行号边界（1-based行号）
+                adj_line_start = line_start if line_start is not None else 1
+                adj_line_end = line_end if line_end is not None else total_lines
+                
+                # 确保行号在有效范围内
+                adj_line_start = max(1, min(adj_line_start, total_lines))
+                adj_line_end = max(1, min(adj_line_end, total_lines))
+                
+                # 2. 转换为0-based索引
+                start_idx = adj_line_start - 1
+                end_idx = adj_line_end - 1
+                
+                # 3. 检查是否有效的范围
                 if start_idx <= end_idx:
                     # 提取行 (end_idx需要+1因为切片不包含结束索引)
-                    selected_lines = lines[start_idx:end_idx + 1]
+                    selected_lines = lines[start_idx : end_idx + 1]
                     content = "\n".join(selected_lines) + "\n"
+                    
+                    # 计算实际返回的行范围（使用调整后的行号）
+                    actual_start_line = adj_line_start
+                    actual_end_line = adj_line_end
 
                     return {
                         "success": True,
@@ -114,13 +120,15 @@ class AtomicTools:
                         "content": content,
                         "size": len(content),
                         "lines": len(selected_lines),
-                        "line_range": f"{start_idx + 1}-{actual_end_line}",
+                        "line_range": f"{actual_start_line}-{actual_end_line}",
                         "total_lines": total_lines,
+                        "line_start": actual_start_line,
+                        "line_end": actual_end_line,
                     }
                 else:
-                    # 无效的范围，返回整个文件
+                    # 无效的范围（如line_start > line_end），返回整个文件
                     print(
-                        f"⚠️  警告: 无效的行范围 {line_start}-{line_end}, 返回整个文件"
+                        f"⚠️  警告: 无效的行范围 {line_start}-{line_end} (起始行大于结束行), 返回整个文件"
                     )
 
             # 读取整个文件 - 智能分段提示
@@ -140,7 +148,8 @@ class AtomicTools:
                 "path": display_path,
                 "content": original_content,
                 "size": len(original_content),
-                "lines": total_lines,  # 使用 total_lines 而不是 len(lines)
+                "lines": total_lines,
+                "total_lines": total_lines,
             }
         except Exception as e:
             return {"error": f"读取文件异常: {str(e)},路径: {path}"}
@@ -309,28 +318,34 @@ class AtomicTools:
 
         return suggestions
 
-    async def write_file(self, path: str, content: Optional[str] = None, source: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+    async def write_file(
+        self,
+        path: str,
+        content: Optional[str] = None,
+        source: Optional[str] = None,
+        **kwargs,
+    ) -> Dict[str, Any]:
         """
         写入文件 - 不仅支持模型写入内容，也支持从上下文引用内容
-        
+
         支持两种方式写入文件：
         1. 直接提供内容：content="文件内容"
         2. 从上下文引用：source="引用标识符"（如"last_web_fetch"、"tool_result:fetch_url"等）
-        
+
          当使用source参数时，支持以下过滤参数（可选）：
          - source_start_line: 源文件起始行号（1-based，包含）- **必须使用**
          - source_end_line: 源文件结束行号（1-based，包含）- **必须使用**
          - source_pattern: 源文件正则表达式模式，只保留匹配的行 - **必须使用**
          - source_exclude_pattern: 源文件正则表达式模式，排除匹配的行 - **必须使用**
-        
+
         **重要规则**：当使用source参数时，所有源文件过滤参数必须使用source_前缀。
                     使用不带前缀的参数将触发警告。
-        
+
         示例：
         - 写入文件前10行：{"path": "output.txt", "source": "file:input.txt", "source_start_line": 1, "source_end_line": 10}
         - 只写入包含"def "的行：{"path": "functions.txt", "source": "file:code.py", "source_pattern": "^def "}
         - 排除注释行：{"path": "clean.txt", "source": "file:code.py", "source_exclude_pattern": "^#"}
-        
+
         注意:**kwargs 用于接收过滤参数和其他额外参数
         """
         try:
@@ -389,19 +404,25 @@ class AtomicTools:
 
             # 处理内容来源
             final_content = None
-            
+
             if source:
                 # 源文件参数检查：当使用source参数时，必须使用source_前缀
                 # 检查行范围参数 - 不告警，只记录信息
-                if 'start_line' in kwargs or 'end_line' in kwargs:
+                if "start_line" in kwargs or "end_line" in kwargs:
                     print(f"📝 信息：当使用source参数时，start_line/end_line参数被忽略")
-                    print(f"   如需指定源文件行范围，请使用source_start_line/source_end_line")
-                
+                    print(
+                        f"   如需指定源文件行范围，请使用source_start_line/source_end_line"
+                    )
+
                 # 检查正则表达式参数 - 不告警，只记录信息
-                if 'pattern' in kwargs or 'exclude_pattern' in kwargs:
-                    print(f"📝 信息：当使用source参数时，pattern/exclude_pattern参数被忽略")
-                    print(f"   如需正则表达式过滤，请使用source_pattern/source_exclude_pattern")
-                
+                if "pattern" in kwargs or "exclude_pattern" in kwargs:
+                    print(
+                        f"📝 信息：当使用source参数时，pattern/exclude_pattern参数被忽略"
+                    )
+                    print(
+                        f"   如需正则表达式过滤，请使用source_pattern/source_exclude_pattern"
+                    )
+
                 # 从上下文获取内容
                 final_content = await self._get_content_from_source(source, kwargs)
                 if final_content is None:
@@ -411,7 +432,7 @@ class AtomicTools:
                 final_content = content
             else:
                 return {"error": "必须提供 content 或 source 参数"}
-            
+
             # 使用Python原生方式写入文件,避免shell权限问题
             try:
                 full_path.write_text(final_content, encoding="utf-8")
@@ -435,7 +456,7 @@ class AtomicTools:
     def _filter_content(self, content: str, kwargs: Dict[str, Any]) -> str:
         """
          根据过滤参数处理内容（仅用于源文件过滤）
-        
+
         Args:
             content: 原始内容
             kwargs: 过滤参数，支持：
@@ -443,90 +464,100 @@ class AtomicTools:
                    - source_end_line: 源文件结束行号（1-based，包含）- **必须使用**
                    - source_pattern: 源文件正则表达式模式，只保留匹配的行 - **必须使用**
                    - source_exclude_pattern: 源文件正则表达式模式，排除匹配的行 - **必须使用**
-        
+
         注意：此方法仅用于过滤源文件内容。当使用source参数时，所有源文件过滤参数必须使用source_前缀。
               使用不带前缀的参数将触发警告。
-        
+
         Returns:
             过滤后的内容
         """
-        lines = content.split('\n')
+        lines = content.split("\n")
         filtered_lines = []
-        
+
         # 应用行范围过滤 - 强制使用source_前缀参数
-        start_line = kwargs.get('source_start_line')
-        end_line = kwargs.get('source_end_line')
-        
+        start_line = kwargs.get("source_start_line")
+        end_line = kwargs.get("source_end_line")
+
         # 检查是否使用了start_line/end_line作为源文件参数
-        if 'start_line' in kwargs or 'end_line' in kwargs:
+        if "start_line" in kwargs or "end_line" in kwargs:
             print(f"📝 信息：start_line/end_line参数被忽略（源文件过滤）")
             print(f"   如需指定源文件行范围，请使用source_start_line/source_end_line")
-        
+
         if start_line is not None or end_line is not None:
             # 自动调整行号0为1，保持与_parse_line_range一致
             if start_line is not None:
                 start_line = max(1, int(start_line))
             if end_line is not None:
                 end_line = max(1, int(end_line))
-            
+
             # 确保 start_line <= end_line，与_parse_line_range保持一致
-            if start_line is not None and end_line is not None and start_line > end_line:
+            if (
+                start_line is not None
+                and end_line is not None
+                and start_line > end_line
+            ):
                 start_line, end_line = end_line, start_line
-            
+
             start = int(start_line) - 1 if start_line is not None else 0
             end = int(end_line) if end_line is not None else len(lines)
-            
+
             # 边界检查
             start = max(0, min(start, len(lines)))
             end = max(start, min(end, len(lines)))
-            
+
             lines = lines[start:end]
             if start_line or end_line:
                 print(f"📏 应用行范围过滤(source_): 第{start+1}-{end}行")
-        
+
         # 应用正则表达式过滤 - 强制使用source_前缀参数
-        pattern = kwargs.get('source_pattern')
-        exclude_pattern = kwargs.get('source_exclude_pattern')
-        
+        pattern = kwargs.get("source_pattern")
+        exclude_pattern = kwargs.get("source_exclude_pattern")
+
         # 检查是否使用了不带前缀的正则表达式参数
-        if 'pattern' in kwargs or 'exclude_pattern' in kwargs:
+        if "pattern" in kwargs or "exclude_pattern" in kwargs:
             print(f"📝 信息：pattern/exclude_pattern参数被忽略（源文件过滤）")
             print(f"   如需正则表达式过滤，请使用source_pattern/source_exclude_pattern")
-        
+
         if pattern or exclude_pattern:
             import re
-            
+
             # 计算起始行号用于日志（使用调整后的start_line）
             actual_start = start_line if start_line is not None else 1
-            
+
             for i, line in enumerate(lines):
                 line_num = actual_start + i
-                
+
                 # 排除模式优先
                 if exclude_pattern:
                     if re.search(exclude_pattern, line):
                         continue
-                
+
                 # 包含模式
                 if pattern:
                     if re.search(pattern, line):
                         filtered_lines.append(line)
                 else:
                     filtered_lines.append(line)
-            
-            if pattern:
-                print(f"🔍 应用包含模式过滤(source_): '{pattern}'，保留 {len(filtered_lines)} 行")
-            if exclude_pattern:
-                print(f"🚫 应用排除模式过滤(source_): '{exclude_pattern}'，排除 {len(lines) - len(filtered_lines)} 行")
-            
-            lines = filtered_lines
-        
-        return '\n'.join(lines)
 
-    async def _get_content_from_source(self, source: str, kwargs: Dict[str, Any]) -> Optional[str]:
+            if pattern:
+                print(
+                    f"🔍 应用包含模式过滤(source_): '{pattern}'，保留 {len(filtered_lines)} 行"
+                )
+            if exclude_pattern:
+                print(
+                    f"🚫 应用排除模式过滤(source_): '{exclude_pattern}'，排除 {len(lines) - len(filtered_lines)} 行"
+                )
+
+            lines = filtered_lines
+
+        return "\n".join(lines)
+
+    async def _get_content_from_source(
+        self, source: str, kwargs: Dict[str, Any]
+    ) -> Optional[str]:
         """
         从指定来源获取内容，支持部分内容提取
-        
+
         Args:
             source: 来源标识符，支持以下格式：
                    - "last_tool_result": 获取最近一次工具执行结果
@@ -541,25 +572,25 @@ class AtomicTools:
                    - end_line: 结束行号（1-based，包含）
                    - pattern: 正则表达式模式，只保留匹配的行
                    - exclude_pattern: 正则表达式模式，排除匹配的行
-        
+
         Returns:
             内容字符串或None（如果无法获取）
         """
         try:
             print(f"🔍 尝试从来源获取内容: {source}")
-            
+
             # 方案1：直接内容（通过kwargs传递）
             if "direct_content" in kwargs:
                 print(f"📝 使用直接传递的内容 ({len(kwargs['direct_content'])} 字符)")
                 content = kwargs["direct_content"]
                 return self._filter_content(content, kwargs)
-            
+
             # 方案2：source包含直接内容（格式：content:实际内容）
             if source.startswith("content:"):
                 content = source[8:]  # 移除"content:"前缀
                 print(f"📝 从source参数提取内容 ({len(content)} 字符)")
                 return self._filter_content(content, kwargs)
-            
+
             # 方案3：从文件读取（格式：file:文件路径）
             if source.startswith("file:"):
                 file_path = source[5:]  # 移除"file:"前缀
@@ -570,7 +601,9 @@ class AtomicTools:
                         print(f"📄 从文件读取内容: {file_path} ({len(content)} 字符)")
                         filtered_content = self._filter_content(content, kwargs)
                         if filtered_content != content:
-                            print(f"✅ 内容过滤完成: {len(content)} → {len(filtered_content)} 字符")
+                            print(
+                                f"✅ 内容过滤完成: {len(content)} → {len(filtered_content)} 字符"
+                            )
                         return filtered_content
                     else:
                         print(f"⚠️  文件不存在: {file_path}")
@@ -578,7 +611,7 @@ class AtomicTools:
                 except Exception as e:
                     print(f"⚠️  读取文件失败: {str(e)}")
                     return None
-            
+
             # 方案4：从上下文文件读取（.aacode/context目录）
             # 首先尝试直接文件名
             context_file = self.project_path / ".aacode" / "context" / f"{source}.txt"
@@ -588,42 +621,56 @@ class AtomicTools:
                     print(f"📁 从上下文文件读取: {source} ({len(content)} 字符)")
                     filtered_content = self._filter_content(content, kwargs)
                     if filtered_content != content:
-                        print(f"✅ 内容过滤完成: {len(content)} → {len(filtered_content)} 字符")
+                        print(
+                            f"✅ 内容过滤完成: {len(content)} → {len(filtered_content)} 字符"
+                        )
                     return filtered_content
                 except Exception as e:
                     print(f"⚠️  读取上下文文件失败: {str(e)}")
                     return None
-            
+
             # 尝试不带.txt后缀
             context_file_no_ext = self.project_path / ".aacode" / "context" / source
             if context_file_no_ext.exists():
                 try:
-                    content = context_file_no_ext.read_text(encoding="utf-8", errors="ignore")
-                    print(f"📁 从上下文文件读取(无后缀): {source} ({len(content)} 字符)")
+                    content = context_file_no_ext.read_text(
+                        encoding="utf-8", errors="ignore"
+                    )
+                    print(
+                        f"📁 从上下文文件读取(无后缀): {source} ({len(content)} 字符)"
+                    )
                     filtered_content = self._filter_content(content, kwargs)
                     if filtered_content != content:
-                        print(f"✅ 内容过滤完成: {len(content)} → {len(filtered_content)} 字符")
+                        print(
+                            f"✅ 内容过滤完成: {len(content)} → {len(filtered_content)} 字符"
+                        )
                     return filtered_content
                 except Exception as e:
                     print(f"⚠️  读取上下文文件失败: {str(e)}")
                     return None
-            
+
             # 方案5：特殊标识符处理
             if source == "last_web_fetch" or source == "tool_result:fetch_url":
                 # 尝试查找最近的web_fetch结果
-                web_fetch_file = self.project_path / ".aacode" / "context" / "web_fetch_result.txt"
+                web_fetch_file = (
+                    self.project_path / ".aacode" / "context" / "web_fetch_result.txt"
+                )
                 if web_fetch_file.exists():
                     try:
-                        content = web_fetch_file.read_text(encoding="utf-8", errors="ignore")
+                        content = web_fetch_file.read_text(
+                            encoding="utf-8", errors="ignore"
+                        )
                         print(f"🌐 使用最近web_fetch结果 ({len(content)} 字符)")
                         filtered_content = self._filter_content(content, kwargs)
                         if filtered_content != content:
-                            print(f"✅ 内容过滤完成: {len(content)} → {len(filtered_content)} 字符")
+                            print(
+                                f"✅ 内容过滤完成: {len(content)} → {len(filtered_content)} 字符"
+                            )
                         return filtered_content
                     except Exception as e:
                         print(f"⚠️  读取web_fetch结果失败: {str(e)}")
                         return None
-            
+
             print(f"⚠️  无法识别的来源标识符: {source}")
             print(f"💡 提示：支持的格式：")
             print(f"   - content:<直接内容>")
@@ -636,14 +683,12 @@ class AtomicTools:
             print(f"   - end_line: 结束行号（如: 20）")
             print(f"   - pattern: 正则表达式模式（如: '^def '）")
             print(f"   - exclude_pattern: 排除模式（如: '^#'）")
-            
+
             return None
-            
+
         except Exception as e:
             print(f"⚠️  从来源获取内容失败: {str(e)}")
             return None
-
-
 
     async def run_shell(
         self, command: str, timeout: int = 120, **kwargs
@@ -903,7 +948,7 @@ class AtomicTools:
                 return {"error": f"搜索失败: {stderr.decode()}", "success": False}
 
             # 收集结果，按文件分组
-            file_results = {}
+            file_results: dict[str, dict] = {}
             for line in stdout.decode().split("\n"):
                 if line.strip():
                     parts = line.split(":", 2)

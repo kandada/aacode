@@ -50,7 +50,7 @@ class SkillsManager:
         skills_dir_name = "skills"
         if skills_config and "skills_dir" in skills_config:
             skills_dir_name = skills_config["skills_dir"]
-        
+
         # 如果skills_dir是相对路径，假设相对于项目根目录
         skills_dir_path = Path(skills_dir_name)
         if not skills_dir_path.is_absolute():
@@ -59,7 +59,7 @@ class SkillsManager:
             self.skills_dir = project_root / skills_dir_name
         else:
             self.skills_dir = skills_dir_path
-            
+
         self.loaded_skills: Dict[str, SkillInfo] = {}
         self.enabled_skills: List[str] = []
         # 新增：从配置加载的元数据
@@ -109,9 +109,10 @@ class SkillsManager:
                         self._load_full_instruction(skill_name)
                 else:
                     # 回退到原来的完整加载（兼容性）
-                    skill_info = self._load_skill(skill_dir)
-                    if skill_info:
-                        self.loaded_skills[skill_info.name] = skill_info
+                    loaded_skill_info = self._load_skill(skill_dir)
+                    if loaded_skill_info is not None:
+                        # loaded_skill_info在if块中不是None
+                        self.loaded_skills[loaded_skill_info.name] = loaded_skill_info
 
         return self.loaded_skills
 
@@ -173,23 +174,20 @@ class SkillsManager:
             return None
 
         main_impl = impl_files[0]
-        
+
         # 发现所有公开函数
         func_names = self._find_all_functions(main_impl)
         if not func_names:
             return None
-        
+
         # 使用第一个函数作为主函数（保持兼容）
         main_func_name = func_names[0]
-        
+
         # 提取所有函数的参数信息
         all_functions = {}
         for func_name in func_names:
             params, examples = self._extract_function_info(main_impl, func_name)
-            all_functions[func_name] = {
-                "parameters": params,
-                "examples": examples
-            }
+            all_functions[func_name] = {"parameters": params, "examples": examples}
 
         return SkillInfo(
             name=skill_name,
@@ -206,15 +204,15 @@ class SkillsManager:
         """查找主函数（完全自由命名，无前缀限制）"""
         try:
             # 读取源代码文件
-            source = impl_file.read_text(encoding='utf-8')
-            
+            source = impl_file.read_text(encoding="utf-8")
+
             # 使用正则表达式查找函数定义，保持顺序
             import re
-            
+
             # 查找所有函数定义
-            function_pattern = r'^(async\s+)?def\s+(\w+)\s*\('
-            lines = source.split('\n')
-            
+            function_pattern = r"^(async\s+)?def\s+(\w+)\s*\("
+            lines = source.split("\n")
+
             functions = []
             for i, line in enumerate(lines):
                 line = line.strip()
@@ -223,25 +221,31 @@ class SkillsManager:
                     is_async = bool(match.group(1))
                     func_name = match.group(2)
                     functions.append((func_name, is_async, i))
-            
+
             if not functions:
                 return None
-            
+
             # 策略：优先选择第一个async函数
-            async_funcs = [name for name, is_async, line_no in functions 
-                          if is_async and not name.startswith('_')]
+            async_funcs = [
+                name
+                for name, is_async, line_no in functions
+                if is_async and not name.startswith("_")
+            ]
             if async_funcs:
                 return async_funcs[0]
-            
+
             # 如果没有async函数，选择第一个公共函数
-            public_funcs = [name for name, is_async, line_no in functions 
-                           if not name.startswith('_') and name != 'main']
+            public_funcs = [
+                name
+                for name, is_async, line_no in functions
+                if not name.startswith("_") and name != "main"
+            ]
             if public_funcs:
                 return public_funcs[0]
-            
+
             # 最后选择第一个函数
             return functions[0][0]
-            
+
         except:
             # 回退方案：使用模块加载
             try:
@@ -254,25 +258,25 @@ class SkillsManager:
 
                 # 获取所有函数
                 all_funcs = inspect.getmembers(module, inspect.isfunction)
-                
+
                 # 查找async函数
                 async_funcs = []
                 for name, func in all_funcs:
-                    if asyncio.iscoroutinefunction(func) and not name.startswith('_'):
+                    if asyncio.iscoroutinefunction(func) and not name.startswith("_"):
                         async_funcs.append(name)
-                
+
                 if async_funcs:
                     return async_funcs[0]
-                
+
                 # 查找公共函数
                 public_funcs = []
                 for name, func in all_funcs:
-                    if not name.startswith('_') and name != 'main':
+                    if not name.startswith("_") and name != "main":
                         public_funcs.append(name)
-                
+
                 if public_funcs:
                     return public_funcs[0]
-                
+
                 return None
             except:
                 return None
@@ -280,34 +284,38 @@ class SkillsManager:
     def _find_all_functions(self, impl_file: Path) -> List[str]:
         """查找所有公开函数（过滤私有函数，优先返回async函数）"""
         try:
-            source = impl_file.read_text(encoding='utf-8')
+            source = impl_file.read_text(encoding="utf-8")
             import re
-            
+
             # 改进的正则表达式：只匹配顶级函数（行首没有空格）
-            function_pattern = r'^(async\s+)?def\s+(\w+)\s*\('
-            lines = source.split('\n')
-            
+            function_pattern = r"^(async\s+)?def\s+(\w+)\s*\("
+            lines = source.split("\n")
+
             async_functions = []
             sync_functions = []
             for line in lines:
                 # 检查是否是顶级函数（行首没有空格或制表符）
-                if line and line[0] in (' ', '\t'):
+                if line and line[0] in (" ", "\t"):
                     continue  # 跳过有缩进的行（嵌套函数）
-                
+
                 match = re.match(function_pattern, line.strip())
                 if match:
                     is_async = bool(match.group(1))
                     func_name = match.group(2)
                     # 排除私有函数和main
-                    if not func_name.startswith('_') and func_name != 'main':
+                    if not func_name.startswith("_") and func_name != "main":
                         if is_async:
                             async_functions.append(func_name)
                         else:
                             sync_functions.append(func_name)
-            
+
             # 优先返回async函数，如果没有async函数才返回sync函数
-            return async_functions if async_functions else (sync_functions if sync_functions else [])
-            
+            return (
+                async_functions
+                if async_functions
+                else (sync_functions if sync_functions else [])
+            )
+
         except:
             return []
 
@@ -347,10 +355,10 @@ class SkillsManager:
             for name, param in sig.parameters.items():
                 if name in ("self", "kwargs"):
                     continue
-                
+
                 # 改进类型提取，处理复杂类型
                 param_type = self._extract_param_type(param.annotation)
-                
+
                 param_info = {
                     "type": param_type,
                     "required": param.default == inspect.Parameter.empty,
@@ -360,7 +368,7 @@ class SkillsManager:
                     param_info["default"] = param.default
                 params[name] = param_info
 
-            examples = []
+            examples: list[str] = []
             docstring = func.__doc__ or ""
             return params, examples
 
@@ -370,16 +378,16 @@ class SkillsManager:
     def _extract_param_type(self, annotation) -> str:
         """提取参数类型，处理复杂类型"""
         import typing
-        
+
         if annotation is inspect.Parameter.empty:
             return "Any"
-        
+
         # 检查是否是 typing 模块的类型
-        if hasattr(annotation, '__origin__'):
+        if hasattr(annotation, "__origin__"):
             # 处理泛型类型如 Optional, List, Dict
             origin = annotation.__origin__
-            args = annotation.__args__ if hasattr(annotation, '__args__') else ()
-            
+            args = annotation.__args__ if hasattr(annotation, "__args__") else ()
+
             # Optional[X] 实际上是 Union[X, None]
             if origin is typing.Union:
                 # 检查是否有 None 类型
@@ -390,34 +398,34 @@ class SkillsManager:
                     inner_str = self._extract_param_type(inner_type)
                     return f"Optional[{inner_str}]"
                 return str(annotation)
-            
+
             # List[X]
             if origin is list:
                 if args:
                     inner_str = self._extract_param_type(args[0])
                     return f"List[{inner_str}]"
                 return "List"
-            
+
             # Dict[K, V]
             if origin is dict:
-                if len(args) >= 2:
+                if args and len(args) >= 2:
                     key_str = self._extract_param_type(args[0])
                     val_str = self._extract_param_type(args[1])
                     return f"Dict[{key_str}, {val_str}]"
                 return "Dict"
-        
+
         # 处理简单类型
         type_str = str(annotation)
-        
+
         # 处理 <class 'str'> 格式
         if type_str.startswith("<class '") and type_str.endswith("'>"):
             return type_str[8:-2]
-        
+
         # 处理 typing 模块的简单类型
         if type_str.startswith("typing."):
             simple_types = {
                 "typing.Str": "str",
-                "typing.Int": "int", 
+                "typing.Int": "int",
                 "typing.Bool": "bool",
                 "typing.Float": "float",
                 "typing.List": "List",
@@ -428,10 +436,12 @@ class SkillsManager:
                 return simple_types[type_str]
             # 返回简化形式
             return type_str[7:]  # 去掉 "typing."
-        
+
         return type_str if type_str else "Any"
 
-    async def execute_skill(self, skill_name: str, func_name: str = None, **kwargs) -> Dict[str, Any]:
+    async def execute_skill(
+        self, skill_name: str, func_name: str | None = None, **kwargs
+    ) -> Dict[str, Any]:
         """执行skill（按需加载完整指令）
         Args:
             skill_name: skill名称
@@ -444,7 +454,7 @@ class SkillsManager:
             return {"success": False, "error": f"Skill未启用: {skill_name}"}
 
         skill_info = self.loaded_skills[skill_name]
-        
+
         # 按需加载完整指令（渐进式披露核心）
         if not skill_info.full_instruction_loaded:
             self._load_full_instruction(skill_name)
@@ -452,13 +462,13 @@ class SkillsManager:
 
         # 确定要执行的函数
         target_func_name = func_name if func_name else skill_info.function_name
-        
+
         # 验证函数是否存在
         if skill_info.functions and target_func_name not in skill_info.functions:
             available_funcs = list(skill_info.functions.keys())
             return {
-                "success": False, 
-                "error": f"函数 '{target_func_name}' 不存在，可用函数: {available_funcs}"
+                "success": False,
+                "error": f"函数 '{target_func_name}' 不存在，可用函数: {available_funcs}",
             }
 
         try:
