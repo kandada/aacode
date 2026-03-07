@@ -82,7 +82,9 @@ class TodoManager:
 
         # 写入文件
         try:
-            async with aiofiles.open(self.current_todo_file, "w", encoding="utf-8") as f:
+            async with aiofiles.open(
+                self.current_todo_file, "w", encoding="utf-8"
+            ) as f:
                 await f.write(todo_content)
         except asyncio.CancelledError:
             # 异步任务被取消，静默处理
@@ -133,7 +135,9 @@ class TodoManager:
                 return False
 
             # 简化格式：只保留核心信息
-            priority_mark = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(priority, "")
+            priority_mark = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(
+                priority, ""
+            )
             new_item = f"- [ ] {priority_mark} **{category}**: {item}"
             lines.insert(insert_pos, new_item)
 
@@ -249,7 +253,9 @@ class TodoManager:
 
         for i, line in enumerate(lines):
             if line.strip().startswith("- [ ]") and old_pattern.lower() in line.lower():
-                match = re.match(r"^- \[ \]\s*([🔴🟡🟢])?\s*\*\*(.*?)\*\*:\s*(.*)", line)
+                match = re.match(
+                    r"^- \[ \]\s*([🔴🟡🟢])?\s*\*\*(.*?)\*\*:\s*(.*)", line
+                )
                 if match:
                     priority_emoji = match.group(1) or ""
                     category = match.group(2)
@@ -310,7 +316,9 @@ class TodoManager:
                 keep_count = 20
                 delete_count = len(record_lines) - keep_count
                 # 找到所有记录行的位置
-                record_positions = [j for j, l in enumerate(lines) if l.strip().startswith("-")]
+                record_positions = [
+                    j for j, l in enumerate(lines) if l.strip().startswith("-")
+                ]
                 # 删除最旧的记录（前面的）
                 for pos in sorted(record_positions[:delete_count], reverse=True):
                     lines.pop(pos)
@@ -341,7 +349,7 @@ class TodoManager:
             else:
                 return {
                     "empty": True,
-                    "message": "暂无待办清单，使用 /newtodo 创建新任务"
+                    "message": "暂无待办清单，使用 /newtodo 创建新任务",
                 }
 
         try:
@@ -428,8 +436,8 @@ class TodoManager:
                 except Exception:
                     continue
 
-            # 按修改时间排序
-            todo_files.sort(key=lambda x: x["modified_time"], reverse=True)
+            # 按修改时间排序（处理None值）
+            todo_files.sort(key=lambda x: float(x.get("modified_time", 0) or 0), reverse=True)
             return todo_files
         except Exception as e:
             print(f"⚠️ 列出待办清单文件失败: {e}")

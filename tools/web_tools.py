@@ -27,10 +27,10 @@ class WebTools:
                     "/search"
                 ),
                 "enabled": bool(os.getenv("SEARCHXNG_URL")),
-                "description": "自托管搜索引擎聚合器（集成Google、Bing、百度、搜狗等）"
+                "description": "自托管搜索引擎聚合器（集成Google、Bing、百度、搜狗等）",
             }
         }
-        self.last_search_time = {}
+        self.last_search_time: dict[str, float] = {}
 
     async def _ensure_session(self):
         """确保HTTP会话存在"""
@@ -40,13 +40,14 @@ class WebTools:
 
             web_timeout = settings.timeouts.web_request
             timeout = aiohttp.ClientTimeout(total=web_timeout, connect=10)
-            
+
             # 创建SSL上下文，允许自签名证书（用于本地searXNG实例）
             import ssl
+
             ssl_context = ssl.create_default_context()
             ssl_context.check_hostname = False
             ssl_context.verify_mode = ssl.CERT_NONE
-            
+
             connector = aiohttp.TCPConnector(
                 limit=100,
                 limit_per_host=30,
@@ -110,8 +111,10 @@ class WebTools:
                 }
 
             # 执行搜索
-            results = await self._search_with_fallback(query, engine, max_results, safe_search)
-            
+            results = await self._search_with_fallback(
+                query, engine, max_results, safe_search
+            )
+
             # 更新速率限制
             if results.get("success"):
                 used_engine = results.get("engine", engine)
@@ -123,7 +126,11 @@ class WebTools:
             return {"success": False, "error": f"搜索失败: {str(e)}"}
 
     async def fetch_url(
-        self, url: str, timeout: Optional[int] = None, max_content_length: int = 100000, **kwargs
+        self,
+        url: str,
+        timeout: Optional[int] = None,
+        max_content_length: int = 100000,
+        **kwargs,
     ) -> Dict[str, Any]:
         """
         获取网页内容
@@ -157,7 +164,7 @@ class WebTools:
             if timeout is None:
                 timeout = 30
             client_timeout = aiohttp.ClientTimeout(total=timeout)
-            
+
             async with session.get(url, timeout=client_timeout) as response:
                 content_type = response.headers.get("content-type", "").lower()
 
@@ -196,7 +203,7 @@ class WebTools:
         # 只支持searxng
         if self.search_engines.get("searxng", {}).get("enabled", False):
             return "searxng"
-        
+
         # 如果没有可用的引擎，返回空字符串
         return ""
 
@@ -207,7 +214,7 @@ class WebTools:
         # 只支持searxng
         if engine == "auto":
             engine = "searxng"
-        
+
         if engine != "searxng":
             return {
                 "success": False,
@@ -215,7 +222,7 @@ class WebTools:
                 "query": query,
                 "suggestion": "请配置SEARCHXNG_URL环境变量",
             }
-        
+
         # 检查searxng是否启用
         if not self.search_engines.get("searxng", {}).get("enabled", False):
             return {
@@ -224,12 +231,12 @@ class WebTools:
                 "query": query,
                 "suggestion": "请设置SEARCHXNG_URL环境变量指向您的searXNG实例",
             }
-        
+
         try:
             print(f"🔍 使用搜索引擎: {engine}")
             result = await self._search_searxng(query, max_results, safe_search)
             return result
-            
+
         except Exception as e:
             return {
                 "success": False,
@@ -241,12 +248,18 @@ class WebTools:
     def _check_rate_limit(self, engine: str) -> bool:
         """检查速率限制"""
         last_time = self.last_search_time.get(engine, 0)
-        rate_limit = self.search_engines.get(engine, {}).get("rate_limit", 1.0)
+        rate_limit_value = self.search_engines.get(engine, {}).get("rate_limit", 1.0)
         
+        # 确保rate_limit是数值类型
+        try:
+            rate_limit = float(rate_limit_value)  # type: ignore[arg-type]
+        except (ValueError, TypeError):
+            rate_limit = 1.0  # 默认值
+
         # 对于searxng，放宽速率限制，因为它是本地实例
         if engine == "searxng":
             rate_limit = 0.5  # 0.5秒
-        
+
         return time.time() - last_time >= rate_limit
 
     def _is_safe_url(self, url: str) -> bool:
@@ -303,7 +316,7 @@ class WebTools:
                 "safesearch": 1 if safe_search else 0,
                 "pageno": 1,  # 第一页
             }
-            
+
             # 尝试不同的参数组合
             param_variations = [
                 base_params,  # 原始参数
@@ -314,9 +327,10 @@ class WebTools:
 
             # 使用配置的超时时间
             from config import settings
+
             web_timeout = settings.timeouts.web_request
             client_timeout = aiohttp.ClientTimeout(total=web_timeout)
-            
+
             last_error = None
             for i, test_params in enumerate(param_variations):
                 try:
@@ -331,33 +345,37 @@ class WebTools:
                         search_url, params=test_params, timeout=client_timeout
                     ) as response:
                         if response.status == 200:
-                            content_type = response.headers.get("content-type", "").lower()
-                            
+                            content_type = response.headers.get(
+                                "content-type", ""
+                            ).lower()
+
                             if "application/json" in content_type:
                                 data = await response.json()
-                                
+
                                 # 检查是否有错误
                                 if data.get("error"):
                                     last_error = f"SearXNG错误: {data.get('error')}"
                                     continue
-                                
+
                                 # 检查是否有结果
                                 results = data.get("results", [])
                                 if not results:
                                     last_error = "SearXNG返回空结果"
                                     continue
-                                
+
                                 # 处理结果
                                 processed_results = []
                                 for item in results[:max_results]:
-                                    processed_results.append({
-                                        "title": item.get("title", ""),
-                                        "url": item.get("url", ""),
-                                        "content": item.get("content", ""),
-                                        "engine": item.get("engine", "searxng"),
-                                        "score": item.get("score", 0),
-                                    })
-                                
+                                    processed_results.append(
+                                        {
+                                            "title": item.get("title", ""),
+                                            "url": item.get("url", ""),
+                                            "content": item.get("content", ""),
+                                            "engine": item.get("engine", "searxng"),
+                                            "score": item.get("score", 0),
+                                        }
+                                    )
+
                                 return {
                                     "success": True,
                                     "engine": "searxng",
@@ -370,28 +388,29 @@ class WebTools:
                                 html = await response.text()
                                 # 简单提取结果（实际应该用BeautifulSoup等库）
                                 import re
+
                                 # 这里简化处理，实际应该更复杂
                                 last_error = "SearXNG返回HTML格式，需要解析"
                                 continue
-                                
+
                         else:
                             last_error = f"SearXNG HTTP错误: {response.status}"
                             continue
-                            
+
                 except asyncio.TimeoutError:
                     last_error = f"参数组合 {i+1} 超时"
                     continue
                 except Exception as e:
                     last_error = f"参数组合 {i+1} 错误: {str(e)}"
                     continue
-            
+
             return {
                 "success": False,
                 "error": f"SearXNG搜索失败: {last_error}",
                 "query": query,
                 "suggestion": "请检查searXNG配置和网络连接",
             }
-            
+
         except Exception as e:
             return {"success": False, "error": f"SearXNG搜索失败: {str(e)}"}
 
@@ -411,7 +430,7 @@ class WebTools:
             return {"error": result.get("error", "搜索失败"), "success": False}
 
     async def search_code(
-            self, query: str, language: str = "", max_results: int = 10
+        self, query: str, language: str = "", max_results: int = 10
     ) -> Dict[str, Any]:
         """
         搜索代码示例
@@ -473,19 +492,20 @@ class WebTools:
 
         except Exception as e:
             return {"success": False, "error": f"代码搜索失败: {str(e)}"}
-    
+
     async def cleanup(self):
         """清理资源，关闭HTTP会话"""
-        if hasattr(self, 'session') and self.session and not self.session.closed:
+        if hasattr(self, "session") and self.session and not self.session.closed:
             await self.session.close()
             self.session = None
-    
+
     def __del__(self):
         """析构函数，确保会话被关闭"""
         try:
-            if hasattr(self, 'session') and self.session and not self.session.closed:
+            if hasattr(self, "session") and self.session and not self.session.closed:
                 # 尝试同步关闭会话（在析构函数中不能使用await）
                 import asyncio
+
                 try:
                     loop = asyncio.get_event_loop()
                     if loop.is_running():

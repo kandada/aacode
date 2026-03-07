@@ -340,34 +340,43 @@ class ClassMethodMapper:
         # 关键摘要（放在最前面，确保前2000字符包含最有价值的信息）
         lines.append("## 🎯 关键摘要（前2000字符内）")
         lines.append("")
-        
+
         # 1. 最重要的Python类和函数（前10个）
         lines.append("### 🐍 关键Python代码实体")
         lines.append("")
-        
+
         # 获取最重要的类（按文件路径排序，优先显示根目录和重要文件）
         all_classes = list(self.class_map.values())
         if all_classes:
             # 优先显示根目录和重要目录的类
             important_classes = []
             other_classes = []
-            
+
             for class_info in all_classes:
                 file_path = class_info["file"]
                 # 根目录、src目录、main目录的类更重要
-                if file_path.count("/") <= 1 or "src/" in file_path or "main" in file_path or "app" in file_path:
+                if (
+                    file_path.count("/") <= 1
+                    or "src/" in file_path
+                    or "main" in file_path
+                    or "app" in file_path
+                ):
                     important_classes.append(class_info)
                 else:
                     other_classes.append(class_info)
-            
+
             # 合并并限制数量
             top_classes = (important_classes + other_classes)[:8]
-            
+
             for i, class_info in enumerate(top_classes):
                 methods_count = len(class_info.get("methods", []))
                 attributes_count = len(class_info.get("attributes", []))
-                lines.append(f"{i+1}. **`{class_info['name']}`** (`{class_info['file']}:{class_info['line']}`)")
-                lines.append(f"   - 方法: {methods_count} 个, 属性: {attributes_count} 个")
+                lines.append(
+                    f"{i+1}. **`{class_info['name']}`** (`{class_info['file']}:{class_info['line']}`)"
+                )
+                lines.append(
+                    f"   - 方法: {methods_count} 个, 属性: {attributes_count} 个"
+                )
                 if class_info.get("bases"):
                     bases_str = ", ".join([f"`{base}`" for base in class_info["bases"]])
                     lines.append(f"   - 继承自: {bases_str}")
@@ -382,28 +391,35 @@ class ClassMethodMapper:
             # 优先显示根目录和重要目录的函数
             important_funcs = []
             other_funcs = []
-            
+
             for func_info in all_functions:
                 file_path = func_info["file"]
                 # 根目录、utils目录、helpers目录的函数更重要
-                if file_path.count("/") <= 1 or "utils/" in file_path or "helpers/" in file_path or "lib/" in file_path:
+                if (
+                    file_path.count("/") <= 1
+                    or "utils/" in file_path
+                    or "helpers/" in file_path
+                    or "lib/" in file_path
+                ):
                     important_funcs.append(func_info)
                 else:
                     other_funcs.append(func_info)
-            
+
             # 合并并限制数量
             top_functions = (important_funcs + other_funcs)[:8]
-            
+
             if top_functions:
                 lines.append("### 🔧 关键独立函数")
                 lines.append("")
                 for i, func_info in enumerate(top_functions):
                     args_str = ", ".join(func_info.get("args", []))
-                    lines.append(f"{i+1}. **`{func_info['name']}({args_str})`** (`{func_info['file']}:{func_info['line']}`)")
+                    lines.append(
+                        f"{i+1}. **`{func_info['name']}({args_str})`** (`{func_info['file']}:{func_info['line']}`)"
+                    )
                     if func_info.get("is_async"):
                         lines.append(f"   - 异步函数")
                     lines.append("")
-        
+
         lines.append("---")
         lines.append("*以下为完整详细分析*")
         lines.append("")
@@ -422,7 +438,7 @@ class ClassMethodMapper:
         lines.append("")
 
         # 按文件分组显示类
-        files_with_classes = {}
+        files_with_classes: dict[str, list] = {}
         for class_name, class_info in self.class_map.items():
             file_path = class_info["file"]
             if file_path not in files_with_classes:
@@ -484,7 +500,7 @@ class ClassMethodMapper:
                     lines.append("")
 
         # 按文件分组显示函数
-        files_with_functions = {}
+        files_with_functions: dict[str, list] = {}
         for func_name, func_info in self.function_map.items():
             file_path = func_info["file"]
             if file_path not in files_with_functions:
@@ -727,9 +743,9 @@ class MultiLangAnalyzer:
                     continue
 
                 try:
-                    lang = self._detect_language(file_path)
-                    if lang:
-                        self._analyze_file(file_path, lang)
+                    detected_lang = self._detect_language(file_path)
+                    if detected_lang:
+                        self._analyze_file(file_path, detected_lang)
                         analyzed_files += 1
                 except Exception as e:
                     print(
@@ -1263,7 +1279,7 @@ class MultiLangAnalyzer:
                 lines.append("")
 
                 # 按文件分组
-                files = {}
+                files: dict[str, list] = {}
                 for entity in entities:
                     file_path = entity["file"]
                     if file_path not in files:
@@ -1390,18 +1406,20 @@ class EnhancedClassMethodMapper:
         # 生成关键摘要（放在最前面，确保前2000字符包含最有价值的信息）
         lines.append("## 🎯 关键摘要（前2000字符内）")
         lines.append("")
-        
+
         # 1. 项目总体统计
         python_summary = self.python_mapper._generate_summary()
         multi_lang_summary = self.multi_lang_analyzer._generate_summary()
-        
+
         lines.append("### 📊 项目总体统计")
         lines.append("")
         lines.append(f"- **总文件数**: {multi_lang_summary.get('total_files', 0)}")
         lines.append(f"- **总代码行数**: {multi_lang_summary.get('total_lines', 0)}")
         lines.append(f"- **Python类数**: {python_summary.get('class_count', 0)}")
         lines.append(f"- **Python函数数**: {python_summary.get('function_count', 0)}")
-        lines.append(f"- **支持语言数**: {len(multi_lang_summary.get('languages', {}))}")
+        lines.append(
+            f"- **支持语言数**: {len(multi_lang_summary.get('languages', {}))}"
+        )
         lines.append("")
 
         # 2. 语言分布（最重要的信息）
@@ -1409,9 +1427,13 @@ class EnhancedClassMethodMapper:
         lines.append("")
         if multi_lang_summary.get("languages"):
             lang_stats = multi_lang_summary["languages"]
-            for lang, stats in sorted(lang_stats.items(), key=lambda x: x[1]["file_count"], reverse=True):
+            for lang, stats in sorted(
+                lang_stats.items(), key=lambda x: x[1]["file_count"], reverse=True
+            ):
                 if stats["file_count"] > 0:
-                    lines.append(f"- **{lang}**: {stats['file_count']} 个文件, {stats['total_lines']} 行代码")
+                    lines.append(
+                        f"- **{lang}**: {stats['file_count']} 个文件, {stats['total_lines']} 行代码"
+                    )
         else:
             lines.append("未检测到代码文件")
         lines.append("")
@@ -1419,30 +1441,39 @@ class EnhancedClassMethodMapper:
         # 3. 最重要的Python类和函数（前10个）
         lines.append("### 🐍 关键Python代码实体")
         lines.append("")
-        
+
         # 获取最重要的类（按文件路径排序，优先显示根目录和重要文件）
         all_classes = list(self.python_mapper.class_map.values())
         if all_classes:
             # 优先显示根目录和重要目录的类
             important_classes = []
             other_classes = []
-            
+
             for class_info in all_classes:
                 file_path = class_info["file"]
                 # 根目录、src目录、main目录的类更重要
-                if file_path.count("/") <= 1 or "src/" in file_path or "main" in file_path or "app" in file_path:
+                if (
+                    file_path.count("/") <= 1
+                    or "src/" in file_path
+                    or "main" in file_path
+                    or "app" in file_path
+                ):
                     important_classes.append(class_info)
                 else:
                     other_classes.append(class_info)
-            
+
             # 合并并限制数量
             top_classes = (important_classes + other_classes)[:10]
-            
+
             for i, class_info in enumerate(top_classes):
                 methods_count = len(class_info.get("methods", []))
                 attributes_count = len(class_info.get("attributes", []))
-                lines.append(f"{i+1}. **`{class_info['name']}`** (`{class_info['file']}:{class_info['line']}`)")
-                lines.append(f"   - 方法: {methods_count} 个, 属性: {attributes_count} 个")
+                lines.append(
+                    f"{i+1}. **`{class_info['name']}`** (`{class_info['file']}:{class_info['line']}`)"
+                )
+                lines.append(
+                    f"   - 方法: {methods_count} 个, 属性: {attributes_count} 个"
+                )
                 if class_info.get("bases"):
                     bases_str = ", ".join([f"`{base}`" for base in class_info["bases"]])
                     lines.append(f"   - 继承自: {bases_str}")
@@ -1457,28 +1488,35 @@ class EnhancedClassMethodMapper:
             # 优先显示根目录和重要目录的函数
             important_funcs = []
             other_funcs = []
-            
+
             for func_info in all_functions:
                 file_path = func_info["file"]
                 # 根目录、utils目录、helpers目录的函数更重要
-                if file_path.count("/") <= 1 or "utils/" in file_path or "helpers/" in file_path or "lib/" in file_path:
+                if (
+                    file_path.count("/") <= 1
+                    or "utils/" in file_path
+                    or "helpers/" in file_path
+                    or "lib/" in file_path
+                ):
                     important_funcs.append(func_info)
                 else:
                     other_funcs.append(func_info)
-            
+
             # 合并并限制数量
             top_functions = (important_funcs + other_funcs)[:10]
-            
+
             if top_functions:
                 lines.append("### 🔧 关键独立函数")
                 lines.append("")
                 for i, func_info in enumerate(top_functions):
                     args_str = ", ".join(func_info.get("args", []))
-                    lines.append(f"{i+1}. **`{func_info['name']}({args_str})`** (`{func_info['file']}:{func_info['line']}`)")
+                    lines.append(
+                        f"{i+1}. **`{func_info['name']}({args_str})`** (`{func_info['file']}:{func_info['line']}`)"
+                    )
                     if func_info.get("is_async"):
                         lines.append(f"   - 异步函数")
                     lines.append("")
-        
+
         lines.append("---")
         lines.append("*以下为完整详细分析*")
         lines.append("")
@@ -1533,7 +1571,7 @@ class EnhancedClassMethodMapper:
             if entities:
                 entity_count = len(entities)
                 # 按类型分组
-                type_counts = {}
+                type_counts: dict[str, int] = {}
                 for entity in entities:
                     entity_type = entity.get("type", "unknown")
                     type_counts[entity_type] = type_counts.get(entity_type, 0) + 1

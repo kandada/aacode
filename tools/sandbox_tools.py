@@ -29,13 +29,13 @@ class SandboxTools:
         )
 
         # MCP客户端
-        self.mcp_client = LocalMCPClient()  # 默认使用本地客户端
+        self.mcp_client: MCPClient | LocalMCPClient = LocalMCPClient()  # 默认使用本地客户端
 
         # 默认沙箱
         self.default_sandbox_id = None
 
     async def run_in_sandbox(
-        self, command: str, sandbox_id: str = None, timeout: int = 60
+        self, command: str, sandbox_id: str | None = None, timeout: int = 60
     ) -> Dict[str, Any]:
         """
         在沙箱中运行命令
@@ -67,17 +67,17 @@ class SandboxTools:
                 else:
                     return result
 
-            sandbox_id = self.default_sandbox_id
+            sandbox_id = self.default_sandbox_id or "default_sandbox"
 
         print(f"🛡️  在沙箱 {sandbox_id} 中执行: {command[:50]}...")
 
         # 在沙箱中执行命令
         return await self.sandbox_manager.execute_in_sandbox(
-            sandbox_id, command, timeout
+            sandbox_id or "default_sandbox", command, timeout
         )
 
     async def install_package(
-        self, package: str, package_manager: str = "pip", sandbox_id: str = None
+        self, package: str, package_manager: str = "pip", sandbox_id: str | None = None
     ) -> Dict[str, Any]:
         """
         在沙箱中安装软件包
@@ -105,7 +105,7 @@ class SandboxTools:
         return await self.run_in_sandbox(command, sandbox_id, timeout=120)
 
     async def call_mcp(
-        self, tool_name: str, arguments: Dict = None, mcp_server: str = None
+        self, tool_name: str, arguments: Dict[Any, Any] | None = None, mcp_server: str | None = None
     ) -> Dict[str, Any]:
         """
         调用MCP工具
@@ -126,16 +126,20 @@ class SandboxTools:
             self.mcp_client = MCPClient(server_url=mcp_server)
 
         # 确保已连接
-        if not hasattr(self.mcp_client, "session_id") or not self.mcp_client.session_id:
-            connected = await self.mcp_client.connect()
-            if not connected:
-                return {"error": "无法连接到MCP服务器"}
+        if isinstance(self.mcp_client, MCPClient):
+            if not self.mcp_client.session_id:
+                connected = await self.mcp_client.connect()
+                if not connected:
+                    return {"error": "无法连接到MCP服务器"}
+        else:
+            # LocalMCPClient always connects successfully
+            await self.mcp_client.connect()
 
         # 调用工具
         return await self.mcp_client.call_tool(tool_name, arguments or {})
 
     async def run_unsafe_script(
-        self, script: str, language: str = "python", sandbox_id: str = None
+        self, script: str, language: str = "python", sandbox_id: str | None = None
     ) -> Dict[str, Any]:
         """
         运行潜在不安全的脚本
@@ -196,7 +200,7 @@ class SandboxTools:
             pass
 
     async def create_isolated_environment(
-        self, sandbox_id: str = None, packages: List[str] = None
+        self, sandbox_id: str | None = None, packages: List[str] | None = None
     ) -> Dict[str, Any]:
         """
         创建隔离的Python环境

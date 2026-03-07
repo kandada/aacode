@@ -88,7 +88,7 @@ async def create_mock_model_caller(model_config: Dict):
 
                     response = client.chat.completions.create(
                         model=model_config.get("name", "gpt-4"),
-                        messages=messages,
+                        messages=messages,  # type: ignore
                         temperature=model_config.get("temperature", 0.1),
                         max_tokens=model_config.get("max_tokens", 2000),
                     )

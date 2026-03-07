@@ -24,7 +24,11 @@ class CodeTools:
         self.test_dir.mkdir(parents=True, exist_ok=True)
 
     async def execute_python(
-        self, code: str, timeout: Optional[int] = None, capture_output: bool = True, **kwargs
+        self,
+        code: str,
+        timeout: Optional[int] = None,
+        capture_output: bool = True,
+        **kwargs,
     ) -> Dict[str, Any]:
         """
         执行Python代码
@@ -45,7 +49,7 @@ class CodeTools:
                 from config import settings
 
                 timeout = settings.timeouts.code_execution
-            
+
             # 确保timeout是float类型
             timeout_float = float(timeout)
 
@@ -255,7 +259,7 @@ if __name__ == '__main__':
         """包装代码,添加安全检查和上下文"""
         # 使用绝对路径
         project_path_abs = self.project_path.resolve()
-        
+
         wrapped = f"""#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 

@@ -216,7 +216,7 @@ async def _rename_by_pattern(files: List[Path], target_dir: str) -> Dict[str, An
 
 async def _find_duplicates(files: List[Path]) -> Dict[str, Any]:
     """查找重复文件"""
-    file_hashes = {}
+    file_hashes: Dict[str, List[Path]] = {}
     duplicates = []
     processed_files = []
 
@@ -238,7 +238,7 @@ async def _find_duplicates(files: List[Path]) -> Dict[str, Any]:
                     "status": "duplicate"
                 })
             else:
-                file_hashes[file_hash] = file_path
+                file_hashes[file_hash] = [file_path]
                 processed_files.append({
                     "path": str(file_path),
                     "hash": file_hash,
@@ -253,12 +253,13 @@ async def _find_duplicates(files: List[Path]) -> Dict[str, Any]:
             })
 
     # 按重复组整理
-    duplicate_groups = {}
+    duplicate_groups: Dict[str, List[str]] = {}
     for dup in duplicates:
-        hash_key = dup["hash"]
+        hash_key = str(dup["hash"])
+        duplicate_path = str(dup["duplicate"])
         if hash_key not in duplicate_groups:
             duplicate_groups[hash_key] = []
-        duplicate_groups[hash_key].append(dup["duplicate"])
+        duplicate_groups[hash_key].append(duplicate_path)
 
     return {
         "duplicate_count": len(duplicates),

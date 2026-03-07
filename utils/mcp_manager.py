@@ -211,6 +211,7 @@ class MCPManager:
 
         try:
             # 创建客户端
+            client: MCPClient | LocalMCPClient
             if server_config.type == "sse":
                 # 检查URL是否有效
                 if not server_config.url:

@@ -7,6 +7,7 @@ import asyncio
 import json
 from typing import Dict, List, Any, Optional
 import aiohttp
+from aiohttp import ClientTimeout
 
 
 class MCPClient:
@@ -18,11 +19,11 @@ class MCPClient:
 
         self.server_url = server_url.rstrip('/')
         self.client_name = client_name
-        self.session_id = None
-        self.tools = {}
+        self.session_id: str | None = None
+        self.tools: dict[str, dict] = {}
 
         # HTTP会话
-        self.session = None
+        self.session: aiohttp.ClientSession | None = None
 
     async def connect(self) -> bool:
         """连接到MCP服务器"""
@@ -67,10 +68,12 @@ class MCPClient:
 
     async def list_tools(self) -> Dict[str, Any]:
         """列出可用工具"""
-        if not self.session_id:
+        if not self.session_id or not self.session:
             return {"error": "未连接到MCP服务器"}
 
         try:
+            if not self.session:
+                return {"error": "HTTP会话未初始化"}
             async with self.session.get(
                     f"{self.server_url}/sessions/{self.session_id}/tools"
             ) as response:
@@ -89,7 +92,7 @@ class MCPClient:
 
     async def call_tool(self,
                         tool_name: str,
-                        arguments: Dict = None,
+                        arguments: Dict[str, Any] | None = None,
                         timeout: int = 30) -> Dict[str, Any]:
         """调用MCP工具"""
         if not self.session_id:
@@ -104,10 +107,12 @@ class MCPClient:
                 "arguments": arguments or {}
             }
 
+            if not self.session:
+                return {"error": "HTTP会话未初始化"}
             async with self.session.post(
                     f"{self.server_url}/sessions/{self.session_id}/call",
                     json=payload,
-                    timeout=timeout
+                    timeout=ClientTimeout(total=timeout)
             ) as response:
 
                 if response.status == 200:
@@ -131,7 +136,7 @@ class MCPClient:
 
     async def execute_cli(self,
                           command: str,
-                          args: List[str] = None) -> Dict[str, Any]:
+                          args: List[str] | None = None) -> Dict[str, Any]:
         """
         通过MCP执行CLI命令
 
@@ -197,7 +202,7 @@ class LocalMCPClient:
             "count": len(self.tools)
         }
 
-    async def call_tool(self, tool_name: str, arguments: Dict = None) -> Dict[str, Any]:
+    async def call_tool(self, tool_name: str, arguments: Dict[str, Any] | None = None) -> Dict[str, Any]:
         """调用工具"""
         if tool_name not in self.tools:
             return {"error": f"工具不存在: {tool_name}"}

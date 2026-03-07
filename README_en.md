@@ -12,7 +12,7 @@
 * Bash universal adapter: flexible system access through safety guardrails
 * Context management: smart reduction strategies borrowed from Cursor and Manus
 * Asynchronous design: all blocking operations are asynchronous
-* Layered tool system: atomic tools, code package，skills.. multi-layer architecture
+* Layered tool system: atomic tools, sandbox tools, code package three-layer architecture
 * Safety guardrails: comprehensive command and path security checks
 * Extensible architecture: support for custom tools and model backends
 
@@ -61,12 +61,39 @@ python main.py --session session_20250128_123456_0 "Continue task"
 export LLM_API_KEY="your-openai-key"
 export LLM_API_URL="https://api.openai.com/v1"
 export LLM_MODEL_NAME="gpt-4"
+export LLM_GATEWAY="openai"
+export LLM_MULTIMODAL="false"
 
 # Other OpenAI API compatible models (deepseek, etc.)
 export LLM_API_KEY="your-api-key"
 export LLM_API_URL="https://your-api-endpoint/v1"
 export LLM_MODEL_NAME="your-model-name"
+export LLM_GATEWAY="openai"
+export LLM_MULTIMODAL="false"
+
+# Multimodal models (e.g., MiniMax, Kimi, etc.)
+export LLM_API_KEY="your-kimi-key"
+export LLM_API_URL="https://api.moonshot.cn/v1"
+export LLM_MODEL_NAME="kimi-k2.5"
+export LLM_GATEWAY="anthropic"
+export LLM_MULTIMODAL="true"
 ```
+
+### Multimodal Models
+Supports various multimodal models (e.g., Kimi K2.5, MiniMax M2.5, etc.). Configure in .env file or aacode_config.yaml:
+- `MULTIMODAL_API_KEY`: Multimodal model API key
+- `MULTIMODAL_API_URL`: Multimodal model API address (optional, defaults to model-specific address)
+
+### Search Engine
+Currently only supports SearXNG. Users need to deploy their own and configure the URL in aacode_config.yaml, but it is recommended to configure via environment variable SEARCHXNG_URL.
+
+### MCP
+- Users can configure MCP resources (supporting stdio and sse) in aacode_config.yaml
+
+### Adding/Removing Skills
+- Add skill directory under skills directory (containing SKILL.md and implementation file)
+- Configure in aacode_config.yaml: add to enabled_skills list; add metadata in skills_metadata (name, description, trigger keywords)
+- After completing configuration, the Agent will autonomously use skills through "progressive disclosure". You can add more Skills that you think are useful for your tasks.
 
 ## 📋 Usage Examples
 

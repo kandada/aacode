@@ -53,5 +53,5 @@ result = analyze_python_code(code)
 print(json.dumps(result, indent=2))
 """
 
-        # 执行分析
-        return await self.execute_python(analysis_code)
+        # 执行分析 - 使用run_shell执行Python代码
+        return await self.run_shell(f"python3 -c {repr(analysis_code)}")

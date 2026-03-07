@@ -79,6 +79,7 @@ class AsyncReActLoop:
 
         # Token计数器（用于智能缩减）
         from utils.session_manager import _load_tiktoken_encoding
+
         self.encoding = _load_tiktoken_encoding()
 
     async def run(
@@ -299,7 +300,7 @@ class AsyncReActLoop:
                 step.actions.append(action_item)
                 all_observations.append(observation)  # Agent获取完整内容
                 all_observations_for_display.append(
-                    observation_for_display
+                    observation_for_display or observation or ""
                 )  # 用户看到简化版本
 
                 # 🔥 新增：从错误中自动更新待办清单

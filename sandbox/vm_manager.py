@@ -35,8 +35,8 @@ class SandboxManager:
         ]
 
     async def create_sandbox(self,
-                             sandbox_id: str = None,
-                             software: List[str] = None) -> Dict[str, Any]:
+                             sandbox_id: str | None = None,
+                             software: List[str] | None = None) -> Dict[str, Any]:
         """
         创建沙箱环境
 
@@ -181,7 +181,7 @@ class SandboxManager:
     async def copy_to_sandbox(self,
                               sandbox_id: str,
                               source_path: str,
-                              dest_path: str = None) -> Dict[str, Any]:
+                              dest_path: str | None = None) -> Dict[str, Any]:
         """复制文件到沙箱"""
         if sandbox_id not in self.active_sandboxes:
             return {"error": f"沙箱不存在: {sandbox_id}"}

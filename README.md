@@ -62,15 +62,28 @@ python main.py --session session_20250128_123456_0 "继续任务"
 export LLM_API_KEY="your-openai-key"
 export LLM_API_URL="https://api.openai.com/v1"
 export LLM_MODEL_NAME="gpt-4"
+export LLM_GATEWAY="openai"
+export LLM_MULTIMODAL="false"
 
 # 其他兼容OpenAI API的模型（deepseek等）
 export LLM_API_KEY="your-api-key"
 export LLM_API_URL="https://your-api-endpoint/v1"
 export LLM_MODEL_NAME="your-model-name"
+export LLM_GATEWAY="openai"
+export LLM_MULTIMODAL="false"
+
+# 其他同时支持多模态的模型（如MiniMax、Kimi等）
+export LLM_API_KEY="your-kimi-key"
+export LLM_API_URL="https://api.moonshot.cn/v1"
+export LLM_MODEL_NAME="kimi-k2.5"
+export LLM_GATEWAY="anthropic"
+export LLM_MULTIMODAL="true"
 ```
 
-### 多模态模型
-当前仅支持moonshot kimi-k2.5模型，请在aacode_config.yaml中配置api_key
+### 多模态模型用于支持多模态工具
+支持多种多模态模型（如Kimi K2.5、MiniMax M2.5等），请在.env文件或aacode_config.yaml中配置：
+- `MULTIMODAL_API_KEY`: 多模态模型API密钥
+- `MULTIMODAL_API_URL`: 多模态模型API地址（可选，默认使用模型对应的地址）
 
 ### 搜索引擎
 目前仅支持SearXNG，需要用户自己部署并将url配置到aacode_config.yaml中，但建议还是配置环境变量SEARCHXNG_URL

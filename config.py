@@ -3,6 +3,7 @@
 """
 配置管理
 """
+
 import os
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -14,22 +15,107 @@ import yaml
 @dataclass
 class ModelConfig:
     """模型配置"""
-    name: str = "gpt-4"
+
+    name: str = "deepseek-chat"
     api_key: Optional[str] = None
     base_url: Optional[str] = None
     temperature: float = 0.1
     max_tokens: int = 8000
+    gateway: str = "openai"  # openai, anthropic
+    multimodal: bool = False  # 是否支持多模态
 
     def __post_init__(self):
         # 环境变量优先，yaml配置作为后备
-        self.api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY") or self.api_key
-        self.base_url = os.getenv("LLM_API_URL") or os.getenv("OPENAI_BASE_URL") or self.base_url or "https://api.openai.com/v1"
-        self.name = os.getenv("LLM_MODEL_NAME") or self.name or "gpt-4"
+        self.api_key = (
+            os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY") or self.api_key
+        )
+        # 先不设置默认base_url，让_auto_detect_model_config根据模型名称决定
+        self.base_url = (
+            os.getenv("LLM_API_URL")
+            or os.getenv("OPENAI_BASE_URL")
+            or self.base_url
+        )
+        self.name = os.getenv("LLM_MODEL_NAME") or self.name or "deepseek-chat"
+        self.gateway = os.getenv("LLM_GATEWAY") or self.gateway or "openai"
+
+        # 多模态配置（环境变量优先）
+        llm_multimodal = os.getenv("LLM_MULTIMODAL")
+        if llm_multimodal is not None:
+            # 环境变量可以覆盖自动检测
+            self.multimodal = llm_multimodal.lower() in ["true", "1", "yes", "on"]
+        else:
+            # 根据模型名称自动设置多模态和网关
+            self._auto_detect_model_config()
+
+    def _auto_detect_model_config(self):
+        """根据模型名称自动检测配置"""
+        model_lower = self.name.lower()
+
+        # 多模态模型检测（只有明确支持多模态的模型）
+        # 重置为默认值，然后根据模型名称检测
+        self.multimodal = False  # 默认不是多模态
+        
+        # 更灵活的多模态模型检测，支持多种名称格式
+        model_lower_clean = model_lower.replace("-", "_").replace(" ", "_")
+        
+        # 检测Kimi模型（支持多种格式）
+        kimi_patterns = ["kimi", "moonshot"]
+        is_kimi = any(pattern in model_lower_clean for pattern in kimi_patterns)
+        
+        # 检测MiniMax模型
+        minimax_patterns = ["minimax", "minimaxi"]
+        is_minimax = any(pattern in model_lower_clean for pattern in minimax_patterns)
+        
+        if is_kimi or is_minimax:
+            self.multimodal = True
+            print(f"🔍 检测到多模态模型: {self.name} (格式: {model_lower_clean})")
+
+        # 网关检测（使用清理后的模型名称）
+        if is_minimax:
+            self.gateway = "anthropic"
+            # MiniMax默认URL - 对于Anthropic网关，使用/anthropic端点（避免重复/v1）
+            if not self.base_url or "openai" in self.base_url:
+                self.base_url = "https://api.minimax.chat/anthropic"
+            # 如果用户提供了minimaxi.com的URL，确保格式正确
+            elif "minimaxi.com" in self.base_url or "minimax.chat" in self.base_url:
+                # 确保URL以正确的格式结束
+                if self.base_url.endswith("/v1"):
+                    # /v1 会导致重复路径，改为 /anthropic
+                    self.base_url = self.base_url[:-3] + "/anthropic"
+                elif self.base_url.endswith("/v1/anthropic"):
+                    # /v1/anthropic 会导致重复/v1，改为 /anthropic
+                    self.base_url = self.base_url.replace("/v1/anthropic", "/anthropic")
+                elif not self.base_url.endswith("/anthropic"):
+                    # 确保以 /anthropic 结尾
+                    self.base_url = self.base_url.rstrip("/") + "/anthropic"
+                # 确保有协议
+                if not self.base_url.startswith("http"):
+                    self.base_url = f"https://{self.base_url}"
+        elif is_kimi:
+            self.gateway = "openai"
+            # Kimi默认URL
+            if not self.base_url or "openai" in self.base_url:
+                self.base_url = "https://api.moonshot.cn/v1"
+        elif "deepseek" in model_lower:
+            self.gateway = "openai"
+            # DeepSeek默认URL
+            if not self.base_url or "openai" in self.base_url:
+                self.base_url = "https://api.deepseek.com/v1"
+        elif "gpt" in model_lower:
+            self.gateway = "openai"
+            # OpenAI默认URL
+            if (
+                not self.base_url
+                or "minimax" in self.base_url
+                or "moonshot" in self.base_url
+            ):
+                self.base_url = "https://api.openai.com/v1"
 
 
 @dataclass
 class ToolConfig:
     """工具配置"""
+
     # 原子工具
     enable_file_ops: bool = True
     enable_shell: bool = True
@@ -53,6 +139,7 @@ class ToolConfig:
 @dataclass
 class SafetyConfig:
     """安全配置"""
+
     enable_safety_guard: bool = True
     restrict_to_project: bool = True
     allow_network: bool = False
@@ -63,22 +150,24 @@ class SafetyConfig:
 @dataclass
 class ContextConfig:
     """上下文配置"""
+
     strategy: str = "file_based"  # file_based, memory, hybrid
     max_context_length: int = 16000
     compact_threshold: int = 12000
     history_compression: bool = True
     use_vector_store: bool = False
     # 新增：上下文缩减配置
-    compact_trigger_tokens: int = 8000      # 触发缩减的token数阈值
-    compact_keep_messages: int = 20         # 缩减后保留的消息数
-    compact_keep_rounds: int = 8            # 缩减后保留的对话轮数（最近N轮）
-    compact_summary_steps: int = 10         # 摘要包含的步骤数
-    compact_protect_first_rounds: int = 3   # 保护前N轮（任务规划、初始理解）
+    compact_trigger_tokens: int = 8000  # 触发缩减的token数阈值
+    compact_keep_messages: int = 20  # 缩减后保留的消息数
+    compact_keep_rounds: int = 8  # 缩减后保留的对话轮数（最近N轮）
+    compact_summary_steps: int = 10  # 摘要包含的步骤数
+    compact_protect_first_rounds: int = 3  # 保护前N轮（任务规划、初始理解）
 
 
 @dataclass
 class AgentConfig:
     """Agent配置"""
+
     max_react_iterations: int = 50
     max_sub_agent_iterations: int = 30
     enable_auto_planning: bool = True
@@ -88,6 +177,7 @@ class AgentConfig:
 @dataclass
 class MCPConfig:
     """MCP服务器配置"""
+
     enabled: bool = True
     # STD类型MCP服务器配置
     # 注意：具体配置从aacode_config.yaml文件加载，这里只保留空列表
@@ -104,53 +194,59 @@ class MCPConfig:
 @dataclass
 class OutputConfig:
     """输出处理配置"""
+
     # 截断阈值（放宽限制，减少过度截断）
-    test_output_threshold: int = 15000      # 测试输出阈值（从10000放宽）
-    code_content_threshold: int = 30000     # 代码内容阈值（从20000放宽）
-    normal_output_threshold: int = 15000     # 普通输出阈值（放宽以支持长HTML内容）
-    
+    test_output_threshold: int = 15000  # 测试输出阈值（从10000放宽）
+    code_content_threshold: int = 30000  # 代码内容阈值（从20000放宽）
+    normal_output_threshold: int = 15000  # 普通输出阈值（放宽以支持长HTML内容）
+
     # 预览长度（增加预览内容）
-    test_output_preview: int = 5000         # 测试输出预览长度（从3000增加）
-    code_content_preview: int = 8000        # 代码内容预览长度（从5000增加）
-    normal_output_preview: int = 3000       # 普通输出预览长度（从2000增加）
-    
+    test_output_preview: int = 5000  # 测试输出预览长度（从3000增加）
+    code_content_preview: int = 8000  # 代码内容预览长度（从5000增加）
+    normal_output_preview: int = 3000  # 普通输出预览长度（从2000增加）
+
     # 测试摘要
-    test_summary_enabled: bool = True       # 是否启用测试摘要
-    test_summary_max_lines: int = 20        # 摘要最大行数
+    test_summary_enabled: bool = True  # 是否启用测试摘要
+    test_summary_max_lines: int = 20  # 摘要最大行数
 
 
 @dataclass
 class TimeoutConfig:
     """超时配置"""
-    shell_command: int = 30         # Shell命令执行超时（秒）
-    tool_execution: int = 60        # 工具执行超时（秒）
-    model_summary: int = 30         # 模型摘要生成超时（秒）
-    file_search: int = 5            # 文件搜索超时（秒）
-    code_execution: int = 60        # 代码执行超时（秒）
-    sandbox_command: int = 120      # 沙箱命令超时（秒）
-    web_request: int = 30           # 网络请求超时（秒）
+
+    shell_command: int = 30  # Shell命令执行超时（秒）
+    tool_execution: int = 60  # 工具执行超时（秒）
+    model_summary: int = 30  # 模型摘要生成超时（秒）
+    file_search: int = 5  # 文件搜索超时（秒）
+    code_execution: int = 60  # 代码执行超时（秒）
+    sandbox_command: int = 120  # 沙箱命令超时（秒）
+    web_request: int = 30  # 网络请求超时（秒）
 
 
 @dataclass
 class LimitsConfig:
     """限制配置"""
-    max_file_list_results: int = 100    # 文件列表最大结果数
-    max_search_results: int = 20        # 搜索最大结果数
-    max_retries: int = 3                # 最大重试次数
-    shell_output_preview: int = 200     # Shell输出预览长度（字符）
-    max_auto_read_lines: int = 200      # 超过此行数时提供分段建议
-    structure_preview_lines: int = 50   # 结构预览显示的行数
-    max_context_files: int = 50         # 上下文中显示的最大文件数
+
+    max_file_list_results: int = 100  # 文件列表最大结果数
+    max_search_results: int = 20  # 搜索最大结果数
+    max_retries: int = 3  # 最大重试次数
+    shell_output_preview: int = 200  # Shell输出预览长度（字符）
+    max_auto_read_lines: int = 200  # 超过此行数时提供分段建议
+    structure_preview_lines: int = 50  # 结构预览显示的行数
+    max_context_files: int = 50  # 上下文中显示的最大文件数
     prioritize_file_types: bool = True  # 是否优先显示重要文件类型
 
 
 @dataclass
 class SkillsConfig:
     """Skills配置"""
-    enabled: bool = True                # 是否启用skills功能
-    skills_dir: str = "skills"          # Skills目录（相对于项目根目录）
-    auto_discover: bool = True          # 是否自动发现skills
-    enabled_skills: List[str] = field(default_factory=list)  # 默认启用的skills列表（空列表，从文件加载）
+
+    enabled: bool = True  # 是否启用skills功能
+    skills_dir: str = "skills"  # Skills目录（相对于项目根目录）
+    auto_discover: bool = True  # 是否自动发现skills
+    enabled_skills: List[str] = field(
+        default_factory=list
+    )  # 默认启用的skills列表（空列表，从文件加载）
     # Skills元数据配置 - 用于渐进式披露，提高token效率
     # 格式：skill_name: {name: 显示名称, description: 简短描述, trigger_keywords: [关键词列表]}
     # 注意：具体配置从skills/skills_metadata.yaml文件加载，这里只保留空字典
@@ -160,6 +256,7 @@ class SkillsConfig:
 @dataclass
 class MultimodalModelConfig:
     """单个多模态模型配置"""
+
     name: str = ""
     provider: str = ""
     base_url: str = ""
@@ -168,33 +265,54 @@ class MultimodalModelConfig:
     video: bool = False
     max_image_size: int = 10485760  # 10MB
     max_video_size: int = 104857600  # 100MB
-    supported_formats: Dict[str, List[str]] = field(default_factory=lambda: {
-        "images": [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"],
-        "videos": [".mp4", ".avi", ".mov", ".mkv", ".webm"]
-    })
+    supported_formats: Dict[str, List[str]] = field(
+        default_factory=lambda: {
+            "images": [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"],
+            "videos": [".mp4", ".avi", ".mov", ".mkv", ".webm"],
+        }
+    )
 
 
 @dataclass
 class MultimodalConfig:
     """多模态模型配置"""
-    enabled: bool = True               # 是否启用多模态功能
+
+    enabled: bool = True  # 是否启用多模态功能
     default_model: str = "moonshot_kimi_k2.5"  # 默认使用的多模态模型
-    models: Dict[str, Any] = field(default_factory=lambda: {
-        "moonshot_kimi_k2.5": {
-            "name": "kimi-k2.5",
-            "provider": "moonshot",
-            "base_url": "https://api.moonshot.cn/v1",
-            "api_key": "",
-            "vision": True,
-            "video": True,
-            "max_image_size": 10485760,
-            "max_video_size": 104857600,
-            "supported_formats": {
-                "images": [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"],
-                "videos": [".mp4", ".avi", ".mov", ".mkv", ".webm"]
-            }
+    models: Dict[str, Any] = field(
+        default_factory=lambda: {
+            "moonshot_kimi_k2.5": {
+                "name": "kimi-k2.5",
+                "provider": "moonshot",
+                "gateway": "openai",
+                "base_url": "https://api.moonshot.cn/v1",
+                "api_key": "",
+                "vision": True,
+                "video": True,
+                "max_image_size": 10485760,
+                "max_video_size": 104857600,
+                "supported_formats": {
+                    "images": [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"],
+                    "videos": [".mp4", ".avi", ".mov", ".mkv", ".webm"],
+                },
+            },
+            "minimax_m2.5": {
+                "name": "MiniMax-M2.5",
+                "provider": "minimax",
+                "gateway": "anthropic",
+                "base_url": "https://api.minimax.chat/anthropic",
+                "api_key": "",
+                "vision": True,
+                "video": True,
+                "max_image_size": 10485760,
+                "max_video_size": 104857600,
+                "supported_formats": {
+                    "images": [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"],
+                    "videos": [".mp4", ".avi", ".mov", ".mkv", ".webm"],
+                },
+            },
         }
-    })
+    )
 
 
 class Settings:
@@ -219,7 +337,7 @@ class Settings:
 
         # 从文件加载配置
         self.load_config()
-        
+
         # 从环境变量更新配置（环境变量优先）
         self._load_from_env()
 
@@ -227,7 +345,7 @@ class Settings:
         """从文件加载配置"""
         if self.config_path.exists():
             try:
-                with open(self.config_path, 'r', encoding='utf-8') as f:
+                with open(self.config_path, "r", encoding="utf-8") as f:
                     config_data = yaml.safe_load(f)
 
                 # 更新配置
@@ -244,11 +362,11 @@ class Settings:
             "safety": asdict(self.safety),
             "context": asdict(self.context),
             "mcp": asdict(self.mcp),
-            "skills": asdict(self.skills)
+            "skills": asdict(self.skills),
         }
 
         try:
-            with open(self.config_path, 'w', encoding='utf-8') as f:
+            with open(self.config_path, "w", encoding="utf-8") as f:
                 yaml.dump(config_data, f, default_flow_style=False, allow_unicode=True)
         except Exception as e:
             print(f"⚠️ 配置文件保存失败: {e}")
@@ -256,6 +374,38 @@ class Settings:
     def _load_from_env(self):
         """从环境变量加载配置（环境变量优先）"""
         # 环境变量优先，覆盖yaml配置
+
+        # 模型配置
+        llm_api_key = os.getenv("LLM_API_KEY")
+        if llm_api_key:
+            self.model.api_key = llm_api_key
+        llm_api_url = os.getenv("LLM_API_URL")
+        if llm_api_url:
+            self.model.base_url = llm_api_url
+        llm_model_name = os.getenv("LLM_MODEL_NAME")
+        if llm_model_name:
+            self.model.name = llm_model_name
+        llm_gateway = os.getenv("LLM_GATEWAY")
+        if llm_gateway:
+            self.model.gateway = llm_gateway
+        
+        # 多模态配置
+        llm_multimodal = os.getenv("LLM_MULTIMODAL")
+        if llm_multimodal is not None:
+            # 触发ModelConfig的__post_init__重新加载
+            self.model.multimodal = llm_multimodal.lower() in ["true", "1", "yes", "on"]
+        
+        # 多模态模型选择
+        multimodal_model = os.getenv("MULTIMODAL_MODEL")
+        if multimodal_model and multimodal_model in self.multimodal.models:
+            self.multimodal.default_model = multimodal_model
+        
+        # 多模态API密钥
+        multimodal_api_key = os.getenv("MULTIMODAL_API_KEY")
+        if multimodal_api_key and multimodal_model in self.multimodal.models:
+            self.multimodal.models[multimodal_model]["api_key"] = multimodal_api_key
+
+        # 搜索配置
         search_api_url = os.getenv("SEARCHXNG_URL")
         if search_api_url:
             self.tools.search_api_url = search_api_url
@@ -271,12 +421,18 @@ class Settings:
                     if "truncate_thresholds" in values:
                         thresholds = values["truncate_thresholds"]
                         if "test_output" in thresholds:
-                            self.output.test_output_threshold = thresholds["test_output"]
+                            self.output.test_output_threshold = thresholds[
+                                "test_output"
+                            ]
                         if "code_content" in thresholds:
-                            self.output.code_content_threshold = thresholds["code_content"]
+                            self.output.code_content_threshold = thresholds[
+                                "code_content"
+                            ]
                         if "normal_output" in thresholds:
-                            self.output.normal_output_threshold = thresholds["normal_output"]
-                    
+                            self.output.normal_output_threshold = thresholds[
+                                "normal_output"
+                            ]
+
                     # 处理preview_lengths
                     if "preview_lengths" in values:
                         previews = values["preview_lengths"]
@@ -285,15 +441,19 @@ class Settings:
                         if "code_content" in previews:
                             self.output.code_content_preview = previews["code_content"]
                         if "normal_output" in previews:
-                            self.output.normal_output_preview = previews["normal_output"]
-                    
+                            self.output.normal_output_preview = previews[
+                                "normal_output"
+                            ]
+
                     # 处理test_summary
                     if "test_summary" in values:
                         summary = values["test_summary"]
                         if "enabled" in summary:
                             self.output.test_summary_enabled = summary["enabled"]
                         if "max_summary_lines" in summary:
-                            self.output.test_summary_max_lines = summary["max_summary_lines"]
+                            self.output.test_summary_max_lines = summary[
+                                "max_summary_lines"
+                            ]
             elif section == "timeouts":
                 # 处理timeouts配置
                 if isinstance(values, dict):
@@ -318,10 +478,10 @@ class Settings:
                     for key, value in values.items():
                         if hasattr(self.skills, key):
                             setattr(self.skills, key, value)
-            
+
             # 加载skills/skills_metadata.yaml作为元数据源（优先级高于aacode_config.yaml中的配置）
             self._load_skills_metadata_from_file()
-            
+
             if section == "multimodal":
                 # 处理多模态配置
                 if isinstance(values, dict):
@@ -329,10 +489,14 @@ class Settings:
                         if hasattr(self.multimodal, key):
                             setattr(self.multimodal, key, value)
             elif section == "model":
-                pass  # model已在上面处理
+                # 处理model配置
+                if isinstance(values, dict):
+                    for key, value in values.items():
+                        if hasattr(self.model, key):
+                            setattr(self.model, key, value)
             elif hasattr(self, section):
                 section_obj = getattr(self, section)
-                if hasattr(section_obj, '__dataclass_fields__'):
+                if hasattr(section_obj, "__dataclass_fields__"):
                     for key, value in values.items():
                         if hasattr(section_obj, key):
                             setattr(section_obj, key, value)
@@ -346,14 +510,16 @@ class Settings:
             "api_key": os.getenv("LLM_API_KEY") or self.model.api_key,
             "base_url": os.getenv("LLM_API_URL") or self.model.base_url,
             "temperature": self.model.temperature,
-            "max_tokens": self.model.max_tokens
+            "max_tokens": self.model.max_tokens,
+            "gateway": os.getenv("LLM_GATEWAY") or self.model.gateway or "openai",
+            "multimodal": self.model.multimodal,
         }
-    
+
     @property
     def MAX_REACT_ITERATIONS(self):
         """获取最大React迭代次数"""
         return self.agent.max_react_iterations
-    
+
     @property
     def MAX_SUB_AGENT_ITERATIONS(self):
         """获取子Agent最大迭代次数"""
@@ -363,29 +529,90 @@ class Settings:
         """从skills/skills_metadata.yaml加载配置（优先级最高）"""
         project_root = Path(__file__).parent
         skills_metadata_file = project_root / "skills" / "skills_metadata.yaml"
-        
+
         if skills_metadata_file.exists():
             try:
-                with open(skills_metadata_file, 'r', encoding='utf-8') as f:
+                with open(skills_metadata_file, "r", encoding="utf-8") as f:
                     file_config = yaml.safe_load(f)
-                
+
                 if file_config and isinstance(file_config, dict):
                     # 读取enabled列表（文件优先）
-                    file_enabled = file_config.get('enabled', [])
+                    file_enabled = file_config.get("enabled", [])
                     if file_enabled:
                         self.skills.enabled_skills = file_enabled
-                    
+
                     # 读取metadata（文件优先）
-                    file_metadata = file_config.get('metadata', {})
+                    file_metadata = file_config.get("metadata", {})
                     if file_metadata:
                         self.skills.skills_metadata = file_metadata
             except Exception as e:
                 print(f"⚠️ Skills配置文件加载失败: {e}")
 
+    def validate(self) -> List[str]:
+        """验证配置，返回错误消息列表"""
+        errors = []
+
+        # 检查必需的API密钥
+        if (
+            not self.model.api_key
+            and not os.getenv("LLM_API_KEY")
+            and not os.getenv("OPENAI_API_KEY")
+        ):
+            errors.append(
+                "未配置LLM API密钥。请设置环境变量 LLM_API_KEY 或 OPENAI_API_KEY，或在配置文件中设置 model.api_key"
+            )
+
+        # 检查多模态配置（如果启用且当前模型是多模态的）
+        # 只有当多模态功能启用且当前模型是多模态模型时才检查多模态API密钥
+        if self.multimodal.enabled and self.model.multimodal:
+            for model_name, model_config in self.multimodal.models.items():
+                # 只检查与当前模型相关的多模态配置
+                model_lower = self.model.name.lower()
+                config_name = model_config.get("name", "").lower()
+                
+                # 如果当前模型名称包含多模态配置的名称，则检查该配置
+                if config_name in model_lower or model_lower in config_name:
+                    if model_config.get("api_key") == "" and not os.getenv(
+                        f"{model_config.get('provider', '').upper()}_API_KEY"
+                    ):
+                        errors.append(
+                            f"多模态模型 {model_name} 缺少API密钥。请设置环境变量 {model_config.get('provider', '').upper()}_API_KEY 或在配置文件中设置"
+                        )
+
+        # 检查搜索配置（如果启用）
+        if (
+            self.tools.enable_web_search
+            and not self.tools.search_api_url
+            and not os.getenv("SEARCHXNG_URL")
+        ):
+            errors.append(
+                "Web搜索已启用但未配置搜索API URL。请设置环境变量 SEARCHXNG_URL 或在配置文件中设置 tools.search_api_url"
+            )
+
+        return errors
+
+    def get_validated_config(self) -> Dict[str, Any]:
+        """获取验证后的配置（如果验证失败则抛出异常）"""
+        errors = self.validate()
+        if errors:
+            raise ValueError(
+                f"配置验证失败:\n" + "\n".join(f"  - {error}" for error in errors)
+            )
+
+        return {
+            "model": asdict(self.model),
+            "tools": asdict(self.tools),
+            "safety": asdict(self.safety),
+            "context": asdict(self.context),
+            "agent": asdict(self.agent),
+            "mcp": asdict(self.mcp),
+            "output": asdict(self.output),
+            "timeouts": asdict(self.timeouts),
+            "limits": asdict(self.limits),
+            "skills": asdict(self.skills),
+            "multimodal": asdict(self.multimodal),
+        }
+
 
 # 全局设置实例
 settings = Settings()
-
-
-
-

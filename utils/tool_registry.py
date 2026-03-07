@@ -100,7 +100,7 @@ class ToolSchema:
                     type_errors.append(error)
 
         if type_errors:
-            return False, "\n".join(type_errors)
+            return False, "\n".join([e for e in type_errors if e])
 
         return True, None
 
@@ -249,7 +249,8 @@ class ToolRegistry:
         error_msg += "可用工具列表：\n"
         for tool in self.list_tools():
             schema = self.get_schema(tool)
-            error_msg += f"  - {tool}: {schema.description[:60]}...\n"
+            if schema and schema.description:
+                error_msg += f"  - {tool}: {schema.description[:60]}...\n"
 
         return error_msg
 
