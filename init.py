@@ -61,7 +61,7 @@ def init_project():
     env_file = Path(".env")
     config = {}
     config_exists = False
-    
+
     if env_file.exists():
         print("\n📄 检测到已存在的.env配置文件")
         skip_choice = input("是否跳过模型配置，使用现有配置? (Y/n): ").strip().lower()
@@ -74,12 +74,12 @@ def init_project():
                     if line and "=" in line and not line.startswith("#"):
                         key, value = line.split("=", 1)
                         config[key] = value
-            
+
             # 标记配置已存在，跳过配置步骤
             config_exists = True
         else:
             print("🔧 开始配置新的模型设置")
-    
+
     if not config_exists:
         # 设置环境变量提示
         print("\n🔧 设置模型配置:")
@@ -122,36 +122,21 @@ def init_project():
 
         if model_choice == "1":
             model_name = "deepseek-chat"
-            if gateway == "anthropic":
-                print("⚠️  DeepSeek需要OpenAI网关，自动切换网关")
-                gateway = "openai"
-                config["LLM_GATEWAY"] = gateway
         elif model_choice == "2":
             model_name = "MiniMax-M2.5"
-            if gateway == "openai":
-                print("⚠️  MiniMax需要Anthropic网关，自动切换网关")
-                gateway = "anthropic"
-                config["LLM_GATEWAY"] = gateway
         elif model_choice == "3":
             model_name = "kimi-k2.5"
-            if gateway == "anthropic":
-                print("⚠️  Kimi需要OpenAI网关，自动切换网关")
-                gateway = "openai"
-                config["LLM_GATEWAY"] = gateway
-            
             # 询问用户确认模型名称格式
             print(f"\n⚠️  注意: Kimi模型名称可能有不同格式")
             print(f"默认使用: {model_name}")
-            custom_name = input("如果需要使用其他格式，请输入模型名称 (按Enter使用默认): ").strip()
+            custom_name = input(
+                "如果需要使用其他格式，请输入模型名称 (按Enter使用默认): "
+            ).strip()
             if custom_name:
                 model_name = custom_name
                 print(f"✅ 使用自定义模型名称: {model_name}")
         elif model_choice == "4":
             model_name = "gpt4"
-            if gateway == "anthropic":
-                print("⚠️  GPT需要OpenAI网关，自动切换网关")
-                gateway = "openai"
-                config["LLM_GATEWAY"] = gateway
         elif model_choice == "5":
             model_name = input("请输入模型名称: ").strip()
             while not model_name:
@@ -164,7 +149,7 @@ def init_project():
 
         # API URL (根据模型和网关自动设置默认值)
         print(f"\n模型 '{model_name}' 的默认API URL:")
-        
+
         # 根据模型和网关设置默认URL
         model_lower = model_name.lower()
         if "minimax" in model_lower:
@@ -176,32 +161,48 @@ def init_project():
                 default_url = "https://api.minimax.chat/v1"
         elif "kimi" in model_lower:
             default_url = "https://api.moonshot.cn/v1"
+            if gateway == "anthropic":
+                default_url = "https://api.moonshot.cn/anthropic"
+            else:
+                default_url = "https://api.moonshot.cn/v1"
         elif "deepseek" in model_lower:
-            default_url = "https://api.deepseek.com/v1"
+            # default_url = "https://api.deepseek.com/v1"
+            if gateway == "anthropic":
+                default_url = "https://api.deepseek.com/anthropic"
+            else:
+                default_url = "https://api.deepseek.com/v1"
         else:
             default_url = "https://api.openai.com/v1"
 
         print(f"默认: {default_url}")
         if "minimax" in model_lower and gateway == "anthropic":
-            print("💡 提示: MiniMax使用Anthropic网关时，需要使用/anthropic端点，避免重复的/v1路径问题")
+            print(
+                "💡 提示: MiniMax使用Anthropic网关时，需要使用/anthropic端点，避免重复的/v1路径问题。其他模型类似"
+            )
             # print("")
-        
+
         url_choice = input("按Enter使用默认URL，或输入自定义URL: ").strip()
 
         if url_choice:
             api_url = url_choice
         else:
             api_url = default_url
-        
+
         # 检查MiniMax + Anthropic网关的URL兼容性
         if "minimax" in model_lower and gateway == "anthropic":
             # 如果用户输入了/v1结尾的URL，警告可能有问题
             if api_url.endswith("/v1") and not api_url.endswith("/v1/anthropic"):
-                print(f"\n⚠️  警告: MiniMax使用Anthropic网关时，URL以/v1结尾可能导致重复路径问题")
+                print(
+                    f"\n⚠️  警告: MiniMax使用Anthropic网关时，URL以/v1结尾可能导致重复路径问题"
+                )
                 print(f"   当前URL: {api_url}")
-                print(f"   建议使用: {api_url}/anthropic 或 {api_url.replace('/v1', '/anthropic')}")
-                
-                adjust_choice = input("是否自动调整为/anthropic端点? (Y/n): ").strip().lower()
+                print(
+                    f"   建议使用: {api_url}/anthropic 或 {api_url.replace('/v1', '/anthropic')}"
+                )
+
+                adjust_choice = (
+                    input("是否自动调整为/anthropic端点? (Y/n): ").strip().lower()
+                )
                 if adjust_choice in ["", "y", "yes"]:
                     # 自动调整URL
                     if api_url.endswith("/v1"):
@@ -209,7 +210,7 @@ def init_project():
                     else:
                         api_url = api_url.rstrip("/") + "/anthropic"
                     print(f"✅ URL已调整为: {api_url}")
-        
+
         config["LLM_API_URL"] = api_url
 
         # API Key
@@ -226,7 +227,7 @@ def init_project():
         if is_multimodal:
             print(f"\n✅ 模型 '{model_name}' 支持多模态功能")
             print("   多模态工具将自动使用此模型")
-            
+
             # 询问是否要启用多模态功能
             print("\n🔍 多模态功能配置:")
             print("多模态功能允许AI理解图片、视频和UI设计")
@@ -235,20 +236,28 @@ def init_project():
             print("  - understand_video: 理解视频内容")
             print("  - understand_ui_design: 分析UI设计")
             print("  - analyze_image_consistency: 分析图片一致性")
-            
+
             enable_multimodal = input("是否启用多模态功能? (Y/n): ").strip().lower()
             if enable_multimodal in ["", "y", "yes"]:
                 config["LLM_MULTIMODAL"] = "true"
                 print("✅ 多模态功能已启用")
-                
+
                 # 如果选择了多模态模型，询问是否使用相同的API密钥
-                use_same_key = input(f"是否使用相同的API密钥进行多模态调用?（如果不使用，则自行在aacode_config.yaml中配置） (Y/n): ").strip().lower()
+                use_same_key = (
+                    input(
+                        f"是否使用相同的API密钥进行多模态调用?（如果不使用，则自行在aacode_config.yaml中配置） (Y/n): "
+                    )
+                    .strip()
+                    .lower()
+                )
                 if use_same_key in ["", "y", "yes"]:
                     print("✅ 将使用相同的API密钥")
                     # 不需要额外设置，代码会自动使用主模型的API密钥
                 else:
                     # 询问多模态专用API密钥
-                    multimodal_key = input("请输入多模态专用API密钥 (按Enter跳过): ").strip()
+                    multimodal_key = input(
+                        "请输入多模态专用API密钥 (按Enter跳过): "
+                    ).strip()
                     if multimodal_key:
                         config["MULTIMODAL_API_KEY"] = multimodal_key
                         print("✅ 多模态专用API密钥已设置")
@@ -260,39 +269,43 @@ def init_project():
             print("\n🔍 多模态功能配置:")
             print("当前选择的模型不支持多模态功能")
             print("但你可以启用多模态功能，使用其他模型进行图片/视频理解")
-            
+
             enable_multimodal = input("是否启用多模态功能? (y/N): ").strip().lower()
             if enable_multimodal in ["y", "yes"]:
                 config["LLM_MULTIMODAL"] = "true"
                 print("✅ 多模态功能已启用")
-                
+
                 # 询问多模态模型选择
                 print("\n选择多模态模型:")
                 print("1. Kimi K2.5 (推荐，支持图片和视频)")
                 print("2. MiniMax M2.5 (支持图片和视频)")
                 print("3. 使用主模型 (如果支持)")
                 multimodal_choice = input("选择(1/2/3): ").strip()
-                
+
                 if multimodal_choice == "1":
                     config["MULTIMODAL_MODEL"] = "moonshot_kimi_k2.5"
                     print("✅ 选择Kimi K2.5作为多模态模型")
-                    
+
                     # 询问API密钥
-                    multimodal_key = input("请输入Kimi API密钥 (按Enter使用主模型密钥): ").strip()
+                    multimodal_key = input(
+                        "请输入Kimi API密钥 (按Enter使用主模型密钥): "
+                    ).strip()
                     if multimodal_key:
                         config["MULTIMODAL_API_KEY"] = multimodal_key
                         print("✅ Kimi API密钥已设置")
-                        
+
                 elif multimodal_choice == "2":
                     config["MULTIMODAL_MODEL"] = "minimax_m2.5"
                     print("✅ 选择MiniMax M2.5作为多模态模型")
-                    
+
                     # 询问API密钥
-                    multimodal_key = input("请输入MiniMax API密钥 (按Enter使用主模型密钥): ").strip()
+                    multimodal_key = input(
+                        "请输入MiniMax API密钥 (按Enter使用主模型密钥): "
+                    ).strip()
                     if multimodal_key:
                         config["MULTIMODAL_API_KEY"] = multimodal_key
                         print("✅ MiniMax API密钥已设置")
-                        
+
                 else:
                     print("ℹ️  将尝试使用主模型进行多模态调用")
             else:
@@ -307,14 +320,14 @@ def init_project():
             f.write(f"LLM_API_URL={config['LLM_API_URL']}\n")
             f.write(f"LLM_MODEL_NAME={config['LLM_MODEL_NAME']}\n")
             f.write(f"LLM_GATEWAY={config['LLM_GATEWAY']}\n")
-            
+
             # 写入多模态配置
             if "LLM_MULTIMODAL" in config:
                 f.write(f"LLM_MULTIMODAL={config['LLM_MULTIMODAL']}\n")
-            
+
             if "MULTIMODAL_API_KEY" in config:
                 f.write(f"MULTIMODAL_API_KEY={config['MULTIMODAL_API_KEY']}\n")
-            
+
             if "MULTIMODAL_MODEL" in config:
                 f.write(f"MULTIMODAL_MODEL={config['MULTIMODAL_MODEL']}\n")
 

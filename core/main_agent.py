@@ -244,7 +244,9 @@ class MainAgent(BaseAgent):
                 return {"success": False, "error": f"Skill不存在: {skill_name}"}
 
             # 获取技能元数据
-            skill_info: Optional[SkillInfo] = self.skills_manager.loaded_skills.get(skill_name)
+            skill_info: Optional[SkillInfo] = self.skills_manager.loaded_skills.get(
+                skill_name
+            )
 
             # 清理描述
             desc = schema.description.strip()
@@ -290,9 +292,9 @@ class MainAgent(BaseAgent):
                 result["usage_guide"] = skill_info.usage_guide
                 # 类型提示: loading_info是字典
                 result["loading_info"]["metadata_loaded"] = skill_info.metadata_loaded
-                result["loading_info"][
-                    "full_instruction_loaded"
-                ] = skill_info.full_instruction_loaded
+                result["loading_info"]["full_instruction_loaded"] = (
+                    skill_info.full_instruction_loaded
+                )
 
                 # 添加skill对应的工具列表（渐进式披露：让模型知道有哪些工具可用）
                 if skill_info.functions:
@@ -452,21 +454,43 @@ class MainAgent(BaseAgent):
                     or os.getenv("LLM_API_URL")
                     or os.getenv("OPENAI_BASE_URL")
                 )
-                model_name = model_config.get("name") or os.getenv(
-                    "LLM_MODEL_NAME", "deepseek-chat"
-                ) or "deepseek-chat"
+                model_name = (
+                    model_config.get("name")
+                    or os.getenv("LLM_MODEL_NAME", "deepseek-chat")
+                    or "deepseek-chat"
+                )
                 gateway = model_config.get("gateway", "openai")
 
                 if not api_key:
                     # 回退到简单响应
                     return "错误：未设置API密钥。请设置 LLM_API_KEY 环境变量。"
 
-                # 确保base_url不为None
+                # 确保base_url不为None，根据模型名称和网关类型设置默认URL
                 if not base_url:
+                    model_lower = model_name.lower() if model_name else ""
                     if gateway == "anthropic":
-                        base_url = "https://api.minimax.chat/v1"
+                        # 根据模型选择正确的Anthropic兼容端点
+                        if "minimax" in model_lower:
+                            base_url = "https://api.minimax.chat/anthropic"
+                        elif "deepseek" in model_lower:
+                            base_url = "https://api.deepseek.com/anthropic"
+                        elif "kimi" in model_lower or "moonshot" in model_lower:
+                            base_url = "https://api.moonshot.cn/anthropic"
+                        elif "claude" in model_lower:
+                            base_url = "https://api.anthropic.com"
+                        else:
+                            base_url = "https://api.anthropic.com"
                     else:
-                        base_url = "https://api.openai.com/v1"
+                        if "minimax" in model_lower:
+                            base_url = "https://api.minimax.chat/v1"
+                        elif "deepseek" in model_lower:
+                            base_url = "https://api.deepseek.com/v1"
+                        elif "kimi" in model_lower or "moonshot" in model_lower:
+                            base_url = "https://api.moonshot.cn/v1"
+                        elif "claude" in model_lower:
+                            base_url = "https://api.openai.com/v1"
+                        else:
+                            base_url = "https://api.openai.com/v1"
 
                 # 根据网关类型创建客户端
                 if gateway == "anthropic":
@@ -572,6 +596,13 @@ class MainAgent(BaseAgent):
             if role and content:
                 formatted_messages.append({"role": role, "content": content})
 
+        # 处理不同模型的temperature限制
+        temperature = model_config.get("temperature", 0.1)
+        model_lower = model_name.lower() if model_name else ""
+        # Kimi模型只接受temperature=1
+        if "kimi" in model_lower or "moonshot" in model_lower:
+            temperature = 1.0
+
         # 流式输出
         print("🤖 模型思考中", end="", flush=True)
         full_response = ""
@@ -579,7 +610,7 @@ class MainAgent(BaseAgent):
         stream = client.chat.completions.create(
             model=model_name,
             messages=formatted_messages,
-            temperature=model_config.get("temperature", 0.1),
+            temperature=temperature,
             max_tokens=model_config.get("max_tokens", 8000),
             stream=True,  # 启用流式输出
         )
@@ -603,28 +634,31 @@ class MainAgent(BaseAgent):
         model_config: Dict,
     ) -> str:
         """调用真正的Anthropic兼容API（如MiniMax）"""
-        # 处理MiniMax的特殊URL格式
-        # MiniMax的Anthropic兼容端点需要特殊处理
+        # 处理Anthropic兼容端点的URL格式调整
+        # MiniMax、DeepSeek、Kimi的Anthropic兼容端点需要特殊处理
         adjusted_base_url = base_url
-        
-        # 对于MiniMax，处理Anthropic兼容端点
-        if base_url and "minimax" in base_url.lower():
+
+        # 检查是否是Anthropic兼容端点（MiniMax、DeepSeek、Kimi）
+        if base_url and any(
+            provider in base_url.lower()
+            for provider in ["minimax", "deepseek", "moonshot"]
+        ):
             # Anthropic SDK会自动添加/v1/messages，所以我们需要确保base_url正确
             if base_url.endswith("/v1"):
                 # /v1 会导致重复的/v1路径，改为 /anthropic
                 adjusted_base_url = base_url[:-3] + "/anthropic"
-                print(f"🔧 调整MiniMax URL避免重复/v1: {base_url} -> {adjusted_base_url}")
+                print(f"🔧 调整URL避免重复/v1: {base_url} -> {adjusted_base_url}")
             elif base_url.endswith("/v1/anthropic"):
                 # 已经是 /v1/anthropic，这会导致重复/v1，需要调整
                 # Anthropic SDK会添加/v1/messages，所以实际路径会是 /v1/anthropic/v1/messages
                 # 应该改为 /anthropic
                 adjusted_base_url = base_url.replace("/v1/anthropic", "/anthropic")
-                print(f"🔧 调整MiniMax URL避免重复路径: {base_url} -> {adjusted_base_url}")
+                print(f"🔧 调整URL避免重复路径: {base_url} -> {adjusted_base_url}")
             elif not base_url.endswith("/anthropic"):
                 # 确保以 /anthropic 结尾
                 adjusted_base_url = base_url.rstrip("/") + "/anthropic"
                 print(f"🔧 添加Anthropic路径: {base_url} -> {adjusted_base_url}")
-        
+
         # 使用真正的Anthropic客户端
         client = anthropic.Anthropic(
             api_key=api_key,
@@ -635,7 +669,7 @@ class MainAgent(BaseAgent):
         # Anthropic使用不同的消息格式：system参数和messages数组
         system_message = ""
         formatted_messages = []
-        
+
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
@@ -656,10 +690,10 @@ class MainAgent(BaseAgent):
         try:
             # 使用异步方式处理流式响应
             import asyncio
-            
+
             # 在异步环境中运行同步的流式调用
             loop = asyncio.get_event_loop()
-            
+
             def sync_stream_call():
                 response = ""
                 # 准备stream参数
@@ -669,17 +703,17 @@ class MainAgent(BaseAgent):
                     "temperature": model_config.get("temperature", 0.1),
                     "messages": formatted_messages,
                 }
-                
+
                 # 只有在有系统消息时才添加system参数
                 if system_message:
                     stream_kwargs["system"] = system_message
-                
+
                 with client.messages.stream(**stream_kwargs) as stream:
                     for text in stream.text_stream:
                         response += text
                         print(text, end="", flush=True)
                 return response
-            
+
             full_response = await loop.run_in_executor(None, sync_stream_call)
             print()
             return full_response
@@ -687,10 +721,22 @@ class MainAgent(BaseAgent):
         except Exception as e:
             # 如果Anthropic格式失败，尝试OpenAI格式作为后备
             error_str = str(e).lower()
-            if "unsupported" in error_str or "invalid" in error_str or "404" in error_str:
-                print(f"\n⚠️  Anthropic格式失败 ({error_str[:50]}...)，尝试OpenAI格式...")
+            if (
+                "unsupported" in error_str
+                or "invalid" in error_str
+                or "404" in error_str
+                or "401" in error_str
+            ):
+                print(
+                    f"\n⚠️  Anthropic格式失败 ({error_str[:50]}...)，尝试OpenAI格式..."
+                )
+                # 调整URL为OpenAI端点
+                openai_base_url = base_url
+                if "/anthropic" in base_url:
+                    # 将/anthropic替换为/v1
+                    openai_base_url = base_url.replace("/anthropic", "/v1")
                 return await self._call_openai_api(
-                    api_key, base_url, model_name, messages, model_config
+                    api_key, openai_base_url, model_name, messages, model_config
                 )
             raise
 
@@ -932,7 +978,7 @@ class MainAgent(BaseAgent):
         execution_time = 0.0
         if self.start_time is not None:
             execution_time = asyncio.get_event_loop().time() - self.start_time
-            
+
         return {
             **result,
             "session_id": session_id,
@@ -1208,7 +1254,9 @@ class MainAgent(BaseAgent):
                 )
                 if result.returncode == 0:
                     if result.stdout.strip():
-                        git_status["changed_files"] = len(result.stdout.strip().split("\n"))
+                        git_status["changed_files"] = len(
+                            result.stdout.strip().split("\n")
+                        )
                     else:
                         git_status["changed_files"] = 0
                     git_status["has_changes"] = bool(result.stdout.strip())

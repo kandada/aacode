@@ -31,9 +31,7 @@ class ModelConfig:
         )
         # 先不设置默认base_url，让_auto_detect_model_config根据模型名称决定
         self.base_url = (
-            os.getenv("LLM_API_URL")
-            or os.getenv("OPENAI_BASE_URL")
-            or self.base_url
+            os.getenv("LLM_API_URL") or os.getenv("OPENAI_BASE_URL") or self.base_url
         )
         self.name = os.getenv("LLM_MODEL_NAME") or self.name or "deepseek-chat"
         self.gateway = os.getenv("LLM_GATEWAY") or self.gateway or "openai"
@@ -51,65 +49,113 @@ class ModelConfig:
         """根据模型名称自动检测配置"""
         model_lower = self.name.lower()
 
+        # 检查用户是否通过环境变量显式设置了网关
+        user_explicit_gateway = os.getenv("LLM_GATEWAY")
+
         # 多模态模型检测（只有明确支持多模态的模型）
         # 重置为默认值，然后根据模型名称检测
         self.multimodal = False  # 默认不是多模态
-        
+
         # 更灵活的多模态模型检测，支持多种名称格式
         model_lower_clean = model_lower.replace("-", "_").replace(" ", "_")
-        
+
         # 检测Kimi模型（支持多种格式）
         kimi_patterns = ["kimi", "moonshot"]
         is_kimi = any(pattern in model_lower_clean for pattern in kimi_patterns)
-        
+
         # 检测MiniMax模型
         minimax_patterns = ["minimax", "minimaxi"]
         is_minimax = any(pattern in model_lower_clean for pattern in minimax_patterns)
-        
+
+        # 检测DeepSeek模型
+        is_deepseek = "deepseek" in model_lower
+
         if is_kimi or is_minimax:
             self.multimodal = True
             print(f"🔍 检测到多模态模型: {self.name} (格式: {model_lower_clean})")
 
-        # 网关检测（使用清理后的模型名称）
-        if is_minimax:
-            self.gateway = "anthropic"
-            # MiniMax默认URL - 对于Anthropic网关，使用/anthropic端点（避免重复/v1）
-            if not self.base_url or "openai" in self.base_url:
-                self.base_url = "https://api.minimax.chat/anthropic"
-            # 如果用户提供了minimaxi.com的URL，确保格式正确
-            elif "minimaxi.com" in self.base_url or "minimax.chat" in self.base_url:
-                # 确保URL以正确的格式结束
-                if self.base_url.endswith("/v1"):
-                    # /v1 会导致重复路径，改为 /anthropic
-                    self.base_url = self.base_url[:-3] + "/anthropic"
-                elif self.base_url.endswith("/v1/anthropic"):
-                    # /v1/anthropic 会导致重复/v1，改为 /anthropic
-                    self.base_url = self.base_url.replace("/v1/anthropic", "/anthropic")
-                elif not self.base_url.endswith("/anthropic"):
-                    # 确保以 /anthropic 结尾
-                    self.base_url = self.base_url.rstrip("/") + "/anthropic"
-                # 确保有协议
-                if not self.base_url.startswith("http"):
-                    self.base_url = f"https://{self.base_url}"
-        elif is_kimi:
-            self.gateway = "openai"
-            # Kimi默认URL
-            if not self.base_url or "openai" in self.base_url:
-                self.base_url = "https://api.moonshot.cn/v1"
-        elif "deepseek" in model_lower:
-            self.gateway = "openai"
-            # DeepSeek默认URL
-            if not self.base_url or "openai" in self.base_url:
-                self.base_url = "https://api.deepseek.com/v1"
-        elif "gpt" in model_lower:
-            self.gateway = "openai"
-            # OpenAI默认URL
-            if (
-                not self.base_url
-                or "minimax" in self.base_url
-                or "moonshot" in self.base_url
-            ):
-                self.base_url = "https://api.openai.com/v1"
+        # 根据用户是否显式设置网关来决定行为
+        if user_explicit_gateway:
+            # 用户显式设置了网关，只根据网关类型选择URL，不覆盖网关本身
+            gateway = user_explicit_gateway.lower()
+            if is_minimax:
+                if gateway == "anthropic":
+                    if not self.base_url or "openai" in self.base_url:
+                        self.base_url = "https://api.minimax.chat/anthropic"
+                    elif "minimax" in self.base_url:
+                        self.base_url = self._adjust_url_for_anthropic(self.base_url)
+                else:  # openai
+                    if not self.base_url or "anthropic" in self.base_url:
+                        self.base_url = "https://api.minimax.chat/v1"
+            elif is_kimi:
+                if gateway == "anthropic":
+                    if not self.base_url or "openai" in self.base_url:
+                        self.base_url = "https://api.moonshot.cn/anthropic"
+                    elif "moonshot" in self.base_url:
+                        self.base_url = self._adjust_url_for_anthropic(self.base_url)
+                else:  # openai
+                    if not self.base_url or "anthropic" in self.base_url:
+                        self.base_url = "https://api.moonshot.cn/v1"
+            elif is_deepseek:
+                if gateway == "anthropic":
+                    if not self.base_url or "openai" in self.base_url:
+                        self.base_url = "https://api.deepseek.com/anthropic"
+                    elif "deepseek" in self.base_url:
+                        self.base_url = self._adjust_url_for_anthropic(self.base_url)
+                else:  # openai
+                    if not self.base_url or "anthropic" in self.base_url:
+                        self.base_url = "https://api.deepseek.com/v1"
+            elif "gpt" in model_lower and gateway == "anthropic":
+                # GPT模型使用Anthropic网关时，指向Anthropic官方API
+                if not self.base_url or "openai" in self.base_url:
+                    self.base_url = "https://api.anthropic.com"
+            elif "claude" in model_lower:
+                # Claude模型默认使用Anthropic网关
+                if gateway == "anthropic":
+                    if not self.base_url or "openai" in self.base_url:
+                        self.base_url = "https://api.anthropic.com"
+                else:  # openai
+                    if not self.base_url or "anthropic" in self.base_url:
+                        self.base_url = "https://api.openai.com/v1"
+        else:
+            # 用户没有显式设置网关，使用默认行为
+            if is_minimax:
+                self.gateway = "anthropic"
+                if not self.base_url or "openai" in self.base_url:
+                    self.base_url = "https://api.minimax.chat/anthropic"
+                elif "minimax" in self.base_url:
+                    self.base_url = self._adjust_url_for_anthropic(self.base_url)
+            elif is_kimi:
+                self.gateway = "openai"
+                if not self.base_url or "anthropic" in self.base_url:
+                    self.base_url = "https://api.moonshot.cn/v1"
+            elif is_deepseek:
+                self.gateway = "openai"
+                if not self.base_url or "anthropic" in self.base_url:
+                    self.base_url = "https://api.deepseek.com/v1"
+            elif "claude" in model_lower:
+                # Claude模型默认使用Anthropic网关
+                self.gateway = "anthropic"
+                if not self.base_url or "openai" in self.base_url:
+                    self.base_url = "https://api.anthropic.com"
+            elif "gpt" in model_lower:
+                self.gateway = "openai"
+                if (
+                    not self.base_url
+                    or "minimax" in self.base_url
+                    or "moonshot" in self.base_url
+                ):
+                    self.base_url = "https://api.openai.com/v1"
+
+    def _adjust_url_for_anthropic(self, base_url: str) -> str:
+        """调整URL以适配Anthropic SDK"""
+        if base_url.endswith("/v1"):
+            return base_url[:-3] + "/anthropic"
+        elif base_url.endswith("/v1/anthropic"):
+            return base_url.replace("/v1/anthropic", "/anthropic")
+        elif not base_url.endswith("/anthropic"):
+            return base_url.rstrip("/") + "/anthropic"
+        return base_url
 
 
 @dataclass
@@ -388,18 +434,18 @@ class Settings:
         llm_gateway = os.getenv("LLM_GATEWAY")
         if llm_gateway:
             self.model.gateway = llm_gateway
-        
+
         # 多模态配置
         llm_multimodal = os.getenv("LLM_MULTIMODAL")
         if llm_multimodal is not None:
             # 触发ModelConfig的__post_init__重新加载
             self.model.multimodal = llm_multimodal.lower() in ["true", "1", "yes", "on"]
-        
+
         # 多模态模型选择
         multimodal_model = os.getenv("MULTIMODAL_MODEL")
         if multimodal_model and multimodal_model in self.multimodal.models:
             self.multimodal.default_model = multimodal_model
-        
+
         # 多模态API密钥
         multimodal_api_key = os.getenv("MULTIMODAL_API_KEY")
         if multimodal_api_key and multimodal_model in self.multimodal.models:
@@ -569,7 +615,7 @@ class Settings:
                 # 只检查与当前模型相关的多模态配置
                 model_lower = self.model.name.lower()
                 config_name = model_config.get("name", "").lower()
-                
+
                 # 如果当前模型名称包含多模态配置的名称，则检查该配置
                 if config_name in model_lower or model_lower in config_name:
                     if model_config.get("api_key") == "" and not os.getenv(
