@@ -99,49 +99,11 @@
 - `element_info` (Dict): 元素详细信息
 - `duration` (float): 执行时长(s)
 
-## 使用示例
 
-### browser_automation
-```json
-{
-  "url": "https://www.baidu.com",
-  "actions": [
-    {"type": "input", "selector": "#kw", "value": "测试"},
-    {"type": "click", "selector": "#su"}
-  ],
-  "extract": ["text", "links"],
-  "timeout": 30000
-}
-```
+## 调用示例：
+Action: scrape_dynamic_page
+Action Input: {"url": "http://example.com"}
 
-### scrape_dynamic_page
-```json
-{
-  "url": "https://example.com",
-  "selectors": [".content", ".title"],
-  "extract_text": true,
-  "extract_links": true
-}
-```
-
-### take_screenshot
-```json
-{
-  "url": "https://example.com",
-  "output_path": "screenshot.png",
-  "full_page": true,
-  "delay": 1000
-}
-```
-
-### test_element_exists
-```json
-{
-  "url": "https://example.com",
-  "selector": ".login-button",
-  "check_visibility": true
-}
-```
 
 ## 注意事项
 1. 首次使用需安装: `pip install playwright && playwright install chromium`
