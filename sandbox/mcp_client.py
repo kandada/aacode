@@ -3,6 +3,7 @@
 """
 MCP（模型上下文协议）客户端简化实现
 """
+
 import asyncio
 import json
 from typing import Dict, List, Any, Optional
@@ -13,11 +14,11 @@ from aiohttp import ClientTimeout
 class MCPClient:
     """MCP客户端"""
 
-    def __init__(self,
-                 server_url: str = "http://localhost:3000",
-                 client_name: str = "ai_coder"):
+    def __init__(
+        self, server_url: str = "http://localhost:3000", client_name: str = "ai_coder"
+    ):
 
-        self.server_url = server_url.rstrip('/')
+        self.server_url = server_url.rstrip("/")
         self.client_name = client_name
         self.session_id: str | None = None
         self.tools: dict[str, dict] = {}
@@ -27,13 +28,15 @@ class MCPClient:
 
     async def connect(self) -> bool:
         """连接到MCP服务器"""
-        try:
-            self.session = aiohttp.ClientSession()
+        # 添加超时保护，避免网络问题时卡住
+        self.session = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=10, connect=5)
+        )
 
+        try:
             # 初始化会话
             async with self.session.post(
-                    f"{self.server_url}/sessions",
-                    json={"client": self.client_name}
+                f"{self.server_url}/sessions", json={"client": self.client_name}
             ) as response:
                 if response.status == 200:
                     data = await response.json()
@@ -51,13 +54,20 @@ class MCPClient:
         except Exception as e:
             print(f"❌ 连接MCP服务器异常: {e}")
             return False
+        finally:
+            # 连接失败时关闭session
+            if not self.session_id:
+                await self.session.close()
+                self.session = None
 
     async def disconnect(self):
         """断开连接"""
         if self.session:
             if self.session_id:
                 try:
-                    await self.session.delete(f"{self.server_url}/sessions/{self.session_id}")
+                    await self.session.delete(
+                        f"{self.server_url}/sessions/{self.session_id}"
+                    )
                 except:
                     pass
 
@@ -75,7 +85,7 @@ class MCPClient:
             if not self.session:
                 return {"error": "HTTP会话未初始化"}
             async with self.session.get(
-                    f"{self.server_url}/sessions/{self.session_id}/tools"
+                f"{self.server_url}/sessions/{self.session_id}/tools"
             ) as response:
                 if response.status == 200:
                     data = await response.json()
@@ -83,17 +93,16 @@ class MCPClient:
                     return {
                         "success": True,
                         "tools": self.tools,
-                        "count": len(self.tools)
+                        "count": len(self.tools),
                     }
                 else:
                     return {"error": f"获取工具列表失败: {response.status}"}
         except Exception as e:
             return {"error": str(e)}
 
-    async def call_tool(self,
-                        tool_name: str,
-                        arguments: Dict[str, Any] | None = None,
-                        timeout: int = 30) -> Dict[str, Any]:
+    async def call_tool(
+        self, tool_name: str, arguments: Dict[str, Any] | None = None, timeout: int = 30
+    ) -> Dict[str, Any]:
         """调用MCP工具"""
         if not self.session_id:
             return {"error": "未连接到MCP服务器"}
@@ -102,31 +111,27 @@ class MCPClient:
             return {"error": f"工具不存在: {tool_name}"}
 
         try:
-            payload = {
-                "tool": tool_name,
-                "arguments": arguments or {}
-            }
+            payload = {"tool": tool_name, "arguments": arguments or {}}
 
             if not self.session:
                 return {"error": "HTTP会话未初始化"}
             async with self.session.post(
-                    f"{self.server_url}/sessions/{self.session_id}/call",
-                    json=payload,
-                    timeout=ClientTimeout(total=timeout)
+                f"{self.server_url}/sessions/{self.session_id}/call",
+                json=payload,
+                timeout=ClientTimeout(total=timeout),
             ) as response:
-
                 if response.status == 200:
                     data = await response.json()
                     return {
                         "success": True,
                         "result": data.get("result"),
-                        "content": data.get("content")
+                        "content": data.get("content"),
                     }
                 else:
                     error_text = await response.text()
                     return {
                         "error": f"工具调用失败: {response.status}",
-                        "details": error_text
+                        "details": error_text,
                     }
 
         except asyncio.TimeoutError:
@@ -134,44 +139,38 @@ class MCPClient:
         except Exception as e:
             return {"error": str(e)}
 
-    async def execute_cli(self,
-                          command: str,
-                          args: List[str] | None = None) -> Dict[str, Any]:
+    async def execute_cli(
+        self, command: str, args: List[str] | None = None
+    ) -> Dict[str, Any]:
         """
         通过MCP执行CLI命令
 
         这是一种通用的方式：通过MCP调用系统命令
         """
-        return await self.call_tool("execute_command", {
-            "command": command,
-            "args": args or []
-        })
+        return await self.call_tool(
+            "execute_command", {"command": command, "args": args or []}
+        )
 
-    async def convert_format(self,
-                             input_data: Any,
-                             from_format: str,
-                             to_format: str) -> Dict[str, Any]:
+    async def convert_format(
+        self, input_data: Any, from_format: str, to_format: str
+    ) -> Dict[str, Any]:
         """格式转换工具"""
-        return await self.call_tool("convert_format", {
-            "input": input_data,
-            "from_format": from_format,
-            "to_format": to_format
-        })
+        return await self.call_tool(
+            "convert_format",
+            {"input": input_data, "from_format": from_format, "to_format": to_format},
+        )
 
     async def analyze_file(self, file_path: str, analysis_type: str) -> Dict[str, Any]:
         """文件分析工具"""
-        return await self.call_tool("analyze_file", {
-            "file_path": file_path,
-            "analysis_type": analysis_type
-        })
+        return await self.call_tool(
+            "analyze_file", {"file_path": file_path, "analysis_type": analysis_type}
+        )
 
     async def web_search(self, query: str, engine: str = "google") -> Dict[str, Any]:
         """网络搜索工具"""
-        return await self.call_tool("web_search", {
-            "query": query,
-            "engine": engine,
-            "max_results": 5
-        })
+        return await self.call_tool(
+            "web_search", {"query": query, "engine": engine, "max_results": 5}
+        )
 
 
 # 简化版本地MCP客户端（无需服务器）
@@ -182,7 +181,7 @@ class LocalMCPClient:
         self.tools = {
             "execute_command": self._execute_command,
             "file_info": self._file_info,
-            "text_processing": self._text_processing
+            "text_processing": self._text_processing,
         }
 
     async def connect(self) -> bool:
@@ -199,20 +198,19 @@ class LocalMCPClient:
         return {
             "success": True,
             "tools": list(self.tools.keys()),
-            "count": len(self.tools)
+            "count": len(self.tools),
         }
 
-    async def call_tool(self, tool_name: str, arguments: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    async def call_tool(
+        self, tool_name: str, arguments: Dict[str, Any] | None = None
+    ) -> Dict[str, Any]:
         """调用工具"""
         if tool_name not in self.tools:
             return {"error": f"工具不存在: {tool_name}"}
 
         try:
             result = await self.tools[tool_name](arguments or {})
-            return {
-                "success": True,
-                "result": result
-            }
+            return {"success": True, "result": result}
         except Exception as e:
             return {"error": str(e)}
 
@@ -229,16 +227,13 @@ class LocalMCPClient:
         try:
             full_cmd = [command] + args
             result = subprocess.run(
-                full_cmd,
-                capture_output=True,
-                text=True,
-                timeout=30
+                full_cmd, capture_output=True, text=True, timeout=30
             )
 
             return {
                 "returncode": result.returncode,
                 "stdout": result.stdout,
-                "stderr": result.stderr
+                "stderr": result.stderr,
             }
         except Exception as e:
             return {"error": str(e)}
@@ -263,7 +258,7 @@ class LocalMCPClient:
                 "size": stat.st_size,
                 "modified": stat.st_mtime,
                 "is_file": path.is_file(),
-                "is_dir": path.is_dir()
+                "is_dir": path.is_dir(),
             }
         except Exception as e:
             return {"error": str(e)}
@@ -279,12 +274,7 @@ class LocalMCPClient:
             words = text.split()
             return {"word_count": len(words)}
         elif operation == "lines":
-            lines = text.split('\n')
+            lines = text.split("\n")
             return {"line_count": len(lines)}
         else:
             return {"error": f"未知操作: {operation}"}
-
-
-
-
-
