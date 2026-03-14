@@ -712,7 +712,18 @@ GET_MCP_STATUS_SCHEMA = ToolSchema(
 
 LIST_SKILLS_SCHEMA = ToolSchema(
     name="list_skills",
-    description="列出所有可用的Skills。用于发现项目中已安装的技能，了解可用的功能模块。",
+    description="""列出所有可用的Skills。用于发现项目中已安装的技能，了解可用的功能模块。使用具体skill前，请使用get_skill_info工具获取skill的详细信息及其工具调用方法。
+一般来说，skill的工具调用方法如下：
+调用示例1（scrape_dynamic_page是playwright skill的一个工具）：
+Action: scrape_dynamic_page
+Action Input: {"url": "http://example.com"}
+
+调用示例2（scrape_web是scrape_web skill的一个工具）
+Action: scrape_web
+Action Input: {"url": "https://example.com", "operations": ["extract_text", "extract_links"]}
+
+
+""",
     parameters=[],
     examples=[{}],
     returns="返回字典，包含 success, skills (技能列表), count (技能数量) 等字段",
@@ -758,9 +769,10 @@ ALL_SCHEMAS = {
     "list_todo_files": LIST_TODO_FILES_SCHEMA,
     "add_execution_record": ADD_EXECUTION_RECORD_SCHEMA,
     # Todo Tools (兼容旧名称)
-    "add_todo": ADD_TODO_SCHEMA,
-    "complete_todo": COMPLETE_TODO_SCHEMA,
-    "list_todos": LIST_TODOS_SCHEMA,
+    # "add_todo": ADD_TODO_SCHEMA,
+    # "complete_todo": COMPLETE_TODO_SCHEMA,
+    # "list_todos": LIST_TODOS_SCHEMA,
+
     # MCP Tools
     "list_mcp_tools": LIST_MCP_TOOLS_SCHEMA,
     "call_mcp_tool": CALL_MCP_TOOL_SCHEMA,
