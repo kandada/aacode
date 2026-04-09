@@ -118,11 +118,11 @@ class AsyncReActLoop:
 
 ## 📋 任务待办清单
 已创建待办清单文件，请在每次思考时参考和更新待办事项：
-- 待办清单文件: {todo_summary.get('todo_file', '未知')}
-- 总事项: {todo_summary.get('total_todos', 0)} 
-- 已完成: {todo_summary.get('completed_todos', 0)}
-- 待处理: {todo_summary.get('pending_todos', 0)}
-- 完成率: {todo_summary.get('completion_rate', 0):.1f}%
+- 待办清单文件: {todo_summary.get("todo_file", "未知")}
+- 总事项: {todo_summary.get("total_todos", 0)} 
+- 已完成: {todo_summary.get("completed_todos", 0)}
+- 待处理: {todo_summary.get("pending_todos", 0)}
+- 完成率: {todo_summary.get("completion_rate", 0):.1f}%
 
 重要提示 - 待办清单管理：
 在每次思考时，请参考待办清单并更新状态：
@@ -226,7 +226,7 @@ class AsyncReActLoop:
             all_observations_for_display = []  # 用于显示的简化版本
 
             for i, action_item in enumerate(actions):
-                print(f"🛠️  动作 {i+1}/{len(actions)}: {action_item.action}")
+                print(f"🛠️  动作 {i + 1}/{len(actions)}: {action_item.action}")
                 action_start = asyncio.get_event_loop().time()
 
                 # 添加重试机制（使用配置的最大重试次数，来自 aacode_config.yaml）
@@ -325,13 +325,13 @@ class AsyncReActLoop:
 
             # 合并所有观察结果（Agent获取完整内容）
             observation = "\n".join(
-                [f"动作 {i+1} 结果: {obs}" for i, obs in enumerate(all_observations)]
+                [f"动作 {i + 1} 结果: {obs}" for i, obs in enumerate(all_observations)]
             )
 
             # 合并显示版本（用户看到简化版本）
             observation_for_display = "\n".join(
                 [
-                    f"动作 {i+1} 结果: {obs}"
+                    f"动作 {i + 1} 结果: {obs}"
                     for i, obs in enumerate(all_observations_for_display)
                 ]
             )
@@ -1169,16 +1169,19 @@ class AsyncReActLoop:
         compacted_messages.extend(first_rounds_messages)  # 添加前N轮（任务规划）
 
         # 插入三块智能摘要
+        compact_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         summary_content = f"""## 🧠 智能历史摘要（AI生成）
 
+**⏰ 压缩时间**: {compact_time}
+
 ### 📁 文件内容摘要
-{summaries['file_content_summary'] or '无文件读取操作'}
+{summaries["file_content_summary"] or "无文件读取操作"}
 
 ### 🔧 工具执行摘要
-{summaries['tool_execution_summary'] or '无工具执行'}
+{summaries["tool_execution_summary"] or "无工具执行"}
 
 ### 💡 重要信息（保留原样）
-{summaries['keep_original_summary'] or '无需特别保留的信息'}
+{summaries["keep_original_summary"] or "无需特别保留的信息"}
 
 **完整历史**: {history_file}
 
@@ -1605,7 +1608,7 @@ class AsyncReActLoop:
         # 添加执行步骤
         summary_prompt += f"\n\n**执行步骤**（最近{len(recent_steps)}步）：\n"
         for i, step in enumerate(recent_steps):
-            summary_prompt += f"\n步骤{i+1}: {step.thought[:150]}..."
+            summary_prompt += f"\n步骤{i + 1}: {step.thought[:150]}..."
             if step.actions:
                 summary_prompt += (
                     f"\n  动作: {', '.join([a.action for a in step.actions])}"
@@ -1619,7 +1622,8 @@ class AsyncReActLoop:
         try:
             summary_messages = [{"role": "user", "content": summary_prompt}]
             summary_response = await asyncio.wait_for(
-                self.model_caller(summary_messages), timeout=30.0  # 30秒超时
+                self.model_caller(summary_messages),
+                timeout=30.0,  # 30秒超时
             )
 
             # 清理摘要（移除可能的markdown格式）
@@ -1699,7 +1703,8 @@ class AsyncReActLoop:
         try:
             summary_messages = [{"role": "user", "content": summary_prompt}]
             summary_response = await asyncio.wait_for(
-                self.model_caller(summary_messages), timeout=60.0  # 60秒超时
+                self.model_caller(summary_messages),
+                timeout=60.0,  # 60秒超时
             )
 
             # 解析JSON响应
@@ -2127,10 +2132,10 @@ class AsyncReActLoop:
                     )
                     if archive_match:
                         archive_file = archive_match.group(1)
-                        print(f"✅ 归档路径一致性：动作{i+1}归档到 {archive_file}")
+                        print(f"✅ 归档路径一致性：动作{i + 1}归档到 {archive_file}")
                 else:
                     print(
-                        f"⚠️  归档路径不一致：动作{i+1}的简化版本包含归档路径，但完整版本可能丢失"
+                        f"⚠️  归档路径不一致：动作{i + 1}的简化版本包含归档路径，但完整版本可能丢失"
                     )
 
     def _estimate_tokens(self, messages: List[Dict]) -> int:

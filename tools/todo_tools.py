@@ -32,6 +32,7 @@ class TodoTools:
         Args:
             description: 待办事项描述(优先使用)
             item: 待办事项描述(兼容旧格式)
+            title: 待办事项标题(兼容旧格式)
             priority: 优先级 (high/medium/low)
             category: 分类
             task_id: 任务ID(可选,用于关联)
@@ -42,7 +43,8 @@ class TodoTools:
             操作结果
         """
         # 兼容多种参数格式
-        item_desc = description or item
+        title = kwargs.get("title")
+        item_desc = description or item or title
         if not item_desc:
             return {
                 "success": False,
@@ -89,18 +91,31 @@ class TodoTools:
         except Exception as e:
             return {"success": False, "error": f"添加待办事项时出错: {str(e)}"}
 
-    async def mark_todo_completed(self, item_pattern: str, **kwargs) -> Dict[str, Any]:
+    async def mark_todo_completed(
+        self, item_pattern: str = None, **kwargs
+    ) -> Dict[str, Any]:
         """
         标记待办事项为完成
 
         Args:
             item_pattern: 待办事项匹配模式
+            title: 待办事项标题(兼容旧格式)
 
         注意:**kwargs 用于接收并忽略模型可能传入的额外参数
 
         Returns:
             操作结果
         """
+        # 兼容 title 参数
+        if not item_pattern:
+            item_pattern = kwargs.get("title")
+
+        if not item_pattern:
+            return {
+                "success": False,
+                "error": "缺少待办事项匹配模式(需要 item_pattern 或 title 参数)",
+            }
+
         try:
             from utils.todo_manager import get_todo_manager
 
@@ -205,32 +220,50 @@ class TodoTools:
         except Exception as e:
             return {"success": False, "error": f"列出待办清单文件时出错: {str(e)}"}
 
-    async def add_execution_record(self, record: str, **kwargs) -> Dict[str, Any]:
+    async def add_execution_record(
+        self, record: str = None, description: str = None, **kwargs
+    ) -> Dict[str, Any]:
         """
         添加执行记录
 
         Args:
-            record: 执行记录描述
+            record: 执行记录描述(优先使用)
+            description: 执行记录描述(兼容旧格式)
+            status: 执行状态(可选，会被附加到记录中)
 
         注意:**kwargs 用于接收并忽略模型可能传入的额外参数
 
         Returns:
             操作结果
         """
+        record_text = record or description
+        if not record_text:
+            return {
+                "success": False,
+                "error": "缺少执行记录描述(需要 record 或 description 参数)",
+            }
+
+        # 附加状态信息
+        status = kwargs.get("status")
+        if status:
+            record_text = f"[{status}] {record_text}"
+
         try:
             from utils.todo_manager import get_todo_manager
 
             todo_manager = get_todo_manager(self.project_path)
 
-            success = await todo_manager.add_execution_record(record)
+            success = await todo_manager.add_execution_record(record_text)
 
             if success:
+                print(f"✅ 已添加执行记录: {record_text[:50]}...")
                 return {
                     "success": True,
-                    "message": f"已添加执行记录: {record[:50]}...",
-                    "record": record,
+                    "message": f"已添加执行记录: {record_text[:50]}...",
+                    "record": record_text,
                 }
             else:
+                print(f"⚠️ 添加执行记录失败")
                 return {"success": False, "error": "添加执行记录失败"}
 
         except Exception as e:

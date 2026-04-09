@@ -66,9 +66,7 @@ class TodoManager:
 **创建**: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
 ## 待办
-- [ ] 分析需求
-- [ ] 制定计划
-- [ ] 执行任务
+（暂无）
 
 ## 已完成
 （暂无）
@@ -416,10 +414,8 @@ class TodoManager:
 
                         # 提取创建时间
                         created_time = "未知时间"
-                        if second_line.startswith("**创建时间**: "):
-                            created_time = second_line.replace(
-                                "**创建时间**: ", ""
-                            ).strip()
+                        if second_line.startswith("**创建**: "):
+                            created_time = second_line.replace("**创建**: ", "").strip()
 
                         todo_files.append(
                             {
@@ -437,7 +433,9 @@ class TodoManager:
                     continue
 
             # 按修改时间排序（处理None值）
-            todo_files.sort(key=lambda x: float(x.get("modified_time", 0) or 0), reverse=True)
+            todo_files.sort(
+                key=lambda x: x.get("modified_time", "") or "", reverse=True
+            )
             return todo_files
         except Exception as e:
             print(f"⚠️ 列出待办清单文件失败: {e}")
