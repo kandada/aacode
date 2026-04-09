@@ -388,10 +388,11 @@ class SessionManager:
         # 生成摘要
         old_msgs = self.current_messages[:-3]
         if old_msgs:
+            compact_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             summary = f"之前的对话包含{len(old_msgs)}条消息，主要讨论了编程相关的任务。"
             summary_msg = SessionMessage(
                 role="system",
-                content=f"上下文摘要: {summary}",
+                content=f"上下文摘要（压缩时间: {compact_time}）: {summary}",
                 timestamp=datetime.now().timestamp(),
                 tokens=self._count_tokens(summary),
             )

@@ -586,7 +586,7 @@ class MainAgent(BaseAgent):
         model_config: Dict,
     ) -> str:
         """调用OpenAI兼容API"""
-        client = openai.OpenAI(api_key=api_key, base_url=base_url)
+        client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url)
 
         # 确保消息格式正确
         formatted_messages = []
@@ -607,7 +607,7 @@ class MainAgent(BaseAgent):
         print("🤖 模型思考中", end="", flush=True)
         full_response = ""
 
-        stream = client.chat.completions.create(
+        stream = await client.chat.completions.create(
             model=model_name,
             messages=formatted_messages,
             temperature=temperature,
@@ -616,7 +616,7 @@ class MainAgent(BaseAgent):
         )
 
         # 处理流式响应
-        for chunk in stream:
+        async for chunk in stream:
             if chunk.choices[0].delta.content is not None:
                 content_chunk = chunk.choices[0].delta.content
                 full_response += content_chunk

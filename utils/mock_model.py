@@ -81,12 +81,12 @@ async def create_mock_model_caller(model_config: Dict):
                 try:
                     import openai
 
-                    client = openai.OpenAI(
+                    client = openai.AsyncOpenAI(
                         api_key=model_config.get("api_key"),
                         base_url=model_config.get("base_url"),
                     )
 
-                    response = client.chat.completions.create(
+                    response = await client.chat.completions.create(
                         model=model_config.get("name", "gpt-4"),
                         messages=messages,  # type: ignore
                         temperature=model_config.get("temperature", 0.1),
