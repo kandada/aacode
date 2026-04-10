@@ -28,10 +28,10 @@ python3 init.py
 
 创建 `.env` 文件：
 ```bash
-LLM_API_KEY=your-llm-api-key
+LLM_API_KEY=sk-ffc8aaccab294f7fa95e9592ddf99e6a
 LLM_API_URL=https://api.deepseek.com/v1
 LLM_MODEL_NAME=deepseek-chat
-SEARCHXNG_URL=http://192.168.0.116:8080
+SEARCHXNG_URL=http://192.168.0.106:8081
 ```
 
 ### 步骤3: 运行第一个任务
@@ -69,6 +69,19 @@ python3 main.py -p examples/existing_project "继续开发功能"
 
 # 交互式模式
 python3 main.py -p examples/project --interactive
+```
+
+### 测试命令
+
+```bash
+# 运行全面测试
+python3 test_aacode_comprehensive.py
+
+# 运行用户流程测试
+./test_simple_user_flow.sh
+
+# 查看测试报告
+cat TEST_REPORT_OPTIMIZATION_20260129.md
 ```
 
 ---
@@ -293,7 +306,7 @@ asyncio.run(coder.main_agent.list_sessions())"
 ## 🎓 学习资源
 
 ### 文档
-- [README](readme.md) - 项目概述
+- [README](README.md) - 项目概述
 
 
 ## 💬 获取帮助

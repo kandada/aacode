@@ -5,30 +5,52 @@
 """
 
 import asyncio
-from typing import Dict, List, Any, Optional
+import sys
 from pathlib import Path
 from datetime import datetime
+from typing import Dict, List, Any, Optional
 import os
-from core.agent import BaseAgent
-from core.react_loop import AsyncReActLoop
-from core.multi_agent import MultiAgentSystem
-from core.prompts import SYSTEM_PROMPT_FOR_MAIN_AGENT
-from tools.atomic_tools import AtomicTools
-from tools.code_tools import CodeTools
-from tools.sandbox_tools import SandboxTools
-from tools.web_tools import WebTools
-from tools.todo_tools import TodoTools
-from utils.mcp_manager import MCPManager
-from utils.session_manager import SessionManager
-from utils.tool_registry import get_global_registry
-from utils.tool_schemas import get_all_schemas, get_schema
-from tools.skills_tools import SkillsManager, SkillInfo
-from tools.multimodal_tools import MultimodalTools, get_multimodal_tools_schema
-from core.sub_agent import SubAgent
 import subprocess
 import openai
 import anthropic
-from config import settings
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+    from core.agent import BaseAgent
+    from core.react_loop import AsyncReActLoop
+    from core.multi_agent import MultiAgentSystem
+    from core.prompts import SYSTEM_PROMPT_FOR_MAIN_AGENT
+    from tools.atomic_tools import AtomicTools
+    from tools.code_tools import CodeTools
+    from tools.sandbox_tools import SandboxTools
+    from tools.web_tools import WebTools
+    from tools.todo_tools import TodoTools
+    from utils.mcp_manager import MCPManager
+    from utils.session_manager import SessionManager
+    from utils.tool_registry import get_global_registry
+    from utils.tool_schemas import get_all_schemas, get_schema
+    from tools.skills_tools import SkillsManager, SkillInfo
+    from tools.multimodal_tools import MultimodalTools, get_multimodal_tools_schema
+    from core.sub_agent import SubAgent
+    from config import settings
+else:
+    from .agent import BaseAgent
+    from .react_loop import AsyncReActLoop
+    from .multi_agent import MultiAgentSystem
+    from .prompts import SYSTEM_PROMPT_FOR_MAIN_AGENT
+    from ..tools.atomic_tools import AtomicTools
+    from ..tools.code_tools import CodeTools
+    from ..tools.sandbox_tools import SandboxTools
+    from ..tools.web_tools import WebTools
+    from ..tools.todo_tools import TodoTools
+    from ..utils.mcp_manager import MCPManager
+    from ..utils.session_manager import SessionManager
+    from ..utils.tool_registry import get_global_registry
+    from ..utils.tool_schemas import get_all_schemas, get_schema
+    from ..tools.skills_tools import SkillsManager, SkillInfo
+    from ..tools.multimodal_tools import MultimodalTools, get_multimodal_tools_schema
+    from .sub_agent import SubAgent
+    from ..config import settings
 
 
 class MainAgent(BaseAgent):
@@ -133,7 +155,10 @@ class MainAgent(BaseAgent):
         # 如果无法动态获取，使用后备方法
         if not skill_names:
             # 方法1：从配置获取
-            from config import settings
+            if __package__ in (None, ""):
+                from config import settings
+            else:
+                from ..config import settings
 
             if hasattr(settings, "skills") and hasattr(
                 settings.skills, "skills_metadata"
@@ -386,12 +411,12 @@ class MainAgent(BaseAgent):
                     tool_name = f"{skill_name}_{func_name}"
 
                     # 创建简化的schema
-                    from utils.tool_schemas import get_schema
+                    from ..utils.tool_schemas import get_schema
 
                     schema = get_schema(tool_name, self.skills_manager)
 
                     # 手动创建schema覆盖参数
-                    from utils.tool_registry import ToolSchema, ToolParameter
+                    from ..utils.tool_registry import ToolSchema, ToolParameter
 
                     params = []
                     for param_name, param_info in func_info.get(
@@ -463,7 +488,7 @@ class MainAgent(BaseAgent):
 
                 if not api_key:
                     # 回退到简单响应
-                    return "错误：未设置API密钥。请设置 LLM_API_KEY 环境变量。"
+                    return "错误：未设置API密钥。请运行 python3 init.py（需进入aacode代码目录内）或 aacode init（如果你是pip安装的aacode）设置 LLM_API_KEY 环境变量。"
 
                 # 确保base_url不为None，根据模型名称和网关类型设置默认URL
                 if not base_url:
@@ -864,7 +889,7 @@ class MainAgent(BaseAgent):
                 registered_count += 1
 
         # 注册多模态工具的schema
-        from utils.tool_registry import ToolSchema, ToolParameter
+        from ..utils.tool_registry import ToolSchema, ToolParameter
 
         multimodal_schema = get_multimodal_tools_schema()
         for schema_dict in multimodal_schema:

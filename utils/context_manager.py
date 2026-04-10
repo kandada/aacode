@@ -6,8 +6,14 @@
 """
 
 import asyncio
+import sys
 from pathlib import Path
 from typing import Dict, Any, List
+
+if __package__ in (None, ""):
+    from config import settings
+else:
+    from ..config import settings
 
 
 class ContextManager:
@@ -53,9 +59,7 @@ class ContextManager:
                     "# 📋 项目初始化指令\n⚠️ init.md 文件不存在，建议创建"
                 )
         except Exception as e:
-            context_parts.append(
-                f"# 📋 项目初始化指令\n⚠️ 检查文件失败: {str(e)[:100]}"
-            )
+            context_parts.append(f"# 📋 项目初始化指令\n⚠️ 检查文件失败: {str(e)[:100]}")
 
         # 优化1：待办文件路径始终在上下文中
         if self.current_todo_file:
@@ -190,7 +194,10 @@ class ContextManager:
         # 6. 使用bash万能适配器获取项目结构 - 增强错误处理和超时保护
         try:
             # 使用配置的超时时间和文件数量限制
-            from config import settings
+            if __package__ in (None, ""):
+                from config import settings
+            else:
+                from ..config import settings
 
             file_search_timeout = settings.timeouts.file_search
             max_files = getattr(settings.limits, "max_context_files", 50)
@@ -241,7 +248,10 @@ class ContextManager:
         except FileNotFoundError:
             # find命令不可用，尝试使用Python实现
             try:
-                from config import settings
+                if __package__ in (None, ""):
+                    from config import settings
+                else:
+                    from ..config import settings
 
                 max_files = getattr(settings.limits, "max_context_files", 50)
                 prioritize = getattr(settings.limits, "prioritize_file_types", True)

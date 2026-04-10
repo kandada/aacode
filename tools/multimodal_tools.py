@@ -7,10 +7,16 @@
 import asyncio
 import base64
 import os
+import sys
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Union
 import openai
-from config import settings
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+    from config import settings
+else:
+    from ..config import settings
 
 
 class MultimodalTools:

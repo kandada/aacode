@@ -4,11 +4,18 @@
 子Agent实现，专注于特定任务
 """
 
-from typing import Dict, List, Any, Optional
+import sys
 from pathlib import Path
-from core.agent import BaseAgent
-from core.react_loop import AsyncReActLoop
+from typing import Dict, List, Any, Optional
 import asyncio
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+    from ..core.agent import BaseAgent
+    from ..core.react_loop import AsyncReActLoop
+else:
+    from .agent import BaseAgent
+    from .react_loop import AsyncReActLoop
 
 
 class SubAgent(BaseAgent):
@@ -90,7 +97,7 @@ class SubAgent(BaseAgent):
         execution_time = 0.0
         if self.start_time is not None:
             execution_time = asyncio.get_event_loop().time() - self.start_time
-            
+
         return {
             **result,
             "agent_id": self.agent_id,

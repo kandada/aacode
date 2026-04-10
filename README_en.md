@@ -20,7 +20,7 @@
 ### Operating System
 This project is primarily developed and tested on Linux and MacOS. It is recommended to use Linux or MacOS. Windows users may encounter Python path issues; please configure accordingly.
 
-### One-Click Initialization (Recommended)
+### One-Click Initialization
 
 ```bash
 git clone https://github.com/kandada/aacode.git
@@ -51,6 +51,20 @@ python main.py -p examples/my_project "Complex task" --plan-first
 python main.py -p examples/my_project "Initial task" --interactive
 ## Specify Session
 python main.py --session session_20250128_123456_0 "Continue task"
+```
+
+### Or pip Installation (Recommended)
+After pip install, you can use the `aacode` command
+
+```bash
+# Install
+pip install aacode
+
+# Initialize configuration
+aacode init
+
+# Run
+aacode run -p /your/project/path "your task"
 ```
 
 ## 🔧 Configuration

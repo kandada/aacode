@@ -14,10 +14,20 @@ import sys
 import time
 from pathlib import Path
 from typing import Optional, Dict, Any, List
-from core.main_agent import MainAgent
-from utils.context_manager import ContextManager
-from utils.safety import SafetyGuard
-from config import settings
+
+if __package__ in (None, ""):
+    # git clone 模式：直接运行 python main.py
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from aacode.core.main_agent import MainAgent
+    from aacode.utils.context_manager import ContextManager
+    from aacode.utils.safety import SafetyGuard
+    from aacode.config import settings
+else:
+    # pip install 模式：作为包导入
+    from .core.main_agent import MainAgent
+    from .utils.context_manager import ContextManager
+    from .utils.safety import SafetyGuard
+    from .config import settings
 
 
 class AICoder:
@@ -130,7 +140,10 @@ class AICoder:
         """初始化类方法映射器"""
         try:
             # 尝试使用增强版映射器（现在在class_method_mapper.py中）
-            from utils.class_method_mapper import EnhancedClassMethodMapper
+            if __package__ in (None, ""):
+                from utils.class_method_mapper import EnhancedClassMethodMapper
+            else:
+                from .utils.class_method_mapper import EnhancedClassMethodMapper
 
             self.class_method_mapper = EnhancedClassMethodMapper(self.target_project)
             print("✅ 增强版类方法映射器初始化成功（支持多语言）")
@@ -138,7 +151,10 @@ class AICoder:
             print(f"⚠️  无法导入增强版类方法映射器: {e}")
             try:
                 # 回退到基础版映射器
-                from utils.class_method_mapper import ClassMethodMapper
+                if __package__ in (None, ""):
+                    from utils.class_method_mapper import ClassMethodMapper
+                else:
+                    from .utils.class_method_mapper import ClassMethodMapper
 
                 self.class_method_mapper = ClassMethodMapper(self.target_project)
                 print("✅ 基础版类方法映射器初始化成功（仅Python）")
@@ -147,7 +163,10 @@ class AICoder:
                 self.class_method_mapper = None
 
         # 初始化to-do-list管理器（使用aacode工作目录）
-        from utils.todo_manager import get_todo_manager
+        if __package__ in (None, ""):
+            from utils.todo_manager import get_todo_manager
+        else:
+            from .utils.todo_manager import get_todo_manager
 
         self.todo_manager = get_todo_manager(self.project_path)
 

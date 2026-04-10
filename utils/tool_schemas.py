@@ -5,7 +5,14 @@
 包含参数说明、类型、示例等
 """
 
-from utils.tool_registry import ToolSchema, ToolParameter
+import sys
+from pathlib import Path
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+    from .tool_registry import ToolSchema, ToolParameter
+else:
+    from .tool_registry import ToolSchema, ToolParameter
 
 # ==================== Atomic Tools Schemas ====================
 
@@ -772,7 +779,6 @@ ALL_SCHEMAS = {
     # "add_todo": ADD_TODO_SCHEMA,
     # "complete_todo": COMPLETE_TODO_SCHEMA,
     # "list_todos": LIST_TODOS_SCHEMA,
-
     # MCP Tools
     "list_mcp_tools": LIST_MCP_TOOLS_SCHEMA,
     "call_mcp_tool": CALL_MCP_TOOL_SCHEMA,

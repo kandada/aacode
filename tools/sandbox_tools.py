@@ -6,11 +6,17 @@
 """
 
 import asyncio
+import sys
 from typing import Dict, List, Any, Optional
 from pathlib import Path
 
-from sandbox.vm_manager import SandboxManager
-from sandbox.mcp_client import MCPClient, LocalMCPClient
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+    from sandbox.vm_manager import SandboxManager
+    from sandbox.mcp_client import MCPClient, LocalMCPClient
+else:
+    from ..sandbox.vm_manager import SandboxManager
+    from ..sandbox.mcp_client import MCPClient, LocalMCPClient
 
 
 class SandboxTools:
@@ -29,7 +35,9 @@ class SandboxTools:
         )
 
         # MCP客户端
-        self.mcp_client: MCPClient | LocalMCPClient = LocalMCPClient()  # 默认使用本地客户端
+        self.mcp_client: MCPClient | LocalMCPClient = (
+            LocalMCPClient()
+        )  # 默认使用本地客户端
 
         # 默认沙箱
         self.default_sandbox_id = None
@@ -105,7 +113,10 @@ class SandboxTools:
         return await self.run_in_sandbox(command, sandbox_id, timeout=120)
 
     async def call_mcp(
-        self, tool_name: str, arguments: Dict[Any, Any] | None = None, mcp_server: str | None = None
+        self,
+        tool_name: str,
+        arguments: Dict[Any, Any] | None = None,
+        mcp_server: str | None = None,
     ) -> Dict[str, Any]:
         """
         调用MCP工具

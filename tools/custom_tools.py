@@ -1,7 +1,14 @@
 # 可在此自定义工具
 # tools/custom_tools.py
-from tools.atomic_tools import AtomicTools
+import sys
+from pathlib import Path
 from typing import Optional, Dict, Any
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+    from .atomic_tools import AtomicTools
+else:
+    from .atomic_tools import AtomicTools
 
 
 class CustomTools(AtomicTools):
@@ -28,7 +35,7 @@ def analyze_python_code(code_str):
         tree = ast.parse(code_str)
 
         analysis = {
-        "functions": [],
+            "functions": [],
             "classes": [],
             "imports": [],
             "complexity": 0

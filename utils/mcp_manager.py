@@ -8,11 +8,17 @@ MCP（模型上下文协议）工具管理器
 import asyncio
 import json
 import os
-from typing import Dict, List, Any, Optional, Union
+import sys
 from pathlib import Path
+from typing import Dict, List, Any, Optional, Union
 import aiohttp
 from dataclasses import dataclass, field
-from sandbox.mcp_client import MCPClient, LocalMCPClient
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+    from sandbox.mcp_client import MCPClient, LocalMCPClient
+else:
+    from ..sandbox.mcp_client import MCPClient, LocalMCPClient
 
 
 @dataclass
@@ -67,7 +73,10 @@ class MCPManager:
     def _load_default_config(self):
         """加载默认MCP配置"""
         try:
-            from config import settings
+            if __package__ in (None, ""):
+                from config import settings
+            else:
+                from ..config import settings
 
             # 从配置中加载MCP服务器
             default_servers = []

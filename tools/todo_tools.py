@@ -51,7 +51,7 @@ class TodoTools:
                 "error": "缺少待办事项描述(需要 description 或 item 参数)",
             }
         try:
-            from utils.todo_manager import get_todo_manager
+            from ..utils.todo_manager import get_todo_manager
 
             todo_manager = get_todo_manager(self.project_path)
 
@@ -117,7 +117,7 @@ class TodoTools:
             }
 
         try:
-            from utils.todo_manager import get_todo_manager
+            from ..utils.todo_manager import get_todo_manager
 
             todo_manager = get_todo_manager(self.project_path)
 
@@ -158,7 +158,7 @@ class TodoTools:
             操作结果
         """
         try:
-            from utils.todo_manager import get_todo_manager
+            from ..utils.todo_manager import get_todo_manager
 
             todo_manager = get_todo_manager(self.project_path)
 
@@ -190,7 +190,7 @@ class TodoTools:
             摘要信息
         """
         try:
-            from utils.todo_manager import get_todo_manager
+            from ..utils.todo_manager import get_todo_manager
 
             todo_manager = get_todo_manager(self.project_path)
 
@@ -209,7 +209,7 @@ class TodoTools:
             待办清单文件列表
         """
         try:
-            from utils.todo_manager import get_todo_manager
+            from ..utils.todo_manager import get_todo_manager
 
             todo_manager = get_todo_manager(self.project_path)
 
@@ -249,7 +249,7 @@ class TodoTools:
             record_text = f"[{status}] {record_text}"
 
         try:
-            from utils.todo_manager import get_todo_manager
+            from ..utils.todo_manager import get_todo_manager
 
             todo_manager = get_todo_manager(self.project_path)
 

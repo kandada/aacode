@@ -7,10 +7,16 @@ import asyncio
 import importlib.util
 import inspect
 import os
+import sys
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field
-from utils.tool_registry import ToolRegistry, ToolSchema, ToolParameter
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+    from ..utils.tool_registry import ToolRegistry, ToolSchema, ToolParameter
+else:
+    from ..utils.tool_registry import ToolRegistry, ToolSchema, ToolParameter
 
 
 @dataclass
