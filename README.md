@@ -20,7 +20,7 @@
 ### 操作系统
 该项目主要在Linux和MacOS开发和测试，建议使用Linux或MacOS。Windows环境下有人反馈可能会存在python路径问题（个别情况，且容易解决），请自行配置解决。另外，Windows小部分系统命令会有点不同，可能会让Agent一开始有一点受阻，但它很快会自主找到解决方法，整体不影响Agent自由发挥。
 
-### 一键初始化（推荐）
+### 一键初始化
 
 ```bash
 git clone https://github.com/kandada/aacode.git
@@ -53,6 +53,22 @@ python main.py -p examples/my_project "初始任务" --interactive
 python main.py --session session_20250128_123456_0 "继续任务"
 
 ```
+
+
+### 或pip 安装（推荐）
+pip 安装后可使用aacode命令
+
+```bash
+# 安装
+pip install aacode
+
+# 初始化配置
+aacode init
+
+# 运行
+aacode run -p /your/project/path "your task"
+```
+
 
 ## 🔧 配置说明
 

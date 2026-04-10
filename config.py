@@ -364,9 +364,38 @@ class MultimodalConfig:
 class Settings:
     """全局设置"""
 
+    @staticmethod
+    def _find_config_file(
+        config_file: Optional[str] = None,
+    ) -> tuple[Optional[Path], str]:
+        """
+        多级回退查找配置文件
+        返回 (config_path, source) 元组
+        source 表示配置来源: "explicit", "cwd", "home", "package", "none"
+        """
+        if config_file:
+            path = Path(config_file)
+            if path.exists():
+                return path, "explicit"
+            return None, "none"
+
+        candidates = [
+            (Path.cwd() / "aacode_config.yaml", "cwd"),
+            (Path.home() / ".aacode" / "aacode_config.yaml", "home"),
+        ]
+
+        for path, source in candidates:
+            if path.exists():
+                return path, source
+
+        pkg_config = Path(__file__).parent / "aacode_config.yaml"
+        if pkg_config.exists():
+            return pkg_config, "package"
+
+        return None, "none"
+
     def __init__(self, config_file: Optional[str] = None):
-        self.config_file = config_file or "aacode_config.yaml"
-        self.config_path = Path(self.config_file)
+        self.config_path, self.config_source = self._find_config_file(config_file)
 
         # 默认配置
         self.model = ModelConfig()
@@ -389,7 +418,7 @@ class Settings:
 
     def load_config(self):
         """从文件加载配置"""
-        if self.config_path.exists():
+        if self.config_path and self.config_path.exists():
             try:
                 with open(self.config_path, "r", encoding="utf-8") as f:
                     config_data = yaml.safe_load(f)

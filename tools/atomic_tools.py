@@ -7,6 +7,7 @@
 
 import asyncio
 import subprocess
+import sys
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
@@ -95,21 +96,21 @@ class AtomicTools:
                 # 1. 先调整行号边界（1-based行号）
                 adj_line_start = line_start if line_start is not None else 1
                 adj_line_end = line_end if line_end is not None else total_lines
-                
+
                 # 确保行号在有效范围内
                 adj_line_start = max(1, min(adj_line_start, total_lines))
                 adj_line_end = max(1, min(adj_line_end, total_lines))
-                
+
                 # 2. 转换为0-based索引
                 start_idx = adj_line_start - 1
                 end_idx = adj_line_end - 1
-                
+
                 # 3. 检查是否有效的范围
                 if start_idx <= end_idx:
                     # 提取行 (end_idx需要+1因为切片不包含结束索引)
                     selected_lines = lines[start_idx : end_idx + 1]
                     content = "\n".join(selected_lines) + "\n"
-                    
+
                     # 计算实际返回的行范围（使用调整后的行号）
                     actual_start_line = adj_line_start
                     actual_end_line = adj_line_end
@@ -132,7 +133,10 @@ class AtomicTools:
                     )
 
             # 读取整个文件 - 智能分段提示
-            from config import settings
+            if __package__ in (None, ""):
+                from config import settings
+            else:
+                from ..config import settings
 
             max_auto_read_lines = getattr(settings.limits, "max_auto_read_lines", 200)
 
@@ -193,7 +197,7 @@ class AtomicTools:
 
         if file_ext in code_extensions:
             try:
-                from utils.code_analyzer import CodeAnalyzer
+                from ..utils.code_analyzer import CodeAnalyzer
 
                 analyzer = CodeAnalyzer(self.project_path)
                 analysis = analyzer.analyze_code(content, file_ext)
@@ -233,8 +237,8 @@ class AtomicTools:
             "suggestions": [
                 f"📖 读取前100行: read_file(path='{path}', line_end=100)",
                 f"📖 读取第100-200行: read_file(path='{path}', line_start=100, line_end=200)",
-                f"📖 读取中间部分: read_file(path='{path}', line_start={total_lines//2-50}, line_end={total_lines//2+50})",
-                f"📖 读取末尾100行: read_file(path='{path}', line_start={max(1, total_lines-100)})",
+                f"📖 读取中间部分: read_file(path='{path}', line_start={total_lines // 2 - 50}, line_end={total_lines // 2 + 50})",
+                f"📖 读取末尾100行: read_file(path='{path}', line_start={max(1, total_lines - 100)})",
             ],
             "preview": "\n".join(lines[:50]) + f"\n\n... (还有 {total_lines - 50} 行)",
             "note": "💡 提示:使用 line_start 和 line_end 参数读取特定范围",
@@ -254,7 +258,7 @@ class AtomicTools:
                     "name": f["name"],
                     "line": f["line"],
                     "args": f.get("args", []),
-                    "suggestion": f"read_file(path='{path}', line_start={f['line']}, line_end={f['line']+20})",
+                    "suggestion": f"read_file(path='{path}', line_start={f['line']}, line_end={f['line'] + 20})",
                 }
                 for f in analysis.functions[:10]  # 最多显示10个
             ]
@@ -270,7 +274,7 @@ class AtomicTools:
                     "name": c["name"],
                     "line": c["line"],
                     "methods": c.get("methods", []),
-                    "suggestion": f"read_file(path='{path}', line_start={c['line']}, line_end={c['line']+50})",
+                    "suggestion": f"read_file(path='{path}', line_start={c['line']}, line_end={c['line'] + 50})",
                 }
                 for c in analysis.classes[:5]  # 最多显示5个
             ]
@@ -297,22 +301,22 @@ class AtomicTools:
         if analysis.functions:
             func = analysis.functions[0]
             suggestions.append(
-                f"📖 读取第一个函数 '{func['name']}': read_file(path='{path}', line_start={func['line']}, line_end={func['line']+30})"
+                f"📖 读取第一个函数 '{func['name']}': read_file(path='{path}', line_start={func['line']}, line_end={func['line'] + 30})"
             )
 
         # 基于类的建议
         if analysis.classes:
             cls = analysis.classes[0]
             suggestions.append(
-                f"📖 读取第一个类 '{cls['name']}': read_file(path='{path}', line_start={cls['line']}, line_end={cls['line']+50})"
+                f"📖 读取第一个类 '{cls['name']}': read_file(path='{path}', line_start={cls['line']}, line_end={cls['line'] + 50})"
             )
 
         # 通用建议
         suggestions.extend(
             [
                 f"📖 读取前100行: read_file(path='{path}', line_end=100)",
-                f"📖 读取中间部分: read_file(path='{path}', line_start={total_lines//2-50}, line_end={total_lines//2+50})",
-                f"📖 读取末尾: read_file(path='{path}', line_start={max(1, total_lines-100)})",
+                f"📖 读取中间部分: read_file(path='{path}', line_start={total_lines // 2 - 50}, line_end={total_lines // 2 + 50})",
+                f"📖 读取末尾: read_file(path='{path}', line_start={max(1, total_lines - 100)})",
             ]
         )
 
@@ -507,7 +511,7 @@ class AtomicTools:
 
             lines = lines[start:end]
             if start_line or end_line:
-                print(f"📏 应用行范围过滤(source_): 第{start+1}-{end}行")
+                print(f"📏 应用行范围过滤(source_): 第{start + 1}-{end}行")
 
         # 应用正则表达式过滤 - 强制使用source_前缀参数
         pattern = kwargs.get("source_pattern")
@@ -701,7 +705,10 @@ class AtomicTools:
         try:
             # 使用配置的超时时间(来自 aacode_config.yaml)
             if timeout is None:
-                from config import settings
+                if __package__ in (None, ""):
+                    from config import settings
+                else:
+                    from ..config import settings
 
                 timeout = settings.timeouts.shell_command
 
@@ -735,7 +742,10 @@ class AtomicTools:
                 stderr_text = stderr.decode("utf-8", errors="ignore")
 
                 # 打印输出预览(使用配置的预览长度)
-                from config import settings
+                if __package__ in (None, ""):
+                    from config import settings
+                else:
+                    from ..config import settings
 
                 preview_length = settings.limits.shell_output_preview
 
@@ -822,7 +832,10 @@ class AtomicTools:
                     break
 
             # 使用配置的最大结果数(来自 aacode_config.yaml)
-            from config import settings
+            if __package__ in (None, ""):
+                from config import settings
+            else:
+                from ..config import settings
 
             if max_results == 100:  # 使用默认值，检查配置
                 max_results = settings.limits.max_file_list_results
@@ -1019,7 +1032,10 @@ class AtomicTools:
             import subprocess
 
             # 使用配置的最大结果数(来自 aacode_config.yaml)
-            from config import settings
+            if __package__ in (None, ""):
+                from config import settings
+            else:
+                from ..config import settings
 
             if max_results == 20:  # 使用默认值，检查配置
                 max_results = settings.limits.max_search_results

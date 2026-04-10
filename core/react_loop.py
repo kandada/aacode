@@ -8,12 +8,20 @@
 import asyncio
 import json
 import re
+import sys
+from pathlib import Path
 from typing import Dict, List, Any, Optional, Callable, Awaitable
 from dataclasses import dataclass
-from pathlib import Path
-from utils.agent_logger import get_logger
-from utils.tool_registry import get_global_registry
-from config import settings  # 导入全局配置
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+    from ..utils.agent_logger import get_logger
+    from ..utils.tool_registry import get_global_registry
+    from ..config import settings
+else:
+    from ..utils.agent_logger import get_logger
+    from ..utils.tool_registry import get_global_registry
+    from ..config import settings
 
 
 @dataclass
@@ -78,7 +86,7 @@ class AsyncReActLoop:
         self.context_config = context_config
 
         # Token计数器（用于智能缩减）
-        from utils.session_manager import _load_tiktoken_encoding
+        from ..utils.session_manager import _load_tiktoken_encoding
 
         self.encoding = _load_tiktoken_encoding()
 

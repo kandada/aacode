@@ -13,6 +13,11 @@ from typing import Dict, Any, Optional, List
 import subprocess
 import sys
 
+if __package__ in (None, ""):
+    from config import settings
+else:
+    from ..config import settings
+
 
 class CodeTools:
     """代码执行和测试工具"""
@@ -46,7 +51,10 @@ class CodeTools:
         try:
             # 使用配置的超时时间(来自 aacode_config.yaml)
             if timeout is None:
-                from config import settings
+                if __package__ in (None, ""):
+                    from config import settings
+                else:
+                    from ..config import settings
 
                 timeout = settings.timeouts.code_execution
 
@@ -156,7 +164,10 @@ class CodeTools:
 
             try:
                 # 使用配置的超时时间(来自 aacode_config.yaml)
-                from config import settings
+                if __package__ in (None, ""):
+                    from config import settings
+                else:
+                    from ..config import settings
 
                 test_timeout = settings.timeouts.code_execution
 

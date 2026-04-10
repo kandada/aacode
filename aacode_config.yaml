@@ -109,8 +109,8 @@ multimodal:
       name: kimi-k2.5
       provider: moonshot
       gateway: openai
-      base_url: "https://api.moonshot.cn/v1"  # 从环境变量 MULTIMODAL_API_URL 读取，默认 https://api.moonshot.cn/v1
-      api_key: ""  # 从环境变量 MULTIMODAL_API_KEY 读取 或 LLM_API_KEY 读取
+      base_url: "https://api.moonshot.cn/v1"  # 默认从环境变量 MULTIMODAL_API_URL 读取，默认 https://api.moonshot.cn/v1
+      api_key: ""  # 默认从环境变量 MULTIMODAL_API_KEY 读取
       vision: true
       video: true
       max_image_size: 10485760  # 10MB
@@ -124,8 +124,8 @@ multimodal:
       name: MiniMax-M2.5
       provider: minimax
       gateway: anthropic
-      base_url: "https://api.minimax.chat/v1"  # 从环境变量 MULTIMODAL_API_URL 读取，默认 https://api.minimax.chat/v1
-      api_key: ""  # 从环境变量 MULTIMODAL_API_KEY 或 LLM_API_KEY 读取
+      base_url: "https://api.minimax.chat/v1"  # 从环境变量 默认MULTIMODAL_API_URL 读取，默认 https://api.minimax.chat/v1
+      api_key: ""  # 默认从环境变量 MULTIMODAL_API_KEY 或 LLM_API_KEY 读取
       vision: true
       video: true
       max_image_size: 10485760  # 10MB
