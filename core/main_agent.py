@@ -536,8 +536,10 @@ class MainAgent(BaseAgent):
                 gateway = model_config.get("gateway", "openai")
 
                 if not api_key:
-                    # 回退到简单响应
-                    return "错误：未设置API密钥。请运行 python3 init.py（需进入aacode代码目录内）或 aacode init（如果你是pip安装的aacode）设置 LLM_API_KEY 环境变量。"
+                    # API Key 未设置，抛出异常让 react_loop 显示错误
+                    error_msg = "❌ API Key 未设置！请在客户端 Settings 中配置 API Key，或运行 aacode init 设置。"
+                    print(error_msg)
+                    raise RuntimeError(error_msg)
 
                 # 确保base_url不为None，根据模型名称和网关类型设置默认URL
                 if not base_url:

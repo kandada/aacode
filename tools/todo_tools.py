@@ -99,21 +99,23 @@ class TodoTools:
 
         Args:
             item_pattern: 待办事项匹配模式
-            title: 待办事项标题(兼容旧格式)
-
-        注意:**kwargs 用于接收并忽略模型可能传入的额外参数
+            **kwargs: 兼容模型常用参数名（title/item/name/task/todo）
 
         Returns:
             操作结果
         """
-        # 兼容 title 参数
+        # 兼容多种参数名
         if not item_pattern:
-            item_pattern = kwargs.get("title")
+            for key in ("title", "item", "name", "task", "todo", "description"):
+                val = kwargs.get(key)
+                if val:
+                    item_pattern = val
+                    break
 
         if not item_pattern:
             return {
                 "success": False,
-                "error": "缺少待办事项匹配模式(需要 item_pattern 或 title 参数)",
+                "error": "缺少待办事项匹配模式",
             }
 
         try:
@@ -229,19 +231,41 @@ class TodoTools:
         Args:
             record: 执行记录描述(优先使用)
             description: 执行记录描述(兼容旧格式)
-            status: 执行状态(可选，会被附加到记录中)
-
-        注意:**kwargs 用于接收并忽略模型可能传入的额外参数
+            **kwargs: 兼容模型常用的各种参数名（task/action/result/details/content/message）
 
         Returns:
             操作结果
         """
+        # 兼容模型传入的各种参数名，按优先级取值
         record_text = record or description
+        if not record_text:
+            # 尝试从 kwargs 中提取，模型可能用任意参数名
+            for key in ("task", "action", "content", "message", "result", "details", "summary", "note"):
+                val = kwargs.get(key)
+                if val:
+                    record_text = val
+                    break
+
+        if not record_text:
+            # 最后兜底：把所有 kwargs 的值拼起来
+            all_vals = [str(v) for v in kwargs.values() if v]
+            if all_vals:
+                record_text = " | ".join(all_vals)
+
         if not record_text:
             return {
                 "success": False,
-                "error": "缺少执行记录描述(需要 record 或 description 参数)",
+                "error": "缺少执行记录描述",
             }
+
+        # 拼接补充信息（如果有多个字段，把其他字段也加上）
+        extra_parts = []
+        for key in ("result", "details", "status"):
+            val = kwargs.get(key)
+            if val and val != record_text:
+                extra_parts.append(f"{val}")
+        if extra_parts:
+            record_text = f"{record_text} - {' | '.join(extra_parts)}"
 
         # 附加状态信息
         status = kwargs.get("status")
