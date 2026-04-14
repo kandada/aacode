@@ -40,9 +40,10 @@ class MCPServerConfig:
 class MCPManager:
     """MCP工具管理器"""
 
-    def __init__(self, project_path: Path, config_file: Optional[Path] = None):
-        self.project_path = project_path
-        self.config_file = config_file or (project_path / "mcp_config.json")
+    def __init__(self, project_path, config_file: Optional[Path] = None):
+        from pathlib import Path
+        self.project_path = Path(project_path) if not isinstance(project_path, Path) else project_path
+        self.config_file = config_file or (self.project_path / "mcp_config.json")
         self.servers: Dict[str, MCPServerConfig] = {}
         self.clients: Dict[str, Union[MCPClient, LocalMCPClient]] = {}
         self.connected_servers: Dict[str, bool] = {}

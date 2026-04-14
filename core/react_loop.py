@@ -38,6 +38,7 @@ class ReActStep:
     """ReAct单步记录"""
 
     thought: str
+    raw_response: str = ""  # 模型完整响应（含 thinking），用于保存会话历史
     actions: Optional[List[ActionItem]] = None
     timestamp: float = 0.0
 
@@ -95,6 +96,7 @@ class AsyncReActLoop:
         initial_prompt: str,
         task_description: str,
         todo_manager: Optional[Any] = None,
+        history_messages: Optional[List[Dict]] = None,
     ) -> Dict[str, Any]:
         """
         运行ReAct循环
@@ -103,6 +105,7 @@ class AsyncReActLoop:
             initial_prompt: 初始提示
             task_description: 任务描述
             todo_manager: to-do-list管理器
+            history_messages: 同一会话的历史对话消息（用于多轮任务上下文衔接）
 
         Returns:
             执行结果
@@ -158,11 +161,29 @@ class AsyncReActLoop:
 
         messages = [
             {"role": "system", "content": system_prompt},
+        ]
+
+        # ─── 多轮任务上下文衔接 ───────────────────────────────────
+        # 同一会话中，第二轮及后续任务需要看到之前的对话历史
+        # history_messages 来自 session_manager，包含之前所有轮次的 user/assistant 消息
+        # 插入到 system prompt 之后、当前任务之前，让模型了解之前做了什么
+        # ⚠️ 不要去掉这段逻辑，否则多轮任务间上下文会脱节
+        # ⚠️ token 超限时会由 _compact_context 自动压缩，不需要在这里截断
+        if history_messages:
+            for msg in history_messages:
+                role = msg.get("role", "")
+                content = msg.get("content", "")
+                if role in ("user", "assistant") and content:
+                    messages.append({"role": role, "content": content})
+            if len(history_messages) > 0:
+                print(f"📜 已加载 {len(history_messages)} 条历史消息到上下文")
+
+        messages.append(
             {
                 "role": "user",
                 "content": f"任务：{task_description}\n\n当前上下文：\n{self.current_context}\n\n请按照Thought->Action的格式执行（不要输出Observation，系统会自动执行工具并返回结果）",
             },
-        ]
+        )
 
         start_time = asyncio.get_event_loop().time()
 
@@ -191,9 +212,9 @@ class AsyncReActLoop:
             if todo_manager:
                 await self._update_todo_from_thought(thought, todo_manager)
 
-            # 记录步骤
+            # 记录步骤（raw_response 保留完整模型响应，含 thinking，用于会话历史保存）
             step = ReActStep(
-                thought=thought, actions=[], timestamp=asyncio.get_event_loop().time()
+                thought=thought, raw_response=response, actions=[], timestamp=asyncio.get_event_loop().time()
             )
             self.steps.append(step)
 
@@ -204,7 +225,7 @@ class AsyncReActLoop:
                 thought, actions[0].action if actions else None, task_description
             ):
                 print("✅ 任务完成")
-                print(f"\n📋 任务总结:\n{thought}")
+                # thought 内容已在流式输出中打印过，不再重复打印
                 total_time = asyncio.get_event_loop().time() - start_time
                 if self.logger:
                     await self.logger.log_iteration(
@@ -219,11 +240,11 @@ class AsyncReActLoop:
                         final_status="completed",
                         total_iterations=iteration + 1,
                         total_time=total_time,
-                        summary={"final_thought": thought},
+                        summary={"final_thought": response},
                     )
                 return {
                     "status": "completed",
-                    "final_thought": thought,
+                    "final_thought": response,
                     "iterations": iteration + 1,
                     "steps": self.steps,
                     "total_time": total_time,
@@ -311,6 +332,15 @@ class AsyncReActLoop:
                     observation_for_display or observation or ""
                 )  # 用户看到简化版本
 
+                # 实时打印 Observation（供客户端显示）
+                display_obs = observation_for_display or observation or ""
+                if display_obs:
+                    # 截断过长的输出，避免刷屏
+                    max_display = 3000
+                    if len(display_obs) > max_display:
+                        display_obs = display_obs[:max_display] + f"\n... (已截断，共{len(observation_for_display or observation)}字符)"
+                    print(f"📋 Observation:\n{display_obs}", flush=True)
+
                 # 🔥 新增：从错误中自动更新待办清单
                 if todo_manager:
                     await self._update_todo_from_error(observation, todo_manager)
@@ -344,7 +374,20 @@ class AsyncReActLoop:
                 ]
             )
 
-            # 上下文一致性检查
+            # 添加到上下文消息（Agent获取完整内容，包括 thinking）
+            # ⚠️ response 包含完整的 "💭 思考过程:\n{thinking}\n\nThought: {content}"
+            # 不要清理或截断 response，模型需要看到完整的推理过程
+            messages.append({"role": "assistant", "content": response})
+            messages.append(
+                {
+                    "role": "user",
+                    # ⚠️ 这是 react_loop 迭代驱动消息，不是用户输入
+                    # 用 [系统] 前缀明确区分，避免模型误以为是用户在说话
+                    "content": f"[系统] 工具执行结果如下，请根据结果继续执行下一步（Thought→Action），如果任务已完成则直接输出最终总结。\n\n观察：{observation}",
+                }
+            )
+
+            # 上下文一致性检查（在 messages 更新后，确保 assistant token 统计正确）
             await self._validate_context_consistency(
                 all_observations, all_observations_for_display, messages
             )
@@ -363,15 +406,6 @@ class AsyncReActLoop:
             # 更新上下文（使用完整observation）
             await self.context_manager.update(observation)
             self.current_context = await self.context_manager.get_compact_context()
-
-            # 添加观察到消息（Agent获取完整内容）
-            messages.append({"role": "assistant", "content": response})
-            messages.append(
-                {
-                    "role": "user",
-                    "content": f"观察：{observation}\n\n请继续...",  # Agent获取完整observation
-                }
-            )
 
             # 智能上下文缩减检查（基于token数）
             current_tokens = self._estimate_tokens(messages)
@@ -624,9 +658,9 @@ class AsyncReActLoop:
                     # 记录JSON解析错误，但继续尝试其他格式
                     print(f"⚠️  JSON解析失败 (pattern {pattern[:20]}...): {str(e)}")
                     if json_str:
-                        print(f"   尝试的JSON: {json_str[:100]}...")
+                        print(f"⚠️  尝试的JSON: {json_str[:100]}...")
                     else:
-                        print(f"   尝试的JSON: [无法获取JSON字符串]")
+                        print(f"⚠️  尝试的JSON: [无法获取JSON字符串]")
                     continue
                 except Exception as e:
                     print(f"⚠️  JSON处理异常: {str(e)}")
@@ -710,8 +744,7 @@ class AsyncReActLoop:
                                 break
                             except json.JSONDecodeError as e:
                                 # JSON解析失败，提供详细错误信息
-                                print(f"⚠️  Action Input JSON解析失败: {str(e)}")
-                                print(f"   原始输入: {input_text[:100]}...")
+                                print(f"⚠️  Action Input JSON解析失败: {str(e)} | 原始输入: {input_text[:100]}...")
                                 action_input = {
                                     "_error": f"JSON格式错误: {str(e)}",
                                     "_raw": input_text,
@@ -1212,13 +1245,7 @@ class AsyncReActLoop:
         messages.clear()
         messages.extend(compacted_messages)
 
-        print(f"✅ 智能上下文缩减完成：{len(messages)} 条消息")
-        print(
-            f"   Token数: {old_tokens} → {new_tokens} (减少 {old_tokens - new_tokens}, {(old_tokens - new_tokens) / old_tokens * 100:.1f}%)"
-        )
-        print(f"   保护前 {protect_first_rounds} 轮（任务规划）")
-        print(f"   保留最近 {keep_rounds} 轮对话")
-        print(f"   摘要了 {len(middle_messages)} 条中间消息")
+        print(f"✅ 智能上下文缩减完成：{len(messages)} 条消息 | Token: {old_tokens} → {new_tokens} (减少 {(old_tokens - new_tokens) / old_tokens * 100:.1f}%) | 保护前{protect_first_rounds}轮 | 保留最近{keep_rounds}轮 | 摘要{len(middle_messages)}条")
 
     async def _compact_file_contents(self, messages: List[Dict]) -> List[Dict]:
         """
@@ -2099,16 +2126,11 @@ class AsyncReActLoop:
         """
         # 1. 检查观察结果数量一致性
         if len(all_observations) != len(all_observations_for_display):
-            print(f"⚠️  上下文一致性警告：观察结果数量不匹配")
-            print(
-                f"   Agent观察数: {len(all_observations)}, 用户观察数: {len(all_observations_for_display)}"
-            )
+            print(f"⚠️  上下文一致性警告：观察结果数量不匹配 | Agent观察数: {len(all_observations)}, 用户观察数: {len(all_observations_for_display)}")
 
         # 2. 检查token使用情况
         current_tokens = self._estimate_tokens(messages)
         if current_tokens > 5000:  # 警告阈值
-            print(f"📊 上下文大小监控：当前约{current_tokens} tokens")
-
             # 显示消息分布
             system_tokens = self._estimate_tokens(
                 [msg for msg in messages if msg.get("role") == "system"]
@@ -2119,10 +2141,7 @@ class AsyncReActLoop:
             assistant_tokens = self._estimate_tokens(
                 [msg for msg in messages if msg.get("role") == "assistant"]
             )
-
-            print(f"   系统消息: {system_tokens} tokens")
-            print(f"   用户消息: {user_tokens} tokens")
-            print(f"   Assistant消息: {assistant_tokens} tokens")
+            print(f"📊 上下文大小监控：当前约{current_tokens} tokens | 系统: {system_tokens} | 用户: {user_tokens} | Assistant: {assistant_tokens}")
 
         # 3. 检查归档路径是否保留（简化版本中）
         for i, obs_display in enumerate(all_observations_for_display):

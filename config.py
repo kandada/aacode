@@ -379,18 +379,22 @@ class Settings:
                 return path, "explicit"
             return None, "none"
 
+        # 环境变量指定配置文件（客户端开发模式用）
+        env_config = os.getenv("AACODE_CONFIG_FILE")
+        if env_config:
+            path = Path(env_config)
+            if path.exists():
+                return path, "explicit"
+
         candidates = [
             (Path.cwd() / "aacode_config.yaml", "cwd"),
+            (Path(__file__).parent / "aacode_config.yaml", "package"),
             (Path.home() / ".aacode" / "aacode_config.yaml", "home"),
         ]
 
         for path, source in candidates:
             if path.exists():
                 return path, source
-
-        pkg_config = Path(__file__).parent / "aacode_config.yaml"
-        if pkg_config.exists():
-            return pkg_config, "package"
 
         return None, "none"
 

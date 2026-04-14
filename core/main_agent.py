@@ -14,6 +14,55 @@ import subprocess
 import openai
 import anthropic
 
+# ─── 流式输出架构说明 ───────────────────────────────────────────
+# 
+# 数据流：Python stdout → Rust read_line() → Tauri emit → 前端 JS
+#
+# 两种输出模式（由 _is_tty 决定）：
+#   1. TTY 模式（CLI 终端直接运行）：
+#      - print(text, end="") 逐字追加，不加换行，终端实时显示
+#      - 用户在终端直接看到流式输出
+#
+#   2. 管道模式（Tauri 桌面客户端通过子进程调用）：
+#      - Rust 端用 read_line() 按行读取 stdout
+#      - read_line() 需要 \n 才能返回一行，所以 print(text) 必须加换行
+#      - 但模型 token 本身可能包含 \n（如表格行间换行），这个 \n 会和
+#        print 加的 \n 混淆，导致 Rust 端无法区分
+#      - 解决方案：_stream_print 在管道模式下将 token 中的 \n 转义为 \x00，
+#        Rust 端 read_line 后 trim 掉 print 加的 \n，再将 \x00 还原为 \n
+#      - 这样前端收到的 content 就是模型的原始 token，换行信息不失真
+#
+# 系统日志行（如 "🤖 模型思考中"、"📋 Observation:" 等）：
+#   - 直接用 print() 输出，不经过 _stream_print
+#   - Rust 端 trim 后发送给前端，前端通过 emoji 前缀识别并加 \n 分行
+#   - 注意：不要用 _stream_print 输出系统标记行，否则 \x00 转义会干扰前端识别
+#
+# ⚠️ 重要：不要修改 TTY 模式下的 end="" 行为，这是终端流式显示所必需的
+# ⚠️ 重要：不要去掉管道模式下的 \x00 转义，否则表格等多行内容会渲染失败
+# ─────────────────────────────────────────────────────────────────
+
+_is_tty = sys.stdout.isatty()
+
+def _stream_print(text, newline_after=False):
+    """
+    流式输出模型 token。
+    
+    - TTY 模式：逐字追加（end=""），终端实时显示
+    - 管道模式：token 中 \\n 转义为 \\x00 后 print（带换行），
+      Rust read_line() 读取后还原 \\x00 → \\n，去掉 print 加的末尾 \\n
+    
+    仅用于模型流式 token 输出。系统标记行（emoji 开头）应直接用 print()。
+    """
+    if _is_tty:
+        print(text, end="", flush=True)
+    else:
+        # 管道模式：转义 token 中的 \n 为 \x00，避免和 print 自动加的 \n 混淆
+        # Rust 端 read_line() 读到一行后：trim 末尾 \n → 还原 \x00 → \n → 发送给前端
+        escaped = text.replace('\n', '\x00')
+        print(escaped, flush=True)
+    if newline_after and _is_tty:
+        print()
+
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).parent.parent.parent))
     from core.agent import BaseAgent
@@ -629,7 +678,7 @@ class MainAgent(BaseAgent):
             temperature = 1.0
 
         # 流式输出
-        print("🤖 模型思考中", end="", flush=True)
+        _stream_print("🤖 模型思考中")
         full_response = ""
 
         stream = await client.chat.completions.create(
@@ -640,14 +689,55 @@ class MainAgent(BaseAgent):
             stream=True,  # 启用流式输出
         )
 
-        # 处理流式响应
+        # ─── 流式响应处理 ───
+        # reasoning_content: 模型的思考过程（Kimi/DeepSeek-R1），用 _stream_print 输出
+        # delta.content: 模型的正式回复，用 _stream_print 输出
+        # 系统标记行（💭、Thought:）：直接 print，不走 _stream_print，前端通过前缀识别
+        thinking_printed = False
+        thinking_content = ""
         async for chunk in stream:
-            if chunk.choices[0].delta.content is not None:
-                content_chunk = chunk.choices[0].delta.content
-                full_response += content_chunk
-                print(content_chunk, end="", flush=True)
+            delta = chunk.choices[0].delta
+            # 处理 reasoning_content（Kimi/DeepSeek-R1 的 thinking）
+            reasoning = getattr(delta, 'reasoning_content', None)
+            if reasoning:
+                if not thinking_printed:
+                    # ⚠️ 标记行直接 print，不走 _stream_print，否则 \x00 转义会干扰前端识别
+                    print("💭 思考过程:", flush=True)
+                    thinking_printed = True
+                thinking_content += reasoning
+                _stream_print(reasoning)  # 模型 token，走转义
+            # 处理正常内容
+            if delta.content is not None:
+                if thinking_printed:
+                    # ⚠️ Thought: 标记行直接 print，前端通过 startsWith('Thought:') 识别类型切换
+                    print("\nThought: ", end="", flush=True) if _is_tty else print("\nThought: ", flush=True)
+                    thinking_printed = False
+                full_response += delta.content
+                _stream_print(delta.content)
 
-        print()  # 换行
+        if _is_tty:
+            print()  # CLI 换行
+
+        # ─── thinking 内容拼接到返回值 ───
+        # 将 thinking 拼到 full_response 前面，格式：
+        #   "💭 思考过程:\n{thinking}\n\nThought: {正式回复}"
+        # 
+        # 这个 full_response 会被用于：
+        #   1. react_loop messages 上下文（模型后续迭代能看到完整的 thinking）
+        #   2. _parse_response 解析出 thought（正则匹配 Thought: 后面的内容）
+        #   3. 保存到会话文件（历史记录需要显示 thinking）
+        #
+        # ⚠️ 不要去掉 thinking 拼接，否则：
+        #   - 上下文不完整，模型丢失推理过程
+        #   - 历史记录看不到 thinking 内容
+        if thinking_content:
+            # 去掉 full_response 开头可能的 \n 和 Thought: 前缀（模型可能自己输出了）
+            # 避免拼接后出现 "Thought: \nThought:" 的重复
+            clean_response = full_response.lstrip('\n')
+            if clean_response.startswith('Thought:'):
+                clean_response = clean_response[len('Thought:'):].lstrip()
+            full_response = f"💭 思考过程:\n{thinking_content}\n\nThought: {clean_response}"
+
         return full_response if full_response is not None else ""
 
     async def _call_anthropic_api(
@@ -709,7 +799,7 @@ class MainAgent(BaseAgent):
                     formatted_messages.append({"role": anth_role, "content": content})
 
         # 流式输出
-        print("🤖 模型思考中", end="", flush=True)
+        _stream_print("🤖 模型思考中")
         full_response = ""
 
         try:
@@ -721,6 +811,8 @@ class MainAgent(BaseAgent):
 
             def sync_stream_call():
                 response = ""
+                thinking_content = ""
+                in_thinking = False
                 # 准备stream参数
                 stream_kwargs = {
                     "model": model_name,
@@ -734,9 +826,53 @@ class MainAgent(BaseAgent):
                     stream_kwargs["system"] = system_message
 
                 with client.messages.stream(**stream_kwargs) as stream:
-                    for text in stream.text_stream:
-                        response += text
-                        print(text, end="", flush=True)
+                    for event in stream:
+                        event_type = getattr(event, 'type', '')
+
+                        # content_block_start: 新的内容块开始
+                        if event_type == 'content_block_start':
+                            block = getattr(event, 'content_block', None)
+                            if block:
+                                block_type = getattr(block, 'type', '')
+                                if block_type == 'thinking':
+                                    in_thinking = True
+                                    print(f"\n💭 思考过程:", flush=True)
+                                elif block_type == 'text':
+                                    if in_thinking:
+                                        print("\nThought: ", flush=True)
+                                        in_thinking = False
+
+                        # content_block_delta: 内容块增量
+                        elif event_type == 'content_block_delta':
+                            delta = getattr(event, 'delta', None)
+                            if delta:
+                                delta_type = getattr(delta, 'type', '')
+                                if delta_type == 'thinking_delta':
+                                    text = getattr(delta, 'thinking', '')
+                                    if text:
+                                        thinking_content += text
+                                        _stream_print(text)
+                                elif delta_type == 'text_delta':
+                                    text = getattr(delta, 'text', '')
+                                    if text:
+                                        response += text
+                                        _stream_print(text)
+
+                        # content_block_stop: 内容块结束
+                        elif event_type == 'content_block_stop':
+                            if in_thinking:
+                                print("\n", flush=True)
+                                in_thinking = False
+
+                # 把 thinking 内容拼到返回值前面
+                # ⚠️ response 开头可能有模型自己输出的 "\nThought:" 前缀，
+                # 拼接前先清理，避免出现 "Thought: \nThought:" 的重复
+                if thinking_content:
+                    clean_resp = response.lstrip('\n')
+                    if clean_resp.startswith('Thought:'):
+                        clean_resp = clean_resp[len('Thought:'):].lstrip()
+                    response = f"💭 思考过程:\n{thinking_content}\n\nThought: {clean_resp}"
+
                 return response
 
             full_response = await loop.run_in_executor(None, sync_stream_call)
@@ -947,9 +1083,13 @@ class MainAgent(BaseAgent):
         print(f"\n🤖 主Agent开始执行任务: {task}")
         self.start_time = asyncio.get_event_loop().time()
 
-        # 创建会话并显示 session_id
-        session_id = await self.session_manager.create_session(task)
-        print(f"📋 会话ID: {session_id}")
+        # 如果已有当前会话，复用；否则创建新会话
+        if self.session_manager.current_session_id:
+            session_id = self.session_manager.current_session_id
+            print(f"📋 复用会话ID: {session_id}")
+        else:
+            session_id = await self.session_manager.create_session(task)
+            print(f"📋 会话ID: {session_id}")
         print(f"💡 提示: 使用 --session {session_id} 可以继续此会话")
 
         # 更新系统提示，包含项目分析结果
@@ -971,31 +1111,87 @@ class MainAgent(BaseAgent):
             }
         )
 
+        # ─── 加载同一会话的历史消息（多轮任务上下文衔接） ───
+        # 从 session_manager 获取当前会话的历史消息（不含 system 消息）
+        # 传给 react_loop.run，让模型在后续轮次中能看到之前的对话
+        # ⚠️ 这是多轮任务上下文衔接的关键，不要去掉
+        history_messages = await self.session_manager.get_messages(include_system=False)
+        # 过滤掉当前任务的消息（还没保存，避免重复）
+        # 历史消息是之前轮次保存的，当前任务的消息在 execute 结束后才保存
+
         # 运行ReAct循环
         try:
             result = await self.react_loop.run(
                 initial_prompt=full_system_prompt,
                 task_description=task,
                 todo_manager=todo_manager,
+                history_messages=history_messages if history_messages else None,
             )
         except asyncio.CancelledError:
-            # 任务被取消，重新抛出以便上层处理
             raise
         except Exception as e:
-            # 记录错误
             print(f"❌ ReAct循环执行失败: {e}")
             import traceback
-
             traceback.print_exc()
-            # 重新抛出异常
             raise
         finally:
-            # 确保资源被清理，即使发生异常
             try:
                 if hasattr(self, "web_tools"):
                     await self.web_tools.cleanup()
             except Exception as e:
                 print(f"⚠️  清理web_tools时出错: {e}")
+
+        # 把 react_loop 的对话历史保存到 session_manager
+        # ─── 保存会话历史 ───────────────────────────────────────────
+        # step.thought 的内容来自 _call_openai_api 的 full_response，格式为：
+        #   有 thinking 时: "💭 思考过程:\n{thinking内容}\n\nThought: {正式回复}"
+        #   无 thinking 时: "{正式回复}"（纯文本，可能有 Thought: 前缀也可能没有）
+        #
+        # ⚠️ 必须保留完整的 thinking 内容，不要清理掉：
+        #   1. 历史记录需要显示 thinking（前端 parseAssistantMessage 能正确解析）
+        #   2. thinking 内容在 react_loop 运行时上下文中也是完整的
+        #      （messages.append 用的是原始 response，包含 thinking）
+        #   3. 去掉 thinking 会导致历史记录不完整，用户看不到模型的推理过程
+        #
+        # ✅ 任务完成标记只存纯标记，不带内容（内容已在最后一个 step 中保存）
+        # ─────────────────────────────────────────────────────────────
+        try:
+            # 先保存用户任务消息（如果还没有）
+            has_user_msg = any(
+                m.role == "user" and m.content == task
+                for m in self.session_manager.current_messages
+            )
+            if not has_user_msg:
+                await self.session_manager.add_message("user", task)
+
+            steps = self.react_loop.steps
+            for step in steps:
+                # 用 raw_response（完整模型响应，含 thinking）保存，而非 step.thought（只有 thought 部分）
+                # raw_response 格式：有 thinking 时 "💭 思考过程:\n{thinking}\n\nThought: {content}"
+                #                   无 thinking 时 "{content}"
+                thought_content = step.raw_response or step.thought
+                # 确保有可识别的前缀（前端 parseAssistantMessage 依赖前缀识别类型）
+                if not thought_content.startswith("Thought:") and not thought_content.startswith("💭 思考过程"):
+                    thought_content = f"Thought: {thought_content}"
+                if step.actions:
+                    actions_parts = []
+                    for a in step.actions:
+                        part = f"Action: {a.action}"
+                        if a.action_input:
+                            import json as _json
+                            part += f"\nInput: {_json.dumps(a.action_input, ensure_ascii=False)[:500]}"
+                        if a.observation:
+                            part += f"\nObservation: {a.observation[:2000]}"
+                        actions_parts.append(part)
+                    thought_content = f"{thought_content}\n\n" + "\n\n".join(actions_parts)
+                await self.session_manager.add_message("assistant", thought_content)
+
+            # ⚠️ 只存纯标记，不要带 summary 内容，否则和最后一个 step 重复
+            await self.session_manager.add_message("assistant", "✅ 任务完成")
+            await self.session_manager._save_session()
+            self.session_manager._save_sessions_index()
+        except Exception as e:
+            print(f"⚠️  保存会话历史失败: {e}")
 
         # 更新统计
         self.iterations = len(self.react_loop.steps)

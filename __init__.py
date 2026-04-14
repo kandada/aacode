@@ -2,15 +2,30 @@
 aacode - AI Coding Assistant based on ReAct architecture
 """
 
-__version__ = "1.5.0"
+__version__ = "1.6.0"
 __author__ = "xiefujin"
 
-if __package__ in (None, ""):
-    # 直接 import aacode 时不导入，避免循环依赖
-    # 用户应使用: from aacode.main import AICoder
-    # 或: from aacode import AICoder (通过 __all__)
-    pass
-else:
+# 修复：无论 __package__ 是否为空，都要确保包可以被导入
+# 当使用 python -c 或作为独立脚本执行时，__package__ 为 None
+try:
     from .main import AICoder
-
     __all__ = ["AICoder", "__version__"]
+except ImportError:
+    # 如果是作为顶层包导入（python -c 场景）
+    import sys
+    from pathlib import Path
+    
+    # 获取包所在目录
+    pkg_dir = Path(__file__).parent
+    
+    # 添加父目录到 sys.path（这样可以导入 aacode.core 等）
+    if str(pkg_dir.parent) not in sys.path:
+        sys.path.insert(0, str(pkg_dir.parent))
+    
+    # 尝试再次导入
+    try:
+        from main import AICoder
+        __all__ = ["AICoder", "__version__"]
+    except ImportError:
+        # 如果还是失败，至少定义 __all__ 避免其他问题
+        __all__ = ["__version__"]
