@@ -10,18 +10,19 @@ import sys
 from pathlib import Path
 from typing import Dict, Any, List
 
-if __package__ in (None, ""):
+try:
     from config import settings
-else:
+except ImportError:
     from ..config import settings
 
 
 class ContextManager:
     """极简文件化上下文管理器"""
 
-    def __init__(self, project_path: Path):
-        self.project_path = project_path
-        self.context_dir = project_path / ".aacode" / "context"
+    def __init__(self, project_path):
+        from pathlib import Path
+        self.project_path = Path(project_path) if not isinstance(project_path, Path) else project_path
+        self.context_dir = self.project_path / ".aacode" / "context"
         self.context_dir.mkdir(parents=True, exist_ok=True)
         # 优化1：待办文件路径始终在上下文中
         self.current_todo_file = None  # 当前待办文件路径

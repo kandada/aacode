@@ -597,6 +597,7 @@ MARK_TODO_COMPLETED_SCHEMA = ToolSchema(
             required=True,
             description="待办事项的匹配模式（支持模糊匹配）",
             example="用户认证",
+            aliases=["title", "item", "task", "description", "name", "text", "content", "pattern"],
         )
     ],
     examples=[{"item_pattern": "用户认证"}, {"item_pattern": "登录bug"}],

@@ -55,7 +55,7 @@ class MultimodalTools:
                 if model_key in self.models:
                     self.default_model = model_key
                     self.current_model_config = self.models[model_key]
-                    print(f"✅ 多模态工具将使用主模型: MiniMax-M2.5")
+                    print(f"✅ 多模态工具将使用主模型: {settings.model.name}")
                 else:
                     # 动态创建MiniMax配置
                     self._create_minimax_config()
@@ -64,7 +64,7 @@ class MultimodalTools:
                 if model_key in self.models:
                     self.default_model = model_key
                     self.current_model_config = self.models[model_key]
-                    print(f"✅ 多模态工具将使用主模型: Kimi-K2.5")
+                    print(f"✅ 多模态工具将使用主模型: {settings.model.name}")
 
     def _create_minimax_config(self):
         """动态创建MiniMax多模态配置"""
