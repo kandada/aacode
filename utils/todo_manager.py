@@ -155,7 +155,11 @@ class TodoManager:
 
     async def mark_todo_completed(self, item_pattern: str) -> bool:
         """
-        标记待办事项为完成
+        标记待办事项为完成（支持模糊匹配）
+
+        匹配策略：
+        1. 先尝试完整 pattern 包含匹配
+        2. 如果没找到，提取 pattern 中的关键词（去掉常见虚词），任意关键词命中即匹配
 
         Args:
             item_pattern: 待办事项匹配模式
@@ -174,24 +178,40 @@ class TodoManager:
         # 查找并更新待办事项
         lines = content.split("\n")
         updated = False
+        pattern_lower = item_pattern.lower()
 
+        # 第一轮：完整 pattern 包含匹配
         for i, line in enumerate(lines):
             if (
                 line.strip().startswith("- [ ]")
-                and item_pattern.lower() in line.lower()
+                and pattern_lower in line.lower()
             ):
-                # 标记为完成
                 lines[i] = line.replace("- [ ]", "- [x]", 1)
                 updated = True
-
-                # 提取事项描述
                 item_desc = line.replace("- [ ]", "").strip()
                 item_desc = re.sub(r"^[🔴🟡🟢]\s*\*\*.*?\*\*:\s*", "", item_desc)
-
-                # 添加到已完成部分
                 self._add_to_completed_section(lines, item_desc)
-
                 print(f"✅ 标记完成: {item_desc[:50]}...")
+
+        # 第二轮：如果完整匹配没找到，用关键词模糊匹配（只标记第一个命中的，降低误匹配风险）
+        if not updated:
+            # 提取关键词（去掉常见虚词和标点）
+            stop_words = {"的", "了", "一个", "简单", "请", "写", "创建", "程序", "文件", "python", "py"}
+            keywords = [w for w in re.split(r'[\s,，。、]+', pattern_lower) if w and w not in stop_words and len(w) > 1]
+
+            if keywords:
+                for i, line in enumerate(lines):
+                    if line.strip().startswith("- [ ]"):
+                        line_lower = line.lower()
+                        # 任意关键词命中即匹配，但只标记第一个
+                        if any(kw in line_lower for kw in keywords):
+                            lines[i] = line.replace("- [ ]", "- [x]", 1)
+                            updated = True
+                            item_desc = line.replace("- [ ]", "").strip()
+                            item_desc = re.sub(r"^[🔴🟡🟢]\s*\*\*.*?\*\*:\s*", "", item_desc)
+                            self._add_to_completed_section(lines, item_desc)
+                            print(f"✅ 模糊匹配标记完成: {item_desc[:50]}...")
+                            break  # 只标记第一个命中的
 
         if updated:
             # 写入文件

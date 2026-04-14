@@ -589,18 +589,18 @@ ADD_TODO_ITEM_SCHEMA = ToolSchema(
 
 MARK_TODO_COMPLETED_SCHEMA = ToolSchema(
     name="mark_todo_completed",
-    description="标记待办事项为完成。用于更新任务状态。",
+    description="标记待办事项为完成。支持模糊匹配：输入关键词即可匹配待办事项，不需要完全一致。",
     parameters=[
         ToolParameter(
             name="item_pattern",
             type=str,
             required=True,
-            description="待办事项的匹配模式（支持模糊匹配）",
-            example="用户认证",
-            aliases=["title", "item", "task", "description", "name", "text", "content", "pattern"],
+            description="待办事项的匹配关键词。支持模糊匹配，输入核心关键词即可（如'helloworld'、'认证'）。也可用 title/item/task 等参数名。",
+            example="helloworld",
+            aliases=["title", "item", "task", "description", "name", "text", "content", "pattern", "todo"],
         )
     ],
-    examples=[{"item_pattern": "用户认证"}, {"item_pattern": "登录bug"}],
+    examples=[{"item_pattern": "helloworld"}, {"title": "认证功能"}],
     returns="返回字典，包含 success, message, item_pattern 等字段",
 )
 
@@ -645,18 +645,22 @@ LIST_TODO_FILES_SCHEMA = ToolSchema(
 
 ADD_EXECUTION_RECORD_SCHEMA = ToolSchema(
     name="add_execution_record",
-    description="添加执行记录。用于记录任务执行过程。",
+    description="添加执行记录到待办清单。记录任务执行过程和结果。支持多种参数名：record/description/task/action/details 等均可。",
     parameters=[
         ToolParameter(
             name="record",
             type=str,
             required=True,
-            description="执行记录的描述",
+            description="执行记录的描述。也可用 description/task/action/details/result 等参数名，系统会自动识别。",
             example="完成了用户认证API的开发",
-            aliases=["description", "details", "message", "summary", "content", "text"],
+            aliases=["description", "details", "message", "summary", "content", "text", "task", "action", "result", "note"],
         )
     ],
-    examples=[{"record": "完成了用户认证API的开发"}, {"record": "修复了登录bug"}],
+    examples=[
+        {"record": "完成了用户认证API的开发"},
+        {"task": "创建helloworld程序", "status": "completed", "details": "测试通过"},
+        {"action": "修复登录bug", "result": "测试通过"},
+    ],
     returns="返回字典，包含 success, message, record 等字段",
 )
 
