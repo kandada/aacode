@@ -243,12 +243,25 @@ RUN_SHELL_SCHEMA = ToolSchema(
             example=60,
             aliases=["time_limit", "max_time", "wait"],
         ),
+        ToolParameter(
+            name="stdin_input",
+            type=str,
+            required=False,
+            description="传给程序的标准输入内容。程序有 input() 等待用户输入时使用，多行输入用 \\n 分隔。不传此参数时，程序的 stdin 为空（input() 会立即 EOFError）。",
+            example="5\\n3\\n",
+            aliases=["input", "stdin"],
+        ),
     ],
     examples=[
         {"command": "ls -la", "description": "列出当前目录所有文件（包括隐藏文件）"},
         {"command": "pwd", "description": "显示当前工作目录"},
         {"command": "python --version", "description": "检查 Python 版本"},
         {"command": "python script.py", "description": "运行 Python 脚本"},
+        {
+            "command": "python3 calculator.py",
+            "stdin_input": "5\n3\n",
+            "description": "运行需要用户输入的程序，模拟输入 5 和 3",
+        },
         {"command": "python -c \"print('Hello')\"", "description": "执行 Python 代码"},
         {"command": "pip list", "description": "列出已安装的包"},
         {
@@ -545,7 +558,7 @@ RUN_TESTS_SCHEMA = ToolSchema(
 
 ADD_TODO_ITEM_SCHEMA = ToolSchema(
     name="add_todo_item",
-    description="添加待办事项。用于记录需要完成的任务。支持多种参数格式。",
+    description="添加待办事项。返回 todo_id（如 t1），后续用 mark_todo_completed(todo_id='t1') 精确标记完成。",
     parameters=[
         ToolParameter(
             name="description",
@@ -582,26 +595,33 @@ ADD_TODO_ITEM_SCHEMA = ToolSchema(
     examples=[
         {"description": "实现用户认证功能"},
         {"item": "修复登录bug", "priority": "high"},
-        {"description": "添加数据验证", "category": "开发", "priority": "medium"},
     ],
-    returns="返回字典，包含 success, message, item, priority, category 等字段",
+    returns="返回字典，包含 success, todo_id（重要：用于 mark_todo_completed）, message, item 等字段",
 )
 
 MARK_TODO_COMPLETED_SCHEMA = ToolSchema(
     name="mark_todo_completed",
-    description="标记待办事项为完成。支持模糊匹配：输入关键词即可匹配待办事项，不需要完全一致。",
+    description="标记待办事项为完成。优先使用 todo_id 精确匹配（由 add_todo_item 返回），也支持文本模糊匹配作为 fallback。",
     parameters=[
+        ToolParameter(
+            name="todo_id",
+            type=str,
+            required=False,
+            description="待办事项ID（如 't1'、't2'），由 add_todo_item 返回。优先使用此参数，精确可靠。",
+            example="t1",
+            aliases=["id"],
+        ),
         ToolParameter(
             name="item_pattern",
             type=str,
-            required=True,
-            description="待办事项的匹配关键词。支持模糊匹配，输入核心关键词即可（如'helloworld'、'认证'）。也可用 title/item/task 等参数名。",
+            required=False,
+            description="待办事项的匹配关键词（fallback）。当没有 todo_id 时使用。",
             example="helloworld",
             aliases=["title", "item", "task", "description", "name", "text", "content", "pattern", "todo"],
-        )
+        ),
     ],
-    examples=[{"item_pattern": "helloworld"}, {"title": "认证功能"}],
-    returns="返回字典，包含 success, message, item_pattern 等字段",
+    examples=[{"todo_id": "t1"}, {"item_pattern": "helloworld"}],
+    returns="返回字典，包含 success, message, todo_id, item_pattern 等字段",
 )
 
 UPDATE_TODO_ITEM_SCHEMA = ToolSchema(
@@ -645,23 +665,19 @@ LIST_TODO_FILES_SCHEMA = ToolSchema(
 
 ADD_EXECUTION_RECORD_SCHEMA = ToolSchema(
     name="add_execution_record",
-    description="添加执行记录到待办清单。记录任务执行过程和结果。支持多种参数名：record/description/task/action/details 等均可。",
+    description="（已废弃）执行记录已合并到日志系统。调用此工具会静默成功，不再写入待办清单。",
     parameters=[
         ToolParameter(
             name="record",
             type=str,
-            required=True,
-            description="执行记录的描述。也可用 description/task/action/details/result 等参数名，系统会自动识别。",
+            required=False,
+            description="执行记录描述（不再写入，保留参数以向后兼容）",
             example="完成了用户认证API的开发",
             aliases=["description", "details", "message", "summary", "content", "text", "task", "action", "result", "note"],
         )
     ],
-    examples=[
-        {"record": "完成了用户认证API的开发"},
-        {"task": "创建helloworld程序", "status": "completed", "details": "测试通过"},
-        {"action": "修复登录bug", "result": "测试通过"},
-    ],
-    returns="返回字典，包含 success, message, record 等字段",
+    examples=[{"record": "完成了用户认证API的开发"}],
+    returns="返回字典，包含 success, message 字段",
 )
 
 ADD_TODO_SCHEMA = ADD_TODO_ITEM_SCHEMA

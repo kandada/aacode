@@ -23,6 +23,7 @@ class TodoManager:
         self.todo_dir.mkdir(parents=True, exist_ok=True)
         self.current_todo_file: Optional[Path] = None
         self.todos: List[Dict] = []
+        self.todo_counter: int = 0  # 自增ID计数器
 
     async def create_todo_list(
         self,
@@ -59,23 +60,18 @@ class TodoManager:
         if context_manager:
             context_manager.current_todo_file = self.current_todo_file
 
-        # 优化1：简化待办清单格式，更紧凑
+        # 重置ID计数器
+        self.todo_counter = 0
+
+        # 简化待办清单格式：只保留待办和已完成，去掉记录section
         todo_content = f"""# {clean_project_name} - 待办清单
 
 **任务**: {task_description}
 **创建**: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
 ## 待办
-（暂无）
 
 ## 已完成
-（暂无）
-
-## 记录
-- {datetime.now().strftime("%H:%M:%S")} 创建清单
-
----
-*自动维护*
 """
 
         # 写入文件
@@ -97,9 +93,9 @@ class TodoManager:
 
     async def add_todo_item(
         self, item: str, priority: str = "medium", category: str = "任务"
-    ) -> bool:
+    ) -> Optional[str]:
         """
-        添加待办事项 - 优化1：增量追加，更高效
+        添加待办事项
 
         Args:
             item: 待办事项描述
@@ -107,18 +103,21 @@ class TodoManager:
             category: 分类
 
         Returns:
-            是否成功
+            成功返回 todo_id（如 "t1"），失败返回 None
         """
         if not self.current_todo_file or not self.current_todo_file.exists():
             print("⚠️  没有活动的待办清单文件")
-            return False
+            return None
 
         try:
-            # 优化1：使用增量追加而非全文重写
             async with aiofiles.open(
                 self.current_todo_file, "r", encoding="utf-8"
             ) as f:
                 content = await f.read()
+
+            # 首次添加时从文件恢复计数器
+            if self.todo_counter == 0:
+                self._load_counter(content)
 
             # 查找待办部分
             lines = content.split("\n")
@@ -130,13 +129,17 @@ class TodoManager:
 
             if insert_pos == -1:
                 print("⚠️  找不到待办部分")
-                return False
+                return None
 
-            # 简化格式：只保留核心信息
+            # 生成 todo_id
+            self.todo_counter += 1
+            todo_id = f"t{self.todo_counter}"
+
+            # 格式：带 [#tN] 标记
             priority_mark = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(
                 priority, ""
             )
-            new_item = f"- [ ] {priority_mark} **{category}**: {item}"
+            new_item = f"- [ ] {priority_mark} **{category}** [#{todo_id}]: {item}"
             lines.insert(insert_pos, new_item)
 
             # 写回文件
@@ -145,24 +148,29 @@ class TodoManager:
             ) as f:
                 await f.write("\n".join(lines))
 
-            # 改进：更清晰的打印信息
-            # print(f"➕ {item[:50]}...")  # 旧的打印
-            # 不打印，避免噪音，让调用者决定是否打印
-            return True
+            return todo_id
         except Exception as e:
             print(f"⚠️  添加待办失败: {e}")
-            return False
+            return None
 
-    async def mark_todo_completed(self, item_pattern: str) -> bool:
+    def _load_counter(self, content: str) -> None:
+        """从文件内容中恢复 todo_counter（取最大的 tN 编号）"""
+        matches = re.findall(r'\[#t(\d+)\]', content)
+        if matches:
+            self.todo_counter = max(int(n) for n in matches)
+
+    async def mark_todo_completed(self, item_pattern: str = "", todo_id: Optional[str] = None) -> bool:
         """
-        标记待办事项为完成（支持模糊匹配）
+        标记待办事项为完成
 
-        匹配策略：
-        1. 先尝试完整 pattern 包含匹配
-        2. 如果没找到，提取 pattern 中的关键词（去掉常见虚词），任意关键词命中即匹配
+        匹配策略（按优先级）：
+        1. 如果传了 todo_id，精确查找 [#tN] 标记
+        2. 完整 pattern 文本包含匹配
+        3. 关键词模糊匹配（fallback）
 
         Args:
-            item_pattern: 待办事项匹配模式
+            item_pattern: 待办事项匹配模式（文本）
+            todo_id: 待办事项ID（如 "t1"），由 add_todo_item 返回，优先使用
 
         Returns:
             是否成功
@@ -175,46 +183,75 @@ class TodoManager:
         async with aiofiles.open(self.current_todo_file, "r", encoding="utf-8") as f:
             content = await f.read()
 
-        # 查找并更新待办事项
         lines = content.split("\n")
         updated = False
-        pattern_lower = item_pattern.lower()
 
-        # 第一轮：完整 pattern 包含匹配
-        for i, line in enumerate(lines):
-            if (
-                line.strip().startswith("- [ ]")
-                and pattern_lower in line.lower()
-            ):
-                lines[i] = line.replace("- [ ]", "- [x]", 1)
-                updated = True
-                item_desc = line.replace("- [ ]", "").strip()
-                item_desc = re.sub(r"^[🔴🟡🟢]\s*\*\*.*?\*\*:\s*", "", item_desc)
-                self._add_to_completed_section(lines, item_desc)
-                print(f"✅ 标记完成: {item_desc[:50]}...")
+        # 策略1：todo_id 精确匹配
+        if todo_id:
+            tag = f"[#{todo_id}]"
+            for i, line in enumerate(lines):
+                if line.strip().startswith("- [ ]") and tag in line:
+                    lines[i] = line.replace("- [ ]", "- [x]", 1)
+                    updated = True
+                    item_desc = line.replace("- [ ]", "").strip()
+                    item_desc = re.sub(r"^[🔴🟡🟢]\s*\*\*.*?\*\*\s*\[#\w+\]:\s*", "", item_desc)
+                    self._add_to_completed_section(lines, item_desc, todo_id)
+                    print(f"✅ 标记完成 [#{todo_id}]: {item_desc[:50]}...")
+                    break
 
-        # 第二轮：如果完整匹配没找到，用关键词模糊匹配（只标记第一个命中的，降低误匹配风险）
-        if not updated:
-            # 提取关键词（去掉常见虚词和标点）
+        # 策略2：完整 pattern 文本包含匹配
+        if not updated and item_pattern:
+            pattern_lower = item_pattern.lower()
+            for i, line in enumerate(lines):
+                if (
+                    line.strip().startswith("- [ ]")
+                    and pattern_lower in line.lower()
+                ):
+                    lines[i] = line.replace("- [ ]", "- [x]", 1)
+                    updated = True
+                    # 提取 todo_id（如果有）
+                    id_match = re.search(r'\[#(t\d+)\]', line)
+                    matched_id = id_match.group(1) if id_match else None
+                    item_desc = line.replace("- [ ]", "").strip()
+                    item_desc = re.sub(r"^[🔴🟡🟢]\s*\*\*.*?\*\*\s*(\[#\w+\]:\s*)?", "", item_desc)
+                    self._add_to_completed_section(lines, item_desc, matched_id)
+                    print(f"✅ 标记完成: {item_desc[:50]}...")
+
+        # 策略3：关键词模糊匹配（只标记第一个命中的）
+        if not updated and item_pattern:
+            pattern_lower = item_pattern.lower()
+            # 提取关键词（停用词用子串匹配，解决中文分词粗糙的问题）
             stop_words = {"的", "了", "一个", "简单", "请", "写", "创建", "程序", "文件", "python", "py"}
-            keywords = [w for w in re.split(r'[\s,，。、]+', pattern_lower) if w and w not in stop_words and len(w) > 1]
+            raw_words = [w for w in re.split(r'[\s,，。、]+', pattern_lower) if w and len(w) > 1]
+            # 对每个词，过滤掉包含停用词的部分
+            keywords = []
+            for w in raw_words:
+                # 如果整个词就是停用词，跳过
+                if w in stop_words:
+                    continue
+                # 去掉词中包含的停用词子串
+                cleaned = w
+                for sw in stop_words:
+                    cleaned = cleaned.replace(sw, "")
+                if cleaned and len(cleaned) > 1:
+                    keywords.append(cleaned)
 
             if keywords:
                 for i, line in enumerate(lines):
                     if line.strip().startswith("- [ ]"):
                         line_lower = line.lower()
-                        # 任意关键词命中即匹配，但只标记第一个
                         if any(kw in line_lower for kw in keywords):
                             lines[i] = line.replace("- [ ]", "- [x]", 1)
                             updated = True
+                            id_match = re.search(r'\[#(t\d+)\]', line)
+                            matched_id = id_match.group(1) if id_match else None
                             item_desc = line.replace("- [ ]", "").strip()
-                            item_desc = re.sub(r"^[🔴🟡🟢]\s*\*\*.*?\*\*:\s*", "", item_desc)
-                            self._add_to_completed_section(lines, item_desc)
+                            item_desc = re.sub(r"^[🔴🟡🟢]\s*\*\*.*?\*\*\s*(\[#\w+\]:\s*)?", "", item_desc)
+                            self._add_to_completed_section(lines, item_desc, matched_id)
                             print(f"✅ 模糊匹配标记完成: {item_desc[:50]}...")
-                            break  # 只标记第一个命中的
+                            break
 
         if updated:
-            # 写入文件
             async with aiofiles.open(
                 self.current_todo_file, "w", encoding="utf-8"
             ) as f:
@@ -222,7 +259,7 @@ class TodoManager:
 
         return updated
 
-    def _add_to_completed_section(self, lines: List[str], item_desc: str):
+    def _add_to_completed_section(self, lines: List[str], item_desc: str, todo_id: Optional[str] = None):
         """添加到已完成部分"""
         # 查找已完成部分
         completed_section_start = -1
@@ -234,16 +271,13 @@ class TodoManager:
         if completed_section_start == -1:
             return
 
-        # 找到第一个空行或下一个标题
+        # 找到插入位置（已完成标题的下一行）
         insert_position = completed_section_start + 1
-        for i in range(completed_section_start + 1, len(lines)):
-            if lines[i].strip() == "" or lines[i].startswith("### "):
-                insert_position = i
-                break
 
-        # 添加已完成事项
+        # 添加已完成事项（带 todo_id 标记）
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        new_item = f"- ✅ **{timestamp}**: {item_desc}"
+        id_tag = f" [#{todo_id}]" if todo_id else ""
+        new_item = f"- ✅ **{timestamp}**{id_tag}: {item_desc}"
         lines.insert(insert_position, new_item)
 
     async def update_todo_item(self, old_pattern: str, new_item: str) -> bool:
@@ -294,62 +328,18 @@ class TodoManager:
 
     async def add_execution_record(self, record: str) -> bool:
         """
-        添加执行记录 - 优化1：简化格式，增量追加
+        添加执行记录（已废弃）
+
+        记录section已移除，过程日志由 .aacode/logs/ 承担。
+        保留方法签名以向后兼容，静默返回成功。
 
         Args:
-            record: 执行记录描述
+            record: 执行记录描述（不再写入）
 
         Returns:
-            是否成功
+            始终返回 True
         """
-        if not self.current_todo_file or not self.current_todo_file.exists():
-            return False
-
-        try:
-            # 优化1：直接追加到记录部分，不重写整个文件
-            async with aiofiles.open(
-                self.current_todo_file, "r", encoding="utf-8"
-            ) as f:
-                content = await f.read()
-
-            lines = content.split("\n")
-            record_pos = -1
-            for i, line in enumerate(lines):
-                if line.strip() == "## 记录":
-                    record_pos = i + 1
-                    break
-
-            if record_pos == -1:
-                return False
-
-            # 简化格式：只记录时间和简短描述
-            timestamp = datetime.now().strftime("%H:%M:%S")
-            new_record = f"- {timestamp} {record[:80]}"
-            lines.insert(record_pos, new_record)
-
-            # 限制记录数量（最多保留最近20条）
-            record_lines = [l for l in lines[record_pos:] if l.strip().startswith("-")]
-            if len(record_lines) > 20:
-                # 找到需要保留的行范围
-                keep_count = 20
-                delete_count = len(record_lines) - keep_count
-                # 找到所有记录行的位置
-                record_positions = [
-                    j for j, l in enumerate(lines) if l.strip().startswith("-")
-                ]
-                # 删除最旧的记录（前面的）
-                for pos in sorted(record_positions[:delete_count], reverse=True):
-                    lines.pop(pos)
-
-            async with aiofiles.open(
-                self.current_todo_file, "w", encoding="utf-8"
-            ) as f:
-                await f.write("\n".join(lines))
-
-            return True
-        except Exception as e:
-            print(f"⚠️  添加记录失败: {e}")
-            return False
+        return True
 
     async def get_todo_summary(self) -> Dict[str, Any]:
         """

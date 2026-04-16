@@ -738,7 +738,12 @@ class MainAgent(BaseAgent):
             clean_response = full_response.lstrip('\n')
             if clean_response.startswith('Thought:'):
                 clean_response = clean_response[len('Thought:'):].lstrip()
-            full_response = f"💭 思考过程:\n{thinking_content}\n\nThought: {clean_response}"
+            if clean_response.strip():
+                full_response = f"💭 思考过程:\n{thinking_content}\n\nThought: {clean_response}"
+            else:
+                # full_response 为空（模型所有内容都在 reasoning_content 中）
+                # 不加 Thought: 前缀，避免 _parse_response 误判为任务完成
+                full_response = f"💭 思考过程:\n{thinking_content}"
 
         return full_response if full_response is not None else ""
 
@@ -873,7 +878,10 @@ class MainAgent(BaseAgent):
                     clean_resp = response.lstrip('\n')
                     if clean_resp.startswith('Thought:'):
                         clean_resp = clean_resp[len('Thought:'):].lstrip()
-                    response = f"💭 思考过程:\n{thinking_content}\n\nThought: {clean_resp}"
+                    if clean_resp.strip():
+                        response = f"💭 思考过程:\n{thinking_content}\n\nThought: {clean_resp}"
+                    else:
+                        response = f"💭 思考过程:\n{thinking_content}"
 
                 return response
 
@@ -1509,18 +1517,6 @@ class MainAgent(BaseAgent):
             return {"error": str(e)}
 
     def __del__(self):
-        """析构函数，确保资源被清理"""
-        try:
-            if hasattr(self, "web_tools"):
-                # 尝试同步清理
-                import asyncio
-
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # 如果事件循环正在运行，安排异步清理
-                    asyncio.create_task(self.web_tools.cleanup())
-                else:
-                    # 否则同步清理
-                    loop.run_until_complete(self.web_tools.cleanup())
-        except:
-            pass  # 忽略析构函数中的错误
+        """析构函数 - 不再尝试异步清理，避免 Windows 上 _sock.fileno() 错误刷屏。
+        资源清理由 execute() 的 finally 块中 web_tools.cleanup() 完成。"""
+        pass

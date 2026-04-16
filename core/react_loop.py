@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Callable, Awaitable
 from dataclasses import dataclass
+from datetime import datetime
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -127,24 +128,25 @@ class AsyncReActLoop:
                 if "error" not in todo_summary:
                     todo_section = f"""
 
-## 📋 任务待办清单
-已创建待办清单文件，请在每次思考时参考和更新待办事项：
+📋 任务待办清单
+简单任务比如仅仅是回答用户，不需要制定和更新待办清单，查看相关文件和分析后快速回答即可。
+复杂任务则请你使用待办任务清单:
 - 待办清单文件: {todo_summary.get("todo_file", "未知")}
 - 总事项: {todo_summary.get("total_todos", 0)} 
 - 已完成: {todo_summary.get("completed_todos", 0)}
 - 待处理: {todo_summary.get("pending_todos", 0)}
 - 完成率: {todo_summary.get("completion_rate", 0):.1f}%
 
-重要提示 - 待办清单管理：
-在每次思考时，请参考待办清单并更新状态：
-1. 当完成一个子任务时，在思考中提及并标记对应的待办事项为完成
-2. 如果发现需要新的任务步骤，添加新的待办事项
-3. 如果任务计划有变，更新现有的待办事项
-4. 每次迭代后添加执行记录
-备注：简单任务比如仅仅是回答用户，不需要制定待办，查看相关文件和分析后快速回答即可
+备注：
+1. add_todo_item 会返回 todo_id（如 t1、t2），请记住它
+2. 标记完成时，优先使用 mark_todo_completed(todo_id="t1")，精确可靠
+3. 如果发现需要新的任务步骤，添加新的待办事项
+4. 如果任务计划有变，更新现有的待办事项
 
-示例思考：
-"我已经完成了用户认证API的开发。现在需要标记'实现认证API'待办事项为完成，并添加'测试认证功能'作为新的待办事项。"
+示例：
+add_todo_item(description="实现认证API") → 返回 todo_id: "t1"
+mark_todo_completed(todo_id="t1") → 精确标记完成
+
 """
             except Exception as e:
                 print(f"⚠️  获取待办清单摘要失败: {e}")
@@ -208,9 +210,9 @@ class AsyncReActLoop:
             # 解析响应（支持多个action）
             thought, actions = self._parse_response(response)
 
-            # 自动更新待办清单
-            if todo_manager:
-                await self._update_todo_from_thought(thought, todo_manager)
+            # 自动更新待办清单（已简化：不再自动记录思考过程）
+            # if todo_manager:
+            #     await self._update_todo_from_thought(thought, todo_manager)
 
             # 记录步骤（raw_response 保留完整模型响应，含 thinking，用于会话历史保存）
             step = ReActStep(
@@ -1815,56 +1817,8 @@ class AsyncReActLoop:
         return None
 
     async def _update_todo_from_thought(self, thought: str, todo_manager) -> None:
-        """从思考中自动更新待办清单"""
-        try:
-            # 添加执行记录
-            await todo_manager.add_execution_record(f"思考: {thought[:300]}...")
-
-            # 检查是否完成事项
-            completion_keywords = [
-                "完成",
-                "finished",
-                "done",
-                "实现",
-                "创建",
-                "编写",
-                "添加",
-                "修复",
-                "解决",
-                "测试通过",
-                "验证",
-                "部署",
-            ]
-
-            thought_lower = thought.lower()
-            for keyword in completion_keywords:
-                if keyword in thought_lower:
-                    # 尝试标记相关待办事项为完成
-                    # 这里可以添加更智能的匹配逻辑
-                    pass
-
-            # 检查是否需要添加新事项
-            planning_keywords = [
-                "需要",
-                "下一步",
-                "接下来",
-                "计划",
-                "准备",
-                "将要",
-                "打算",
-                "考虑",
-                "建议",
-                "推荐",
-            ]
-
-            for keyword in planning_keywords:
-                if keyword in thought_lower:
-                    # 提取可能的任务描述
-                    # 这里可以添加更智能的提取逻辑
-                    pass
-
-        except Exception as e:
-            print(f"⚠️  更新待办清单失败: {e}")
+        """从思考中自动更新待办清单（已废弃，不再自动记录思考过程）"""
+        pass
 
     async def _update_todo_from_error(self, observation, todo_manager) -> None:
         """从错误观察中自动添加修复任务到待办清单 - 优化版：更精确的错误检测"""

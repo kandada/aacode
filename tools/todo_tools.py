@@ -73,9 +73,11 @@ class TodoTools:
             success = await todo_manager.add_todo_item(item_desc, priority, category)
 
             if success:
+                todo_id_val = success  # add_todo_item now returns todo_id string or None
                 result = {
                     "success": True,
-                    "message": f"已添加待办事项: {item_desc}",
+                    "todo_id": todo_id_val,
+                    "message": f"已添加待办事项 [#{todo_id_val}]: {item_desc}（完成时请用 mark_todo_completed(todo_id=\"{todo_id_val}\")）",
                     "item": item_desc,
                     "priority": priority,
                     "category": category,
@@ -92,19 +94,24 @@ class TodoTools:
             return {"success": False, "error": f"添加待办事项时出错: {str(e)}"}
 
     async def mark_todo_completed(
-        self, item_pattern: str = None, **kwargs
+        self, item_pattern: str = None, todo_id: str = None, **kwargs
     ) -> Dict[str, Any]:
         """
         标记待办事项为完成
 
         Args:
-            item_pattern: 待办事项匹配模式
+            item_pattern: 待办事项匹配模式（文本）
+            todo_id: 待办事项ID（如 "t1"），由 add_todo_item 返回，优先使用
             **kwargs: 兼容模型常用参数名（title/item/name/task/todo）
 
         Returns:
             操作结果
         """
-        # 兼容多种参数名
+        # 从 kwargs 提取 todo_id（兼容模型可能用的参数名）
+        if not todo_id:
+            todo_id = kwargs.get("todo_id") or kwargs.get("id")
+
+        # 兼容多种参数名获取 item_pattern
         if not item_pattern:
             for key in ("title", "item", "name", "task", "todo", "description"):
                 val = kwargs.get(key)
@@ -112,10 +119,10 @@ class TodoTools:
                     item_pattern = val
                     break
 
-        if not item_pattern:
+        if not item_pattern and not todo_id:
             return {
                 "success": False,
-                "error": "缺少待办事项匹配模式",
+                "error": "缺少 todo_id 或 item_pattern 参数。建议使用 add_todo_item 返回的 todo_id。",
             }
 
         try:
@@ -123,20 +130,25 @@ class TodoTools:
 
             todo_manager = get_todo_manager(self.project_path)
 
-            success = await todo_manager.mark_todo_completed(item_pattern)
+            success = await todo_manager.mark_todo_completed(
+                item_pattern=item_pattern or "", todo_id=todo_id
+            )
 
             if success:
+                match_info = f"[#{todo_id}]" if todo_id else item_pattern
                 result = {
                     "success": True,
-                    "message": f"已标记待办事项为完成: {item_pattern}",
+                    "message": f"已标记待办事项为完成: {match_info}",
+                    "todo_id": todo_id,
                     "item_pattern": item_pattern,
                 }
                 print(f"✅ {result['message']}")
                 return result
             else:
+                match_info = f"[#{todo_id}]" if todo_id else item_pattern
                 result = {
                     "success": False,
-                    "error": f"未找到匹配的待办事项: {item_pattern}",
+                    "error": f"未找到匹配的待办事项: {match_info}",
                 }
                 print(f"⚠️  {result['error']}")
                 return result
@@ -226,69 +238,14 @@ class TodoTools:
         self, record: str = None, description: str = None, **kwargs
     ) -> Dict[str, Any]:
         """
-        添加执行记录
+        添加执行记录（已废弃，过程日志由 .aacode/logs/ 承担）
 
-        Args:
-            record: 执行记录描述(优先使用)
-            description: 执行记录描述(兼容旧格式)
-            **kwargs: 兼容模型常用的各种参数名（task/action/result/details/content/message）
+        保留方法签名以向后兼容，静默返回成功。
 
         Returns:
             操作结果
         """
-        # 兼容模型传入的各种参数名，按优先级取值
-        record_text = record or description
-        if not record_text:
-            # 尝试从 kwargs 中提取，模型可能用任意参数名
-            for key in ("task", "action", "content", "message", "result", "details", "summary", "note"):
-                val = kwargs.get(key)
-                if val:
-                    record_text = val
-                    break
-
-        if not record_text:
-            # 最后兜底：把所有 kwargs 的值拼起来
-            all_vals = [str(v) for v in kwargs.values() if v]
-            if all_vals:
-                record_text = " | ".join(all_vals)
-
-        if not record_text:
-            return {
-                "success": False,
-                "error": "缺少执行记录描述",
-            }
-
-        # 拼接补充信息（如果有多个字段，把其他字段也加上）
-        extra_parts = []
-        for key in ("result", "details", "status"):
-            val = kwargs.get(key)
-            if val and val != record_text:
-                extra_parts.append(f"{val}")
-        if extra_parts:
-            record_text = f"{record_text} - {' | '.join(extra_parts)}"
-
-        # 附加状态信息
-        status = kwargs.get("status")
-        if status:
-            record_text = f"[{status}] {record_text}"
-
-        try:
-            from ..utils.todo_manager import get_todo_manager
-
-            todo_manager = get_todo_manager(self.project_path)
-
-            success = await todo_manager.add_execution_record(record_text)
-
-            if success:
-                print(f"✅ 已添加执行记录: {record_text[:50]}...")
-                return {
-                    "success": True,
-                    "message": f"已添加执行记录: {record_text[:50]}...",
-                    "record": record_text,
-                }
-            else:
-                print(f"⚠️ 添加执行记录失败")
-                return {"success": False, "error": "添加执行记录失败"}
-
-        except Exception as e:
-            return {"success": False, "error": f"添加执行记录时出错: {str(e)}"}
+        return {
+            "success": True,
+            "message": "执行记录已合并到日志系统",
+        }
