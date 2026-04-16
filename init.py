@@ -68,7 +68,7 @@ def init_project():
         if skip_choice in ["", "y", "yes"]:
             print("✅ 跳过模型配置，使用现有配置")
             # 读取现有配置用于后续步骤
-            with open(env_file, "r") as f:
+            with open(env_file, "r", encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if line and "=" in line and not line.startswith("#"):
@@ -315,7 +315,7 @@ def init_project():
     # 创建配置文件（只有当需要新配置时才创建）
     if not config_exists:
         config_file = Path(".env")
-        with open(config_file, "w") as f:
+        with open(config_file, "w", encoding="utf-8") as f:
             f.write(f"LLM_API_KEY={config['LLM_API_KEY']}\n")
             f.write(f"LLM_API_URL={config['LLM_API_URL']}\n")
             f.write(f"LLM_MODEL_NAME={config['LLM_MODEL_NAME']}\n")
@@ -353,7 +353,7 @@ python main.py "$@"
 """
         script_name = "run.sh"
 
-    with open(script_name, "w") as f:
+    with open(script_name, "w", encoding="utf-8") as f:
         f.write(script_content)
 
     if os.name != "nt":
@@ -364,7 +364,7 @@ python main.py "$@"
     # 创建激活脚本（用于手动激活虚拟环境）
     if os.name != "nt":  # Unix/Linux/Mac
         activate_script = "activate.sh"
-        with open(activate_script, "w") as f:
+        with open(activate_script, "w", encoding="utf-8") as f:
             f.write(f"""#!/bin/bash
 echo "激活AACode虚拟环境..."
 {activate_cmd}

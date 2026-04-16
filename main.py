@@ -641,7 +641,7 @@ async def main():
     # 加载环境变量配置
     env_file = Path(".env")
     if env_file.exists():
-        with open(env_file, "r") as f:
+        with open(env_file, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if line and "=" in line and not line.startswith("#"):

@@ -55,7 +55,7 @@ def run_init_pip():
     api_key = input("请输入 API Key (或直接按 Enter 使用环境变量): ").strip()
     if api_key:
         env_file = home_aacode_dir / ".env"
-        with open(env_file, "a") as f:
+        with open(env_file, "a", encoding="utf-8") as f:
             f.write(f"\nLLM_API_KEY={api_key}\n")
         print(f"✅ 已保存到 {env_file}")
 
