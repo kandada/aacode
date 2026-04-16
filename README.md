@@ -69,6 +69,17 @@ aacode init
 aacode run -p /your/project/path "your task"
 ```
 
+### 🖥️ 桌面客户端
+
+如果你更喜欢图形界面，可以使用 AACode Desktop 客户端：
+
+| 平台 | 下载 |
+|------|------|
+| macOS (Apple Silicon) | [AACode_1.6.1_aarch64.dmg](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.6.1_aarch64.dmg) |
+| Windows | [aacode-desktop-1.6.1.exe](https://github.com/kandada/aacode/raw/main/desktop/aacode-desktop-1.6.1.exe) |
+
+> 桌面客户端仍需要 Python 环境和依赖库，详细安装步骤请参考 👉 [DESKTOP.md](DESKTOP.md)
+
 
 ## 🔧 配置说明
 
