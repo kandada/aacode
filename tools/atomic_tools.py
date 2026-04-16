@@ -69,21 +69,12 @@ class AtomicTools:
             if not full_path.is_file():
                 return {"error": f"路径不是文件: {display_path}"}
 
-            # 使用bash万能适配器 - 使用绝对路径避免cwd问题
-            result = await asyncio.create_subprocess_exec(
-                "cat",
-                str(full_path.absolute()),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
+            # 跨平台读取文件（cat 是 Unix 命令，Windows 上不存在）
+            try:
+                content = full_path.read_text(encoding="utf-8", errors="replace")
+            except Exception as e:
+                return {"error": f"读取文件失败: {str(e)}"}
 
-            stdout, stderr = await result.communicate()
-
-            if result.returncode != 0:
-                error_msg = stderr.decode() if stderr else "读取文件失败"
-                return {"error": f"读取文件失败: {error_msg}"}
-
-            content = stdout.decode("utf-8", errors="ignore")
             # 保留原始content用于返回
             original_content = content
             # 计算行数时去除末尾换行符，避免split后多出一个空元素
@@ -390,21 +381,12 @@ class AtomicTools:
             if not self.safety_guard.is_safe_path(full_path):
                 return {"error": f"写入路径超出项目范围: {display_path}"}
 
-            # 使用bash万能适配器
-            # 先创建目录,再写入文件
-            mkdir_cmd = f"mkdir -p {full_path.parent}"
-            mkdir_process = await asyncio.create_subprocess_shell(
-                mkdir_cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=self.project_path,
-            )
-
-            mkdir_stdout, mkdir_stderr = await mkdir_process.communicate()
-            if mkdir_process.returncode != 0:
-                return {
-                    "error": f"创建目录失败: {mkdir_stderr.decode() if mkdir_stderr else '未知错误'}"
-                }
+            # 跨平台创建目录（mkdir -p 是 Unix 命令，Windows 上不可用）
+            try:
+                import os
+                os.makedirs(full_path.parent, exist_ok=True)
+            except Exception as e:
+                return {"error": f"创建目录失败: {str(e)}"}
 
             # 处理内容来源
             final_content = None
@@ -695,10 +677,15 @@ class AtomicTools:
             return None
 
     async def run_shell(
-        self, command: str, timeout: int = 120, **kwargs
+        self, command: str, timeout: int = 120, stdin_input: str = None, **kwargs
     ) -> Dict[str, Any]:
         """
         执行shell命令(带安全护栏)
+
+        Args:
+            command: 要执行的shell命令
+            timeout: 超时时间（秒）
+            stdin_input: 传给程序的标准输入内容（可选）。程序有 input() 时使用，多行用 \\n 分隔
 
         注意:**kwargs 用于接收并忽略模型可能传入的额外参数
         """
@@ -724,22 +711,47 @@ class AtomicTools:
             # 在项目目录下执行
             print(f"🔧 执行命令: {command}")
 
+            # stdin 策略：有 stdin_input 时用 PIPE 喂入，否则用 DEVNULL 防阻塞
+            if stdin_input:
+                stdin_mode = asyncio.subprocess.PIPE
+            else:
+                stdin_mode = asyncio.subprocess.DEVNULL
+
             # 异步执行命令
             process = await asyncio.create_subprocess_shell(
                 command,
                 cwd=str(self.project_path),
+                stdin=stdin_mode,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                shell=True,
             )
 
             try:
-                stdout, stderr = await asyncio.wait_for(
-                    process.communicate(), timeout=timeout
-                )
+                if stdin_input:
+                    # 编码 stdin_input 并喂给进程
+                    import os as _os
+                    encoding = "utf-8" if _os.name != "nt" else "utf-8"
+                    stdout, stderr = await asyncio.wait_for(
+                        process.communicate(input=stdin_input.encode(encoding)),
+                        timeout=timeout,
+                    )
+                else:
+                    stdout, stderr = await asyncio.wait_for(
+                        process.communicate(), timeout=timeout
+                    )
 
-                stdout_text = stdout.decode("utf-8", errors="ignore")
-                stderr_text = stderr.decode("utf-8", errors="ignore")
+                # Windows 解码策略：先尝试 UTF-8（python 程序输出），失败再用 GBK（CMD 命令输出）
+                # macOS/Linux 统一用 UTF-8
+                import os as _os
+                def _smart_decode(data):
+                    if _os.name != "nt":
+                        return data.decode("utf-8", errors="replace")
+                    try:
+                        return data.decode("utf-8")
+                    except UnicodeDecodeError:
+                        return data.decode("gbk", errors="replace")
+                stdout_text = _smart_decode(stdout)
+                stderr_text = _smart_decode(stderr)
 
                 # 打印输出预览(使用配置的预览长度)
                 if __package__ in (None, ""):
@@ -862,7 +874,24 @@ class AtomicTools:
 
     async def _list_files_only(self, pattern: str, max_results: int) -> Dict[str, Any]:
         """仅列出文件（不搜索内容）"""
-        # 使用bash万能适配器
+        import os as _os
+
+        if _os.name == "nt":
+            # Windows: 用 Python glob 替代 find | head（这两个是 Unix 命令）
+            from pathlib import Path as _Path
+            files = []
+            try:
+                for f in _Path(self.project_path).rglob(pattern):
+                    if f.is_file() and ".aacode" not in str(f):
+                        rel = str(f.relative_to(self.project_path))
+                        files.append({"path": rel, "size": 0, "is_dir": False})
+                        if len(files) >= max_results:
+                            break
+            except Exception as e:
+                return {"error": str(e)}
+            return {"success": True, "files": files, "count": len(files), "mode": "list"}
+
+        # macOS/Linux: 保持原有的 find | head
         cmd = f"find . -name '{pattern}' -type f | head -{max_results}"
 
         process = await asyncio.create_subprocess_shell(
@@ -875,14 +904,14 @@ class AtomicTools:
         stdout, stderr = await process.communicate()
 
         if process.returncode != 0:
-            return {"error": stderr.decode() if stderr else "列出文件失败"}
+            return {"error": stderr.decode("utf-8", errors="replace") if stderr else "列出文件失败"}
 
         files = []
-        for line in stdout.decode().strip().split("\n"):
+        for line in stdout.decode("utf-8", errors="replace").strip().split("\n"):
             if line.strip() and ".aacode" not in line:
                 rel_path = line.strip()[2:]  # 移除 './'
                 files.append(
-                    {"path": rel_path, "size": 0, "is_dir": False}  # 简化,不获取大小
+                    {"path": rel_path, "size": 0, "is_dir": False}
                 )
 
         return {"success": True, "files": files, "count": len(files), "mode": "list"}
@@ -958,11 +987,11 @@ class AtomicTools:
             stdout, stderr = await process.communicate()
 
             if process.returncode not in [0, 1]:  # 0: 找到结果, 1: 没找到
-                return {"error": f"搜索失败: {stderr.decode()}", "success": False}
+                return {"error": f"搜索失败: {stderr.decode("utf-8", errors="replace")}", "success": False}
 
             # 收集结果，按文件分组
             file_results: dict[str, dict] = {}
-            for line in stdout.decode().split("\n"):
+            for line in stdout.decode("utf-8", errors="replace").split("\n"):
                 if line.strip():
                     parts = line.split(":", 2)
                     if len(parts) >= 3:
@@ -1085,10 +1114,10 @@ class AtomicTools:
             stdout, stderr = await process.communicate()
 
             if process.returncode not in [0, 1]:  # 0: 找到结果, 1: 没找到
-                return {"error": f"搜索失败: {stderr.decode()}", "success": False}
+                return {"error": f"搜索失败: {stderr.decode("utf-8", errors="replace")}", "success": False}
 
             results = []
-            for line in stdout.decode().split("\n"):
+            for line in stdout.decode("utf-8", errors="replace").split("\n"):
                 if line.strip():
                     parts = line.split(":", 2)
                     if len(parts) >= 3:
@@ -1159,14 +1188,14 @@ class AtomicTools:
             if process.returncode not in [0, 1]:
                 return {
                     "success": True,
-                    "error": f"搜索命令失败: {stderr.decode() if stderr else '未知错误'}",
+                    "error": f"搜索命令失败: {stderr.decode("utf-8", errors="replace") if stderr else '未知错误'}",
                     "query": query,
                     "results": [],
                     "count": 0,
                 }
 
             results = []
-            output = stdout.decode().strip()
+            output = stdout.decode("utf-8", errors="replace").strip()
 
             if not output:
                 # 没有匹配结果

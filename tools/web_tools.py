@@ -506,32 +506,18 @@ class WebTools:
     async def cleanup(self):
         """清理资源，关闭HTTP会话"""
         if hasattr(self, "session") and self.session and not self.session.closed:
-            await self.session.close()
+            try:
+                await self.session.close()
+                # 等待底层 connector 释放连接，避免 Windows 上 _sock.fileno() 错误
+                await asyncio.sleep(0.25)
+            except Exception:
+                pass
             self.session = None
 
     def __del__(self):
-        """析构函数，确保会话被关闭"""
-        try:
-            if hasattr(self, "session") and self.session and not self.session.closed:
-                # 尝试同步关闭会话（在析构函数中不能使用await）
-                import asyncio
-
-                try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        # 如果事件循环正在运行，安排异步关闭
-                        asyncio.create_task(self.session.close())
-                    else:
-                        # 否则同步关闭
-                        loop.run_until_complete(self.session.close())
-                except RuntimeError:
-                    # 如果没有事件循环，创建新的事件循环
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    loop.run_until_complete(self.session.close())
-                    loop.close()
-        except Exception:
-            pass  # 忽略析构函数中的错误
+        """析构函数 - 不再尝试异步清理，避免 Windows 上 _sock.fileno() 错误刷屏。
+        资源清理由 cleanup() 在 execute() 的 finally 块中完成。"""
+        pass
 
 
 # 保留原有WebSearchTools类以保持兼容性

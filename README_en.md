@@ -67,6 +67,17 @@ aacode init
 aacode run -p /your/project/path "your task"
 ```
 
+### 🖥️ Desktop Client
+
+If you prefer a graphical interface, try AACode Desktop:
+
+| Platform | Download |
+|----------|----------|
+| macOS (Apple Silicon) | [AACode_1.6.1_aarch64.dmg](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.6.1_aarch64.dmg) |
+| Windows | [aacode-desktop-1.6.1.exe](https://github.com/kandada/aacode/raw/main/desktop/aacode-desktop-1.6.1.exe) |
+
+> The desktop client still requires Python and dependencies. See 👉 [DESKTOP.md](DESKTOP.md) for full setup instructions.
+
 ## 🔧 Configuration
 
 ### Large Language Model (supports deepseek, openai, etc., no pre-configuration required; users need to configure independently)

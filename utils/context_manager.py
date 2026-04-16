@@ -461,20 +461,12 @@ class ContextManager:
                         )
             history_content += "\n"
 
-        process = await asyncio.create_subprocess_shell(
-            f"cat > {history_file}",
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=self.project_path,
-        )
-
-        stdout, stderr = await process.communicate(history_content.encode("utf-8"))
-
-        if process.returncode == 0:
+        # 跨平台写入文件（cat 是 Unix 命令，Windows 上不存在）
+        try:
+            history_file.write_text(history_content, encoding="utf-8")
             return str(history_file.relative_to(self.project_path))
-        else:
-            return f"保存失败: {stderr.decode()}"
+        except Exception as e:
+            return f"保存失败: {str(e)}"
 
     def _prioritize_files(self, file_list: List[str]) -> List[str]:
         """
