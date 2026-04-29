@@ -449,7 +449,8 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
         }
 
     async def _is_task_completed(
-        self, thought: str, first_action: Optional[str], task_description: str
+        self, thought: str, first_action: Optional[str], task_description: str,
+        thinking_content: str = ""
     ) -> bool:
         """
         使用模型判断任务是否已完成
@@ -458,6 +459,7 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
             thought: 当前思考内容
             first_action: 第一个动作（如果有）
             task_description: 原始任务描述
+            thinking_content: 模型的思考过程（重要！）
 
         Returns:
             是否任务已完成
@@ -479,22 +481,23 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
 
 原始任务：{task_description}
 
-当前思考：{thought}
+💭 模型思考过程：
+{thinking_content[:1000] if thinking_content else "无"}
+
+当前行动：
+{thought[:300] if thought else "未生成行动"}
 
 最近执行情况：
 {recent_context}
 
-判断标准（严格）：
-1. 任务的核心目标是否已经实现（例如：要求写爬虫，是否已经创建并测试了爬虫代码）
-2. 是否只是完成了某个子步骤（例如：只是"标记待办事项为完成"不算任务完成）
-3. 是否明确表示整个任务已经完成，不需要进一步操作
-4. **关键**：如果最近的执行中有错误（ImportError、SyntaxError等），任务未完成
-5. **关键**：如果代码未经过实际运行测试验证，任务未完成
-6. **关键**：如果只是"写完代码"但没有"运行测试"，任务未完成
+判断标准：
+1. 核心目标是否已实现（例如：代码已编写且测试通过）
+2. 是否有错误需要修复
+3. 是否有未完成的子任务
 
 请只回答 "YES" 或 "NO"：
-- YES: 整个任务已经完成，代码已测试通过，没有错误
-- NO: 任务还未完成、有错误需要修复、或只是完成了子步骤
+- YES: 任务已全部完成
+- NO: 还有工作需要做
 
 回答："""
 
