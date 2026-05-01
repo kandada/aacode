@@ -71,10 +71,10 @@ aacode run -p /your/project/path "your task"
 
 If you prefer a graphical interface, try AACode Desktop:
 
-| Platform | Download |
-|----------|----------|
-| macOS (Apple Silicon) | [AACode_1.6.1_aarch64.dmg](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.6.1_aarch64.dmg) |
-| Windows | [aacode-desktop-1.6.1.exe](https://github.com/kandada/aacode/raw/main/desktop/aacode-desktop-1.6.1.exe) |
+| Platform | Download                                                                                                |
+|----------|---------------------------------------------------------------------------------------------------------|
+| macOS (Apple Silicon) | [AACode_1.7.0_aarch64.dmg](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.7.0_aarch64.dmg) |
+| Windows | [aacode-desktop-1.7.0.exe](https://github.com/kandada/aacode/raw/main/desktop/aacode-desktop-1.7.0.exe) |
 
 > The desktop client still requires Python and dependencies. See 👉 [DESKTOP.md](DESKTOP.md) for full setup instructions.
 
@@ -136,7 +136,7 @@ Skill description. Required imports auto-injected.
 - param2: Parameter 2 description
 
 ## Example
-run_skill("skill_name", {"param1": "value1", "param2": "value2"})
+run_skills("skill_name", {"param1": "value1", "param2": "value2"})
 ```
 
 #### Examples
@@ -259,16 +259,7 @@ Edit the `init.md` file and add project-specific rules:
 ## 🛠️ Available Tools
 
 ### Atomic Tools
-* `read_file` - Read file content
-* `write_file` - Write file content
 * `run_shell` - Execute shell commands (safely)
-* `list_files` - List directory files
-* `search_files` - Search file content
-
-### Code Tools
-* `execute_python` - Execute Python code
-* `run_tests` - Run test suite
-* `debug_code` - Debug code issues
 
 ### To-Do List Tools
 * `delegate_task` - Delegate subtasks

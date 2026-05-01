@@ -73,10 +73,10 @@ aacode run -p /your/project/path "your task"
 
 如果你更喜欢图形界面，可以使用 AACode Desktop 客户端：
 
-| 平台 | 下载 |
-|------|------|
-| macOS (Apple Silicon) | [AACode_1.6.1_aarch64.dmg](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.6.1_aarch64.dmg) |
-| Windows | [aacode-desktop-1.6.1.exe](https://github.com/kandada/aacode/raw/main/desktop/aacode-desktop-1.6.1.exe) |
+| 平台 | 下载                                                                                                      |
+|------|---------------------------------------------------------------------------------------------------------|
+| macOS (Apple Silicon) | [AACode_1.7.0_aarch64.dmg](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.7.0_aarch64.dmg) |
+| Windows | [aacode-desktop-1.7.0.exe](https://github.com/kandada/aacode/raw/main/desktop/aacode-desktop-1.7.0.exe) |
 
 > 桌面客户端仍需要 Python 环境和依赖库，详细安装步骤请参考 👉 [DESKTOP.md](DESKTOP.md)
 
@@ -139,7 +139,7 @@ aacode/skills/<skill名>/
 - param2: 参数2描述
 
 ## Example
-run_skill("skill名", {"param1": "value1", "param2": "value2"})
+run_skills("skill_name", {"param1": "value1", "param2": "value2"})
 ```
 
 #### 示例
@@ -266,16 +266,7 @@ python3 main.py -p examples/app "为所有功能编写测试"
 ## 🛠️ 可用工具
 
 ### 原子工具
-- `read_file` - 读取文件内容
-- `write_file` - 写入文件内容
 - `run_shell` - 执行shell命令（安全）
-- `list_files` - 列出目录文件
-- `search_files` - 搜索文件内容
-
-### 代码工具
-- `execute_python` - 执行Python代码
-- `run_tests` - 运行测试套件
-- `debug_code` - 调试代码问题
 
 ### To-Do List工具
 - `delegate_task` - 委托子任务
