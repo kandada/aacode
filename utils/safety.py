@@ -10,6 +10,7 @@ import shlex
 from pathlib import Path
 from typing import Dict, List, Tuple, Set, Any, Union
 import ast
+from aacode.i18n import t
 
 
 class SafetyGuard:
@@ -36,34 +37,34 @@ class SafetyGuard:
         self.dangerous_patterns = [
             # 文件系统危险操作
             # (r'rm\s+(-rf|-r|-f)\s+', '递归删除文件'),  # 移除，改为特殊检查
-            (r"format\s+", "磁盘格式化"),
-            (r"\bdd\s+", "磁盘复制/擦除"),  # 使用\b确保是单词边界
-            (r"mkfs\s+", "创建文件系统"),
+            (r"format\s+", "Disk formatting"),
+            (r"\bdd\s+", "Disk copy/erase"),
+            (r"mkfs\s+", "Create filesystem"),
             # 系统危险操作
-            (r"shutdown\s+", "关闭系统"),
-            (r"halt\s+", "停止系统"),
-            (r"reboot\s+", "重启系统"),
-            (r"poweroff\s+", "关闭电源"),
-            (r"^\s*init\s+", "init进程"),  # 只匹配开头的init命令
+            (r"shutdown\s+", "Shutdown system"),
+            (r"halt\s+", "Halt system"),
+            (r"reboot\s+", "Reboot system"),
+            (r"poweroff\s+", "Power off"),
+            (r"^\s*init\s+", "init process"),  # 只匹配开头的init命令
             # 网络危险操作
-            (r"iptables\s+", "防火墙规则"),
-            (r"ufw\s+", "防火墙"),
+            (r"iptables\s+", "Firewall rules"),
+            (r"ufw\s+", "Firewall"),
             # Shell危险操作
-            (r":\(\)\{.*?;\s*\}.*?;", "fork炸弹"),
-            (r"exec\s+/dev/", "设备执行"),
-            (r"pkill\s+", "进程终止"),  # pkill需要用户确认
-            (r"kill\s+", "进程终止"),  # kill需要用户确认
+            (r":\(\)\{.*?;\s*\}.*?;", "Fork bomb"),
+            (r"exec\s+/dev/", "Device execution"),
+            (r"pkill\s+", "Process termination"),  # pkill需要用户确认
+            (r"kill\s+", "Process termination"),  # kill需要用户确认
             (
                 r"systemctl\s+(stop|restart|start|disable|enable|mask|unmask)",
-                "系统服务管理",
-            ),  # systemctl危险操作需要用户确认
+                "System service management",
+            ),
             (
                 r"service\s+\S+\s+(stop|restart|start)",
-                "服务管理",
+                "Service management",
             ),  # service危险操作需要用户确认
             # 特别危险的权限操作（放宽chmod和chown，但限制特定模式）
-            (r"chmod\s+[0-7]{3,4}\s+/\S*", "系统目录权限设置"),
-            (r"chown\s+.*?:\s+/\S*", "系统文件所有权更改"),
+            (r"chmod\s+[0-7]{3,4}\s+/\S*", "System directory permission change"),
+            (r"chown\s+.*?:\s+/\S*", "System file ownership change"),
         ]
 
         # 允许的命令白名单（相对安全）
@@ -767,17 +768,17 @@ class SafetyGuard:
             return False
 
         print("\n" + "=" * 60)
-        print("⚠️  检测到潜在危险操作")
+        print("⚠️  Detected potentially dangerous operation")
         print("=" * 60)
-        print(f"命令: {command}")
-        print(f"原因: {reason}")
+        print(f"Command: {command}")
+        print(f"Reason: {reason}")
         print("=" * 60)
 
         try:
-            response = input("是否继续执行? (yes/no，默认no): ").strip().lower()
+            response = input("Continue execution? (yes/no, default no): ").strip().lower()
             return response in ["yes", "y"]
         except (KeyboardInterrupt, EOFError):
-            print("\n❌ 用户取消操作")
+            print("\n❌ User cancelled operation")
             return False
 
     def _extract_command_name(self, cmd_path: str) -> str:
@@ -925,25 +926,25 @@ class SafetyGuard:
         """
         # 1. 检查是否在白名单中
         if cmd_name not in self.allowed_commands:
-            return self.RISK_UNKNOWN, f"命令不在白名单中: {cmd_name}"
+            return self.RISK_UNKNOWN, f"Command not in whitelist: {cmd_name}"
 
         # 2. 检查危险命令模式（已经在check_command中检查过）
         # 3. 根据命令类型评估风险
 
         # 高风险命令（需要特别检查）
         high_risk_commands = {
-            "rm": "文件删除操作",
-            "sudo": "权限提升操作",
-            "chmod": "权限修改操作",
-            "chown": "所有权修改操作",
-            "dd": "磁盘操作",
-            "format": "磁盘格式化",
-            "mkfs": "创建文件系统",
-            "shutdown": "系统关机",
-            "halt": "系统停止",
-            "reboot": "系统重启",
-            "iptables": "防火墙配置",
-            "ufw": "防火墙管理",
+            "rm": "File deletion",
+            "sudo": "Privilege escalation",
+            "chmod": "Permission change",
+            "chown": "Ownership change",
+            "dd": "Disk operation",
+            "format": "Disk format",
+            "mkfs": "Create filesystem",
+            "shutdown": "System shutdown",
+            "halt": "System halt",
+            "reboot": "System reboot",
+            "iptables": "Firewall config",
+            "ufw": "Firewall management",
         }
 
         if cmd_name in high_risk_commands:
@@ -951,23 +952,23 @@ class SafetyGuard:
 
         # 中风险命令（可能需要确认）
         medium_risk_commands = {
-            "pip": "Python包管理",
-            "pip3": "Python包管理",
-            "npm": "Node.js包管理",
-            "yarn": "Node.js包管理",
-            "apt": "系统包管理",
-            "apt-get": "系统包管理",
-            "docker": "容器操作",
-            "docker-compose": "容器编排",
-            "systemctl": "系统服务管理",
-            "service": "服务管理",
+            "pip": "Python package manager",
+            "pip3": "Python package manager",
+            "npm": "Node.js package manager",
+            "yarn": "Node.js package manager",
+            "apt": "System package manager",
+            "apt-get": "System package manager",
+            "docker": "Container operations",
+            "docker-compose": "Container orchestration",
+            "systemctl": "System service management",
+            "service": "Service management",
         }
 
         if cmd_name in medium_risk_commands:
             return self.RISK_WARNING, medium_risk_commands[cmd_name]
 
         # 低风险命令（安全）
-        return self.RISK_SAFE, "安全命令"
+        return self.RISK_SAFE, "Safe command"
 
     def check_command(
         self, command: str, ask_confirmation: bool = True
@@ -991,7 +992,7 @@ class SafetyGuard:
         # 空命令
         if not command or len(command) == 0:
             return self._build_result(
-                allowed=False, reason="空命令", risk_level=self.RISK_DANGEROUS
+                allowed=False, reason="Empty command", risk_level=self.RISK_DANGEROUS
             )
 
         # 检查危险模式
@@ -1001,7 +1002,7 @@ class SafetyGuard:
                 if self.dangerous_command_action == "reject":
                     return self._build_result(
                         allowed=False,
-                        reason=f"检测到危险操作: {description}",
+                        reason=f"Dangerous operation detected: {description}",
                         risk_level=self.RISK_DANGEROUS,
                         pattern=pattern,
                     )
@@ -1009,34 +1010,34 @@ class SafetyGuard:
                     # 询问用户确认
                     if self.interactive and ask_confirmation:
                         if self._ask_user_confirmation(
-                            command, f"危险操作: {description}"
+                            command, f"Dangerous operation: {description}"
                         ):
-                            print(f"✅ 用户确认执行危险命令")
+                            print(f"✅ User confirmed execution of dangerous command")
                             return self._build_result(
                                 allowed=True,
-                                reason=f"危险操作已确认: {description}",
+                                reason=f"Dangerous operation confirmed: {description}",
                                 risk_level=self.RISK_WARNING,
                             )
                         else:
                             return self._build_result(
                                 allowed=False,
-                                reason="用户取消操作",
+                                reason="User cancelled operation",
                                 risk_level=self.RISK_DANGEROUS,
                             )
                     else:
                         # 非交互模式，拒绝执行
                         return self._build_result(
                             allowed=False,
-                            reason=f"检测到危险操作: {description} (请在交互模式下确认)",
+                            reason=f"Dangerous operation detected: {description} (confirm in interactive mode)",
                             risk_level=self.RISK_DANGEROUS,
                             pattern=pattern,
                         )
                 elif self.dangerous_command_action == "log":
                     # 记录日志但允许执行
-                    print(f"⚠️  警告: 检测到危险操作 (已记录): {description}")
+                    print(f"⚠️  Warning: dangerous operation detected (logged): {description}")
                     return self._build_result(
                         allowed=True,
-                        reason=f"危险操作已记录: {description}",
+                        reason=f"Dangerous operation logged: {description}",
                         risk_level=self.RISK_WARNING,
                     )
 
@@ -1050,7 +1051,7 @@ class SafetyGuard:
                 parts = command.split()
             if not parts:
                 return self._build_result(
-                    allowed=False, reason="无法解析命令", risk_level=self.RISK_DANGEROUS
+                    allowed=False, reason="Unable to parse command", risk_level=self.RISK_DANGEROUS
                 )
 
             cmd_path = parts[0]
@@ -1065,20 +1066,20 @@ class SafetyGuard:
             if self._is_project_executable(cmd_path):
                 # 项目内的可执行文件，检查基础命令名
                 if cmd_name in self.allowed_commands:
-                    print(f"✅ 允许项目内可执行文件: {cmd_path}")
+                    print(f"✅ Allowed project executable: {cmd_path}")
                     return self._build_result(
                         allowed=True,
-                        reason=f"项目内可执行文件: {cmd_name}",
+                        reason=f"Project executable: {cmd_name}",
                         risk_level=self.RISK_SAFE,
                     )
                 else:
                     # 对于项目内的脚本，如果是常见扩展名则允许
                     allowed_extensions = {".sh", ".py", ".js", ".rb", ".pl"}
                     if any(cmd_path.endswith(ext) for ext in allowed_extensions):
-                        print(f"✅ 允许项目内脚本: {cmd_path}")
+                        print(f"✅ Allowed project script: {cmd_path}")
                         return self._build_result(
                             allowed=True,
-                            reason="项目内脚本文件",
+                            reason="Project script file",
                             risk_level=self.RISK_SAFE,
                         )
 
@@ -1086,9 +1087,9 @@ class SafetyGuard:
             if cmd_name not in self.allowed_commands:
                 return self._build_result(
                     allowed=False,
-                    reason=f"命令不在白名单中: {cmd_name}",
+                    reason=f"Command not in whitelist: {cmd_name}",
                     risk_level=self.RISK_UNKNOWN,
-                    suggestion=f"可用命令: {', '.join(sorted(list(self.allowed_commands)))}",
+                    suggestion=f"Available commands: {', '.join(sorted(list(self.allowed_commands)))}",
                 )
 
             # 特殊检查：rm命令（智能检查）
@@ -1125,10 +1126,10 @@ class SafetyGuard:
                         ):
                             return {
                                 "allowed": False,
-                                "reason": f"rm命令目标过于危险: {target_path}",
+                                "reason": f"rm command target too dangerous: {target_path}",
                                 "risk_level": self.RISK_DANGEROUS,
                                 "needs_confirmation": False,
-                                "suggestion": "请明确指定要删除的文件或目录",
+                                "suggestion": "Please explicitly specify the file or directory to delete",
                             }
 
                         # 检查是否尝试删除项目目录外的文件
@@ -1160,8 +1161,8 @@ class SafetyGuard:
                     if dangerous_targets:
                         return {
                             "allowed": False,
-                            "reason": f"rm -rf 不能删除项目目录外的文件: {', '.join(dangerous_targets)}",
-                            "suggestion": "只能在项目目录内使用 rm -rf",
+                            "reason": f"rm -rf cannot delete files outside project directory: {', '.join(dangerous_targets)}",
+                            "suggestion": "rm -rf can only be used within the project directory",
                         }
 
                     # 在项目目录内使用 rm -rf
@@ -1169,20 +1170,20 @@ class SafetyGuard:
                     if ask_confirmation and self.interactive:
                         # 提取要删除的目标
                         targets = [p for p in parts[1:] if not p.startswith("-")]
-                        target_desc = ", ".join(targets) if targets else "文件"
+                        target_desc = ", ".join(targets) if targets else "files"
 
                         if not self._ask_user_confirmation(
-                            command, f"rm -rf 递归删除操作，将删除: {target_desc}"
+                            command, f"rm -rf recursive deletion, will delete: {target_desc}"
                         ):
-                            return {"allowed": False, "reason": "用户取消操作"}
-                        print("✅ 用户确认执行 rm -rf 操作")
-                        return {"allowed": True, "reason": "rm -rf操作（用户已确认）"}
+                            return {"allowed": False, "reason": "User cancelled operation"}
+                        print("✅ User confirmed rm -rf operation")
+                        return {"allowed": True, "reason": "rm -rf operation (user confirmed)"}
                     else:
                         # 非交互模式或不需要确认，直接允许（项目内）
-                        return {"allowed": True, "reason": "rm -rf操作（项目目录内）"}
+                        return {"allowed": True, "reason": "rm -rf operation (within project directory)"}
 
                 # 普通rm命令，允许
-                return {"allowed": True, "reason": "rm命令（安全）"}
+                return {"allowed": True, "reason": "rm command (safe)"}
 
             # 特殊检查：sudo命令（允许但需要确认）
             if cmd_name == "sudo":
@@ -1203,8 +1204,8 @@ class SafetyGuard:
                     if sub_cmd not in allowed_sudo_commands:
                         return {
                             "allowed": False,
-                            "reason": f"sudo命令 '{sub_cmd}' 不在允许列表中",
-                            "suggestion": f"允许的sudo命令: {', '.join(allowed_sudo_commands)}",
+                            "reason": f"sudo command '{sub_cmd}' not in allowed list",
+                            "suggestion": f"Allowed sudo commands: {', '.join(allowed_sudo_commands)}",
                         }
 
                     # 允许安装操作，但在交互模式下需要用户确认
@@ -1214,25 +1215,25 @@ class SafetyGuard:
                     ):
                         if ask_confirmation and self.interactive:
                             if not self._ask_user_confirmation(
-                                command, "sudo权限操作，可能修改系统配置"
+                                command, "sudo privilege operation, may modify system configuration"
                             ):
-                                return {"allowed": False, "reason": "用户取消操作"}
-                            print(f"✅ 用户确认sudo操作")
+                                return {"allowed": False, "reason": "User cancelled operation"}
+                            print(f"✅ User confirmed sudo operation")
                             return {
                                 "allowed": True,
-                                "reason": "软件包安装操作（用户已确认）",
+                                "reason": "Package install operation (user confirmed)",
                             }
                         else:
                             # 非交互模式，直接允许
-                            return {"allowed": True, "reason": "软件包安装操作"}
+                            return {"allowed": True, "reason": "Package install operation"}
 
                 # 其他sudo操作，在交互模式下询问
                 if ask_confirmation and self.interactive:
-                    if not self._ask_user_confirmation(command, "sudo权限操作"):
-                        return {"allowed": False, "reason": "用户取消操作"}
-                    return {"allowed": True, "reason": "sudo操作（用户已确认）"}
+                    if not self._ask_user_confirmation(command, "sudo privilege operation"):
+                        return {"allowed": False, "reason": "User cancelled operation"}
+                    return {"allowed": True, "reason": "sudo operation (user confirmed)"}
                 else:
-                    return {"allowed": True, "reason": "sudo操作"}
+                    return {"allowed": True, "reason": "sudo operation"}
 
             # 特殊检查：chmod和chown命令（项目内允许，但需要确认）
             if cmd_name in ["chmod", "chown"]:
@@ -1244,40 +1245,40 @@ class SafetyGuard:
                         ):
                             return {
                                 "allowed": False,
-                                "reason": f"{cmd_name}命令不能修改项目目录外的文件权限",
+                                    "reason": f"{cmd_name} command cannot modify file permissions outside project directory",
                             }
                         # 检查危险权限设置（如777）
                         if cmd_name == "chmod" and "777" in part:
                             if ask_confirmation and self.interactive:
                                 if not self._ask_user_confirmation(
-                                    command, "chmod 777权限过于宽松，存在安全风险"
-                                ):
-                                    return {"allowed": False, "reason": "用户取消操作"}
+                                        command, "chmod 777 permissions too permissive, security risk"
+                                    ):
+                                    return {"allowed": False, "reason": "User cancelled operation"}
                                 return {
                                     "allowed": True,
-                                    "reason": "chmod 777操作（用户已确认）",
+                                    "reason": "chmod 777 operation (user confirmed)",
                                 }
                             else:
                                 # 非交互模式，允许但警告
                                 return {
                                     "allowed": True,
-                                    "reason": "chmod 777操作（项目内）",
+                                    "reason": "chmod 777 operation (within project)",
                                 }
 
                 # 项目内的权限修改，在交互模式下询问确认
                 if ask_confirmation and self.interactive:
                     if not self._ask_user_confirmation(
-                        command, f"{cmd_name}权限修改操作"
+                        command, f"{cmd_name} permission modification"
                     ):
-                        return {"allowed": False, "reason": "用户取消操作"}
-                    return {"allowed": True, "reason": f"{cmd_name}操作（用户已确认）"}
+                        return {"allowed": False, "reason": "User cancelled operation"}
+                    return {"allowed": True, "reason": f"{cmd_name} operation (user confirmed)"}
                 else:
                     # 非交互模式，直接允许（项目内）
-                    return {"allowed": True, "reason": f"{cmd_name}操作（项目内）"}
+                    return {"allowed": True, "reason": f"{cmd_name} operation (within project)"}
 
             # 特殊检查：pip/pip3命令（允许大部分操作）
             if cmd_name in ["pip", "pip3"]:
-                print(f"📦 检测到pip命令: {' '.join(parts)}")
+                print(f"📦 Detected pip command: {' '.join(parts)}")
                 # 允许所有常见pip操作，只禁止明确危险的
                 if len(parts) > 1:
                     pip_action = parts[1].lower()
@@ -1289,17 +1290,17 @@ class SafetyGuard:
                     if pip_action in forbidden_pip_actions:
                         return {
                             "allowed": False,
-                            "reason": f"pip操作 '{pip_action}' 可能产生大量文件",
-                            "suggestion": "请使用 install 代替",
+                            "reason": f"pip operation '{pip_action}' may produce many files",
+                            "suggestion": "Please use install instead",
                         }
                 # 允许其他所有pip操作
-                return {"allowed": True, "reason": "pip操作"}
+                return {"allowed": True, "reason": "pip operation"}
 
             # 特殊检查：npm/yarn命令（允许大部分操作）
             if cmd_name in ["npm", "yarn", "npx", "pnpm"]:
-                print(f"📦 检测到{cmd_name}命令: {' '.join(parts)}")
+                print(f"📦 Detected {cmd_name} command: {' '.join(parts)}")
                 # 允许所有常见操作
-                return {"allowed": True, "reason": f"{cmd_name}操作"}
+                return {"allowed": True, "reason": f"{cmd_name} operation"}
 
             # 检查路径参数（使用新的is_safe_path方法）
             # 对于awk, sed, grep等命令，它们的参数可能是正则表达式而非路径，需要特殊处理
@@ -1363,7 +1364,7 @@ class SafetyGuard:
                             # 对于只读命令，允许访问（但会记录警告）
                             if cmd_name in readonly_commands:
                                 print(
-                                    f"⚠️  警告: {cmd_name}命令访问项目目录外路径: {part}"
+                                    f"⚠️  Warning: {cmd_name} access outside project directory: {part}"
                                 )
                                 continue
 
@@ -1375,7 +1376,7 @@ class SafetyGuard:
                             ):
                                 if cmd_name in ["mkdir", "touch", "rm", "cp", "mv"]:
                                     print(
-                                        f"⚠️  警告: {cmd_name}命令在临时目录操作: {part}"
+                                        f"⚠️  Warning: {cmd_name} operating in temp directory: {part}"
                                     )
                                     continue
 
@@ -1398,7 +1399,7 @@ class SafetyGuard:
                             # 其他情况拒绝
                             return self._build_result(
                                 allowed=False,
-                                reason=f"路径超出安全范围: {part}",
+                                reason=f"Path outside safe range: {part}",
                                 risk_level=self.RISK_DANGEROUS,
                                 path=part,
                             )
@@ -1408,13 +1409,13 @@ class SafetyGuard:
 
             # 使用评估的风险等级
             return self._build_result(
-                allowed=True, reason="命令安全检查通过", risk_level=risk_level
+                allowed=True, reason="Command safety check passed", risk_level=risk_level
             )
 
         except Exception as e:
             return self._build_result(
                 allowed=False,
-                reason=f"命令解析错误: {str(e)}",
+                reason=f"Command parsing error: {str(e)}",
                 risk_level=self.RISK_DANGEROUS,
             )
 

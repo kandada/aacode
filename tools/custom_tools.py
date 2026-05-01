@@ -15,7 +15,7 @@ class CustomTools(AtomicTools):
     """自定义工具扩展"""
 
     async def analyze_code(self, file_path: str) -> Dict[str, Any]:
-        """代码分析工具"""
+        """code analysis工具"""
         # 读取文件
         result = await self.read_file(file_path)
         if not result.get("success"):
@@ -23,7 +23,7 @@ class CustomTools(AtomicTools):
 
         code = result["content"]
 
-        # 执行代码分析
+        # executecode analysis
         analysis_code = f"""
 import ast
 import json
@@ -60,5 +60,5 @@ result = analyze_python_code(code)
 print(json.dumps(result, indent=2))
 """
 
-        # 执行分析 - 使用run_shell执行Python代码
+        # execute分析 - 使 with run_shellexecutePython代码
         return await self.run_shell(f"python3 -c {repr(analysis_code)}")

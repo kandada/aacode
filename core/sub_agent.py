@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 import asyncio
+from aacode.i18n import t
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -71,7 +72,7 @@ class SubAgent(BaseAgent):
         Returns:
             执行结果
         """
-        print(f"\n🔄 子Agent {self.agent_id} 开始任务")
+        print(f"\n🔄 SubAgent {self.agent_id} starting task")
         self.task_description = task
         self.start_time = float(asyncio.get_event_loop().time())
 
@@ -82,7 +83,7 @@ class SubAgent(BaseAgent):
         self.conversation_history.append(
             {
                 "role": "user",
-                "content": f"任务：{task}\n\n请专注于完成这个特定任务。完成后使用submit_result工具提交结果。",
+                "content": f"Task: {task}\n\nPlease focus on completing this specific task. Use submit_result tool to submit the result when done.",
             }
         )
 
@@ -111,7 +112,7 @@ class SubAgent(BaseAgent):
         try:
             # 验证结果格式
             if not isinstance(result, dict):
-                return {"error": "结果必须是字典格式"}
+                return {"error": "Result must be dict format"}
 
             # 添加元数据
             result_with_metadata = {
@@ -124,26 +125,25 @@ class SubAgent(BaseAgent):
                 "tool_calls": self.tool_calls,
             }
 
-            print(f"✅ 子Agent {self.agent_id} 提交结果")
+            print(f"✅ SubAgent {self.agent_id} submitted result")
 
             return {
                 "success": True,
                 "result": result_with_metadata,
-                "message": "结果提交成功",
+                "message": "Result submitted successfully",
             }
 
         except Exception as e:
-            return {"error": f"提交结果失败: {str(e)}"}
+            return {"error": f"Submit result failed: {str(e)}"}
 
     async def get_focused_tools(self) -> Dict[str, Any]:
         """获取聚焦的工具集（可根据Agent类型定制）"""
         # 基础工具集
-        base_tools = ["read_file", "write_file", "search_files", "execute_python"]
+        base_tools = ["run_shell"]
 
         # 根据Agent ID判断类型
         if "test" in self.agent_id:
             base_tools.append("run_tests")
-            base_tools.append("debug_code")
 
         if "research" in self.agent_id:
             # 研究Agent可能需要网络搜索

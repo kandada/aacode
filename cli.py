@@ -10,6 +10,8 @@ import os
 import shutil
 import sys
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from aacode.i18n import t
 
 
 def is_git_clone_mode():
@@ -36,7 +38,7 @@ def run_init_git_clone():
 
 def run_init_pip():
     """pip 安装模式：引导用户配置"""
-    print("🚀 AACode 初始化向导\n")
+    print("🚀 AACode Initialization Wizard\n")
 
     home_aacode_dir = Path.home() / ".aacode"
     home_aacode_dir.mkdir(exist_ok=True)
@@ -46,20 +48,20 @@ def run_init_pip():
 
     if not config_file.exists() and pkg_config.exists():
         shutil.copy(pkg_config, config_file)
-        print(f"✅ 已创建默认配置: {config_file}")
+        print(t("cli.save_config", file=config_file))
 
-    print("\n🔧 请配置你的 API Key：")
-    print("在 ~/.aacode/aacode_config.yaml 中设置 model.api_key")
-    print("或设置环境变量 LLM_API_KEY\n")
+    print("\n🔧 Please configure your API Key:")
+    print("Set model.api_key in ~/.aacode/aacode_config.yaml")
+    print("Or set the LLM_API_KEY environment variable\n")
 
-    api_key = input("请输入 API Key (或直接按 Enter 使用环境变量): ").strip()
+    api_key = input("Enter API Key (or press Enter to use environment variable): ").strip()
     if api_key:
         env_file = home_aacode_dir / ".env"
         with open(env_file, "a", encoding="utf-8") as f:
             f.write(f"\nLLM_API_KEY={api_key}\n")
-        print(f"✅ 已保存到 {env_file}")
+        print(t("cli.save_env", file=env_file))
 
-    print("\n✅ 初始化完成！运行 'aacode run' 开始使用")
+    print("\n✅ Initialization complete! Run 'aacode run' to start")
 
 
 def run_main_async(args):
@@ -76,12 +78,12 @@ def run_main_async(args):
 
 
 def main():
-    """CLI 主入口"""
+    """CLI main entry point"""
     if len(sys.argv) < 2:
         print("aacode - AI Coding Assistant")
         print("\nUsage:")
-        print("  aacode init    初始化配置")
-        print("  aacode run     运行程序")
+        print("  aacode init    Initialize configuration")
+        print("  aacode run     Run the program")
         print("\nOr use: python -m aacode [init|run]")
         sys.exit(1)
 
@@ -99,8 +101,8 @@ def main():
     elif command == "--help" or command == "-h":
         print("aacode - AI Coding Assistant")
         print("\nUsage:")
-        print("  aacode init    初始化配置")
-        print("  aacode run     运行程序")
+        print("  aacode init    Initialize configuration")
+        print("  aacode run     Run the program")
         print('\n  aacode run -p /path/to/project "task description"')
         print("  aacode run --interactive")
 

@@ -5,7 +5,10 @@
 """
 
 import asyncio
+import json
+import re
 import sys
+from aacode.i18n import t
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Any, Optional
@@ -19,26 +22,26 @@ import anthropic
 # 数据流：Python stdout → Rust read_line() → Tauri emit → 前端 JS
 #
 # 两种输出模式（由 _is_tty 决定）：
-#   1. TTY 模式（CLI 终端直接运行）：
-#      - print(text, end="") 逐字追加，不加换行，终端实时显示
-#      - 用户在终端直接看到流式输出
+#   1. TTY 模式（CLI 终端直接运 lines）：
+#      - print(text, end="") 逐字追加，不加换 lines，终端实时显示
+#      -  user在终端直接看到流式输出
 #
-#   2. 管道模式（Tauri 桌面客户端通过子进程调用）：
-#      - Rust 端用 read_line() 按行读取 stdout
-#      - read_line() 需要 \n 才能返回一行，所以 print(text) 必须加换行
-#      - 但模型 token 本身可能包含 \n（如表格行间换行），这个 \n 会和
+#   2. 管道模式（Tauri 桌面客户端通过子进程调 with ）：
+#      - Rust 端 with  read_line() 按 lines读取 stdout
+#      - read_line() 需要 \n 才能返回一 lines，所以 print(text) 必须加换 lines
+#      - 但模型 token 本身可能包含 \n（如表格 lines间换 lines），这个 \n 会和
 #        print 加的 \n 混淆，导致 Rust 端无法区分
 #      - 解决方案：_stream_print 在管道模式下将 token 中的 \n 转义为 \x00，
 #        Rust 端 read_line 后 trim 掉 print 加的 \n，再将 \x00 还原为 \n
-#      - 这样前端收到的 content 就是模型的原始 token，换行信息不失真
+#      - 这样前端收到的 content 就是模型的原始 token，换 lines信息不失真
 #
-# 系统日志行（如 "🤖 模型思考中"、"📋 Observation:" 等）：
-#   - 直接用 print() 输出，不经过 _stream_print
-#   - Rust 端 trim 后发送给前端，前端通过 emoji 前缀识别并加 \n 分行
-#   - 注意：不要用 _stream_print 输出系统标记行，否则 \x00 转义会干扰前端识别
+# 系统日志 lines（如 "🤖 模型思考中"、"📋 Observation:" 等）：
+#   - 直接 with  print() 输出，不经过 _stream_print
+#   - Rust 端 trim 后发送给前端，前端通过 emoji 前缀识别并加 \n 分 lines
+#   - 注意：不要 with  _stream_print 输出系统标记 lines，否则 \x00 转义会干扰前端识别
 #
-# ⚠️ 重要：不要修改 TTY 模式下的 end="" 行为，这是终端流式显示所必需的
-# ⚠️ 重要：不要去掉管道模式下的 \x00 转义，否则表格等多行内容会渲染失败
+# ⚠️ 重要：不要修改 TTY 模式下的 end=""  lines为，这是终端流式显示所必需的
+# ⚠️ 重要：不要去掉管道模式下的 \x00 转义，否则表格等多 lines内容会渲染失败
 # ─────────────────────────────────────────────────────────────────
 
 _is_tty = sys.stdout.isatty()
@@ -48,16 +51,16 @@ def _stream_print(text, newline_after=False):
     流式输出模型 token。
     
     - TTY 模式：逐字追加（end=""），终端实时显示
-    - 管道模式：token 中 \\n 转义为 \\x00 后 print（带换行），
+    - 管道模式：token 中 \\n 转义为 \\x00 后 print（带换 lines），
       Rust read_line() 读取后还原 \\x00 → \\n，去掉 print 加的末尾 \\n
     
-    仅用于模型流式 token 输出。系统标记行（emoji 开头）应直接用 print()。
+    Only for model streaming token output. System marker lines (emoji prefix) should use print() directly.
     """
     if _is_tty:
         print(text, end="", flush=True)
     else:
         # 管道模式：转义 token 中的 \n 为 \x00，避免和 print 自动加的 \n 混淆
-        # Rust 端 read_line() 读到一行后：trim 末尾 \n → 还原 \x00 → \n → 发送给前端
+        # Rust 端 read_line() 读到一 lines后：trim 末尾 \n → 还原 \x00 → \n → 发送给前端
         escaped = text.replace('\n', '\x00')
         print(escaped, flush=True)
     if newline_after and _is_tty:
@@ -114,19 +117,13 @@ class MainAgent(BaseAgent):
         **kwargs,
     ):
 
-        # 初始化模型调用器
+        # initialized模型调 with 器
         model_caller = self._create_model_caller(model_config)
 
-        # 先初始化skills_manager，因为_create_tools需要它
-        # 从配置中获取skills配置
-        skills_config = (
-            {"skills_metadata": settings.skills.skills_metadata}
-            if hasattr(settings.skills, "skills_metadata")
-            else {}
-        )
-        self.skills_manager = SkillsManager(project_path, skills_config)
+        # 先initializedskills_manager，因为_create_tools需要它
+        self.skills_manager = SkillsManager(project_path)
 
-        # 初始化工具（主Agent有更多工具）
+        # initialized工具（主Agent有更多工具）
         tools = self._create_tools(project_path, safety_guard)
 
         super().__init__(
@@ -138,22 +135,16 @@ class MainAgent(BaseAgent):
             max_iterations=kwargs.get("max_iterations", 50),
         )
 
-        # 初始化技能（需要在super().__init__之后，因为需要self.tools）
+        # initialized技能（需要在super().__init__之后，因为需要self.tools）
         self._init_skills()
 
-        # 获取 Skills 工具名列表（用于提示词）- 在初始化技能之后
-        skills_tools_list = self._get_skills_tool_names(self.tools)
+        # 生成 Skills 列表（for 系统提示词）
+        skills_list = self.skills_manager.get_skills_list_for_prompt()
 
-        # 系统提示（替换占位符，使用 replace 避免大括号转义问题）
+        # 系统提示（替换占位符）
         system_prompt = SYSTEM_PROMPT_FOR_MAIN_AGENT.replace(
-            "{skills_tools_list}", skills_tools_list
+            "{skills_list}", skills_list
         )
-        example_tool = (
-            skills_tools_list.split(",")[0]
-            if "," in skills_tools_list
-            else "playwright_browser_automation"
-        )
-        system_prompt = system_prompt.replace("{skills_example}", example_tool)
 
         # 更新系统提示词
         self.system_prompt = system_prompt
@@ -164,7 +155,7 @@ class MainAgent(BaseAgent):
         # 多Agent系统
         self.multi_agent_system = MultiAgentSystem(self, context_manager)
 
-        # 子Agent注册表
+        # SubAgent注册表
         self.sub_agents: Dict[str, Any] = {}
 
         # 任务跟踪
@@ -173,7 +164,7 @@ class MainAgent(BaseAgent):
         # MCP管理器
         self.mcp_manager = MCPManager(project_path)
 
-        # Skills管理器已经在__init__开头初始化了
+        # Skills管理器已经在__init__开头initialized了
 
         # 会话管理器
         self.session_manager = SessionManager(project_path)
@@ -181,343 +172,175 @@ class MainAgent(BaseAgent):
         # ReAct循环
         self.react_loop = AsyncReActLoop(
             model_caller=model_caller,
-            tools=tools,
+            tools=self.tools,
             context_manager=context_manager,
             max_iterations=kwargs.get("max_iterations", settings.MAX_REACT_ITERATIONS),
             project_path=project_path,
             context_config=settings.context,
         )
 
-    def _get_skills_tool_names(self, tools: Optional[Dict[str, Any]] = None) -> str:
-        """获取Skills相关工具名列表（用于提示词）"""
-        if tools is None:
-            tools = getattr(self, "tools", {})
-        if not tools:
-            return ""
-        skill_tools = []
+    async def _finalize_task(self, summary: str, **kwargs) -> Dict[str, Any]:
+        """结束当前任务"""
+        return {"status": "completed", "summary": summary}
 
-        # 动态获取技能名称列表
-        skill_names = []
-        if hasattr(self, "skills_manager"):
-            skill_names = self.skills_manager.list_enabled_skills()
+    # ------------------------------------------------------------------ #
+    #  run_skills  —  统一技能入口，三种模式（仿 fastclaw）
+    # ------------------------------------------------------------------ #
 
-        # 如果无法动态获取，使用后备方法
-        if not skill_names:
-            # 方法1：从配置获取
-            if __package__ in (None, ""):
-                from config import settings
-            else:
-                from ..config import settings
+    _LIST_MODES = {None, "", "__list__", "list", "--list", "-l", "/list", "ls"}
+    _INFO_MODES = {"__info__", "info", "--info", "-i", "/info"}
 
-            if hasattr(settings, "skills") and hasattr(
-                settings.skills, "skills_metadata"
-            ):
-                skill_names = list(settings.skills.skills_metadata.keys())
-
-            # 方法2：从skills目录获取
-            if not skill_names and hasattr(self, "project_path"):
-                import os
-
-                skills_dir = self.project_path / "skills"
-                if os.path.exists(skills_dir):
-                    for item in os.listdir(skills_dir):
-                        if os.path.isdir(
-                            os.path.join(skills_dir, item)
-                        ) and not item.startswith("."):
-                            skill_names.append(item)
-
-        # 识别skills工具
-        if not tools:
-            return ""
-        for tool_name in tools.keys():
-            # 检查工具名是否包含任何技能名称
-            for skill_name in skill_names:
-                if skill_name in tool_name:
-                    skill_tools.append(tool_name)
-                    break
-
-        return ", ".join(sorted(skill_tools)) if skill_tools else "无"
-
-    async def _list_skills(self, include_details: bool = False) -> Dict[str, Any]:
-        """列出所有可用的skills（支持渐进式披露）
-
-        Args:
-            include_details: 是否包含详细参数信息（默认只返回元数据）
+    async def _run_skills(self, skill_name: str = None, params: dict = None) -> str:
         """
+        统一技能入口，三种模式：
+
+          1. run_skills("__list__")                        — 列出所有技能
+          2. run_skills("__info__", {"skill_name":"pandas"})— 查看技能详情
+          3. run_skills("pandas", {"code":"df.describe()"}) — 执行技能
+
+          多函数 skill 在 params 中传 "func":
+            run_skills("playwright", {"func":"browser_automation", "url":"..."})
+        """
+        if not hasattr(self, 'skills_manager'):
+            return "Error: Skills manager not initialized"
+        if not self.skills_manager.loaded_skills:
+            self._init_skills()
+
+        params = params or {}
+        sname = skill_name.strip() if skill_name else None
+
+        if not sname:
+            sname = params.pop("skill_name", None) or params.pop("name", None)
+        if sname and isinstance(sname, str):
+            sname = sname.strip()
+
+        # ---- help 模式 ----
+        if sname == "help":
+            return self._run_skills_help()
+
+        # ---- 模式1: 列出全部 skill ----
+        if sname in self._LIST_MODES:
+            return self._format_skills_list()
+
+        # ---- 模式2: 查看 skill 详情 ----
+        if sname in self._INFO_MODES:
+            return self._format_skill_detail(params)
+
+        # ---- 模式3: 执行 skill ----
+        if sname not in self.skills_manager.loaded_skills:
+            return f"Error: Skill '{skill_name}' not found"
+        if sname not in self.skills_manager.enabled_skills:
+            return f"Error: Skill '{skill_name}' not enabled"
+
+        func_name = params.pop("func", None)
         try:
-            enabled_list = self.skills_manager.list_enabled_skills()
-            skills_info = []
-
-            for skill_name in enabled_list:
-                skill_info = self.skills_manager.loaded_skills.get(skill_name)
-                if skill_info:
-                    # 基础元数据（总是返回）
-                    skill_data = {
-                        "name": skill_name,
-                        "display_name": skill_info.display_name or skill_name,
-                        "description": skill_info.description,
-                        "trigger_keywords": skill_info.trigger_keywords,
-                        "usage_guide": skill_info.usage_guide,
-                        "metadata_loaded": skill_info.metadata_loaded,
-                        "full_instruction_loaded": skill_info.full_instruction_loaded,
-                    }
-
-                    # 如果需要详细信息，加载完整指令
-                    if include_details and not skill_info.full_instruction_loaded:
-                        self.skills_manager._load_full_instruction(skill_name)
-                        skill_info = self.skills_manager.loaded_skills.get(skill_name)
-
-                    # 添加详细信息
-                    if (
-                        include_details
-                        and skill_info
-                        and skill_info.full_instruction_loaded
-                    ):
-                        schema = self.skills_manager.get_skill_schema(skill_name)
-                        if schema:
-                            skill_data["parameters"] = [
-                                p.name for p in schema.parameters
-                            ]
-                            skill_data["parameter_details"] = [
-                                {
-                                    "name": p.name,
-                                    "type": str(p.type),
-                                    "required": p.required,
-                                    "description": p.description,
-                                }
-                                for p in schema.parameters
-                            ]
-                            skill_data["examples"] = (
-                                schema.examples if hasattr(schema, "examples") else []
-                            )
-
-                    skills_info.append(skill_data)
-
-            return {
-                "success": True,
-                "skills": skills_info,
-                "count": len(skills_info),
-                "metadata_only": not include_details,
-                "token_efficiency_note": "使用include_details=true获取完整信息（消耗更多tokens）",
-            }
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-
-    async def _get_skill_info(self, skill_name: str) -> Dict[str, Any]:
-        """获取特定skill的详细信息（按需加载完整指令）"""
-        try:
-            # 确保技能已完全加载
-            loaded_skill_info = None
-            if skill_name in self.skills_manager.loaded_skills:
-                loaded_skill_info = self.skills_manager.loaded_skills[skill_name]
-                if not loaded_skill_info.full_instruction_loaded:
-                    self.skills_manager._load_full_instruction(skill_name)
-
-            schema = self.skills_manager.get_skill_schema(skill_name)
-            if not schema:
-                return {"success": False, "error": f"Skill不存在: {skill_name}"}
-
-            # 获取技能元数据
-            skill_info: Optional[SkillInfo] = self.skills_manager.loaded_skills.get(
-                skill_name
+            result = await self.skills_manager.execute_skill(
+                sname, func_name=func_name, **params
             )
-
-            # 清理描述
-            desc = schema.description.strip()
-            if desc.startswith("# "):
-                desc = desc[2:]
-            elif desc.startswith("## "):
-                desc = desc[3:]
-
-            params_info = []
-            for param in schema.parameters:
-                param_info = {
-                    "name": param.name,
-                    "type": (
-                        param.type.__name__
-                        if hasattr(param.type, "__name__")
-                        else str(param.type)
-                    ),
-                    "required": param.required,
-                    "description": param.description,
-                }
-                if hasattr(param, "default") and param.default is not None:
-                    param_info["default"] = param.default
-                params_info.append(param_info)
-
-            result = {
-                "success": True,
-                "name": skill_name,
-                "description": desc,
-                "full_md_content": (
-                    skill_info.full_md_content
-                    if skill_info and skill_info.full_md_content
-                    else desc
-                ),
-                "parameters": params_info,
-                "examples": schema.examples if hasattr(schema, "examples") else [],
-                "loading_info": {"loaded_on_demand": True},
-            }
-
-            # 添加元数据信息（如果可用）
-            if skill_info:
-                result["display_name"] = skill_info.display_name or skill_name
-                result["trigger_keywords"] = skill_info.trigger_keywords
-                result["usage_guide"] = skill_info.usage_guide
-                # 类型提示: loading_info是字典
-                result["loading_info"]["metadata_loaded"] = skill_info.metadata_loaded
-                result["loading_info"]["full_instruction_loaded"] = (
-                    skill_info.full_instruction_loaded
-                )
-
-                # 添加skill对应的工具列表（渐进式披露：让模型知道有哪些工具可用）
-                if skill_info.functions:
-                    tools_info = []
-                    for func_name, func_details in skill_info.functions.items():
-                        tool_name = f"{skill_name}_{func_name}"
-                        # 直接从 func_details 获取参数信息
-                        tool_params = []
-                        for param_name, param_details in func_details.get(
-                            "parameters", {}
-                        ).items():
-                            tool_params.append(
-                                {
-                                    "name": param_name,
-                                    "type": "str",  # 统一使用 str 类型
-                                    "required": param_details.get("required", False),
-                                    "description": param_details.get("description", ""),
-                                    "default": param_details.get("default"),
-                                }
-                            )
-                        tools_info.append(
-                            {
-                                "name": tool_name,
-                                "description": f"执行 {func_name} 操作",
-                                "parameters": tool_params,
-                                "examples": func_details.get("examples", []),
-                            }
-                        )
-                    result["tools"] = tools_info
-
-            return result
+            if isinstance(result, dict):
+                if result.get("success"):
+                    return str(result.get("result", result))
+                return f"Error: {result.get('error', str(result))}"
+            return str(result)
         except Exception as e:
-            return {"success": False, "error": str(e)}
+            return f"Error executing skill '{skill_name}': {str(e)}"
+
+    # ---- 辅助方法 ----
+
+    def _run_skills_help(self) -> str:
+        return (
+            "run_skills — 三种模式:\n\n"
+            "1. 列表: run_skills(\"__list__\")\n"
+            "2. 详情: run_skills(\"__info__\", {\"skill_name\": \"pandas\"})\n"
+            "3. 执行: run_skills(\"pandas\", {\"code\": \"df.describe()\"})\n\n"
+            "多函数 skill: 'func' 放在 params 中\n"
+            "  run_skills(\"playwright\", {\"func\": \"browser_automation\", \"url\": \"...\"})"
+        )
+
+    def _format_skills_list(self) -> str:
+        enabled = self.skills_manager.list_enabled_skills()
+        if not enabled:
+            return "暂无可用技能"
+        lines = ["可用技能列表:"]
+        for name in enabled:
+            info = self.skills_manager.loaded_skills.get(name)
+            if info:
+                lines.append(f"- {name}: {info.description}")
+        return "\n".join(lines)
+
+    def _format_skill_detail(self, params: dict) -> str:
+        target = params.get("skill_name") or params.get("name") or ""
+        if not target:
+            return "Error: skill_name is required for __info__ mode"
+        if target not in self.skills_manager.loaded_skills:
+            return f"Error: Skill '{target}' not found"
+        self.skills_manager._load_full_instruction(target)
+        info = self.skills_manager.loaded_skills[target]
+        md_path = Path(info.skill_dir) / "SKILL.md"
+        if md_path.exists():
+            return md_path.read_text(encoding="utf-8")
+        return f"Skill: {target}\nDescription: {info.description}"
 
     def _init_skills(self):
-        """初始化skills（支持渐进式披露）"""
+        """初始化 skills——从 SKILL.md 自动发现，不依赖 yaml，不注册 per-function 工具"""
         if not settings.skills.enabled:
-            print("ℹ️ Skills功能已禁用")
+            print(t("skills.disabled"))
             return
 
         if not settings.skills.auto_discover:
-            print("ℹ️ Skills自动发现已禁用")
+            print(t("skills.auto_discover_disabled"))
             return
 
-        # 渐进式披露：启动时只加载元数据
         discovered = self.skills_manager.discover_skills(load_full_instructions=False)
         if not discovered:
-            print("ℹ️ 未发现任何Skills")
+            print(t("skills.none_found"))
             return
 
-        print(f"🔍 发现 {len(discovered)} 个Skills（仅元数据）")
+        print(t("skills.discovered", count=len(discovered)))
 
-        # 打印skills元数据信息
         for skill_name, skill_info in discovered.items():
-            status = "✅" if skill_info.metadata_loaded else "⚠️"
             desc = (
                 skill_info.description[:50] + "..."
                 if len(skill_info.description) > 50
                 else skill_info.description
             )
-            print(f"   {status} {skill_name}: {desc}")
+            print(t("skills.skill_item", name=skill_name, desc=desc))
 
-        # 自动启用在skills_metadata.yaml中配置了元数据的skill
-        # 只有配置了元数据的skill才会被启用，符合渐进式披露原则
-        configured_skills = list(settings.skills.skills_metadata.keys())
-        enabled = [s for s in configured_skills if s in discovered]
+        # 自动启用所有发现的 skill
+        enabled = list(discovered.keys())
         self.skills_manager.enable_skills(enabled)
-        print(f"✅ 已自动启用 {len(enabled)} 个Skills（基于skills_metadata.yaml配置）")
+        print(t("skills.enabled_count", count=len(enabled)))
         enabled_list = self.skills_manager.list_enabled_skills()
-        print(f"✅ 启用 {len(enabled_list)} 个Skills: {', '.join(enabled_list)}")
+        print(t("skills.enabled_list", count=len(enabled_list), list=', '.join(enabled_list)))
 
-        # 注册skill工具到注册表并添加到Agent工具字典
-        # 渐进式披露：启动时加载完整指令以便注册所有函数
-        registry = get_global_registry()
-        tool_count = 0
-
+        # 预加载所有技能的完整信息（供 __info__ 和 execute 使用）
         for skill_name in enabled_list:
-            # 加载完整指令以发现所有函数
             self.skills_manager._load_full_instruction(skill_name)
 
-            skill_info = self.skills_manager.loaded_skills.get(skill_name)
-            if not skill_info:
-                continue
-
-            # 检查是否有多函数支持
-            if skill_info.functions:
-                # 为每个函数创建独立工具
-                for func_name, func_info in skill_info.functions.items():
-                    tool_name = f"{skill_name}_{func_name}"
-
-                    # 创建简化的schema
-                    from ..utils.tool_schemas import get_schema
-
-                    schema = get_schema(tool_name, self.skills_manager)
-
-                    # 手动创建schema覆盖参数
-                    from ..utils.tool_registry import ToolSchema, ToolParameter
-
-                    params = []
-                    for param_name, param_info in func_info.get(
-                        "parameters", {}
-                    ).items():
-                        param = ToolParameter(
-                            name=param_name,
-                            type=str,
-                            required=param_info.get("required", False),
-                            default=param_info.get("default"),
-                            description=param_info.get("description", ""),
-                        )
-                        params.append(param)
-
-                    schema = ToolSchema(
-                        name=tool_name,
-                        description=f"{skill_info.description} - 函数: {func_name}",
-                        parameters=params,
-                        examples=func_info.get("examples", []),
-                    )
-
-                    func = self._create_skill_executor(skill_name, func_name)
-                    registry.register(func, schema)
-                    self.tools[tool_name] = func
-                    tool_count += 1
-            else:
-                # 兼容：单函数skill
-                schema = self.skills_manager.get_skill_schema(skill_name)
-                if schema:
-                    func = self._create_skill_executor(skill_name)
-                    registry.register(func, schema)
-                    self.tools[skill_name] = func
-                    tool_count += 1
-
-        print(f"✅ 已注册 {tool_count} 个Skill工具函数（支持多功能）")
-
-    def _create_skill_executor(self, skill_name: str, func_name: Optional[str] = None):
-        """创建skill执行函数"""
-
-        async def executor(**kwargs):
-            return await self.skills_manager.execute_skill(
-                skill_name, func_name=func_name, **kwargs
-            )
-
-        return executor
+        print(t("skills.registered_tools", count=0))
 
     def _create_model_caller(self, model_config: Dict):
-        """创建模型调用器（支持流式输出和多网关）"""
+        """创建模型调 with 器（支持流式输出、多网关、原生 Function Calling）"""
 
-        async def model_caller(messages: List[Dict]) -> str:
+        from aacode.utils.tool_adapter import to_openai_tools, to_anthropic_tools
+        from aacode.utils.tool_schemas import get_all_schemas
+
+        async def model_caller(messages: List[Dict]) -> Dict[str, Any]:
+            """调 with 模型，返回 {"text": str, "tool_calls": list}"""
+            native_tools = None
             try:
-                # 使用提供的配置创建客户端
+                all_schemas = get_all_schemas()
+                if all_schemas:
+                    gateway = model_config.get("gateway", "openai")
+                    if gateway == "anthropic":
+                        native_tools = to_anthropic_tools(all_schemas)
+                    else:
+                        native_tools = to_openai_tools(all_schemas)
+            except Exception:
+                native_tools = None
+
+            try:
+                # 使 with 提供的配置创建客户端
                 api_key = (
                     model_config.get("api_key")
                     or os.getenv("LLM_API_KEY")
@@ -537,7 +360,7 @@ class MainAgent(BaseAgent):
 
                 if not api_key:
                     # API Key 未设置，抛出异常让 react_loop 显示错误
-                    error_msg = "❌ API Key 未设置！请在客户端 Settings 中配置 API Key，或运行 aacode init 设置。"
+                    error_msg = "❌ API Key not configured! Please configure the API Key in client Settings, or run 'aacode init' to set it up."
                     print(error_msg)
                     raise RuntimeError(error_msg)
 
@@ -570,19 +393,19 @@ class MainAgent(BaseAgent):
 
                 # 根据网关类型创建客户端
                 if gateway == "anthropic":
-                    # Anthropic网关需要特殊处理
                     return await self._call_anthropic_api(
-                        api_key, base_url, model_name, messages, model_config
+                        api_key, base_url, model_name, messages, model_config,
+                        tools=native_tools,
                     )
                 else:
-                    # OpenAI兼容网关
                     return await self._call_openai_api(
-                        api_key, base_url, model_name, messages, model_config
+                        api_key, base_url, model_name, messages, model_config,
+                        tools=native_tools,
                     )
 
             except Exception as e:
                 # 详细的错误信息
-                error_msg = f"模型调用失败: {str(e)}"
+                error_msg = f"Model call failed: {str(e)}"
                 print(f"\n❌ {error_msg}")
 
                 # 检查是否为认证错误
@@ -592,17 +415,17 @@ class MainAgent(BaseAgent):
                     or "authentication" in error_str
                     or "invalid api key" in error_str
                 ):
-                    print("\n🔑 API认证失败！请检查：")
-                    print("1. API密钥是否正确")
-                    print("2. 环境变量 LLM_API_KEY 是否设置")
-                    print("3. API密钥是否有权限")
-                    print("4. API服务是否可用")
-                    print("\n💡 建议：")
-                    print("- 运行 `export LLM_API_KEY=your_api_key` 设置环境变量")
-                    print("- 检查API密钥是否过期或被撤销")
-                    print("- 确认API服务端点是否正确")
-                    # 抛出异常，停止执行
-                    raise RuntimeError(f"API认证失败: {error_msg}")
+                    print("\n🔑 API authentication failed! Check:")
+                    print("1. Is API key correct")
+                    print("2. Is LLM_API_KEY env var set")
+                    print("3. Does API key have proper permissions")
+                    print("4. Is API service available")
+                    print("\n💡 Suggestions:")
+                    print("- Run `export LLM_API_KEY=your_api_key`")
+                    print("- Check if API key is expired or revoked")
+                    print("- Verify API endpoint is correct")
+                    # 抛出异常，停止execute
+                    raise RuntimeError(f"API authentication failed: {error_msg}")
 
                 # 检查是否为网络错误
                 elif (
@@ -610,16 +433,16 @@ class MainAgent(BaseAgent):
                     or "timeout" in error_str
                     or "network" in error_str
                 ):
-                    print("\n🌐 网络连接失败！请检查：")
-                    print("1. 网络连接是否正常")
-                    print("2. API服务端点是否可达")
-                    print("3. 防火墙或代理设置")
-                    print("\n💡 建议：")
-                    print("- 检查网络连接")
-                    print("- 确认API服务URL是否正确")
-                    print("- 尝试使用 `curl` 测试API端点")
-                    # 抛出异常，停止执行
-                    raise RuntimeError(f"网络连接失败: {error_msg}")
+                    print("\n🌐 Network connection failed! Check:")
+                    print("1. Is network working")
+                    print("2. Is API endpoint reachable")
+                    print("3. Firewall or proxy settings")
+                    print("\n💡 Suggestions:")
+                    print("- Check network connection")
+                    print("- Verify API service URL is correct")
+                    print("- Try `curl` to test API endpoint")
+                    # 抛出异常，停止execute
+                    raise RuntimeError(f"Network connection failed: {error_msg}")
 
                 # 检查是否为配额错误
                 elif (
@@ -627,29 +450,29 @@ class MainAgent(BaseAgent):
                     or "limit" in error_str
                     or "rate limit" in error_str
                 ):
-                    print("\n📊 API配额或限制错误！请检查：")
-                    print("1. API配额是否用完")
-                    print("2. 是否达到速率限制")
-                    print("3. 账户余额是否充足")
-                    print("\n💡 建议：")
-                    print("- 检查API使用情况")
-                    print("- 等待配额重置")
-                    print("- 升级API套餐")
-                    # 抛出异常，停止执行
-                    raise RuntimeError(f"API配额错误: {error_msg}")
+                    print("\n📊 API quota or limit error! Check:")
+                    print("1. Is API quota exhausted")
+                    print("2. Is rate limit reached")
+                    print("3. Is account balance sufficient")
+                    print("\n💡 Suggestions:")
+                    print("- Check API usage")
+                    print("- Wait for quota reset")
+                    print("- Upgrade API plan")
+                    # 抛出异常，停止execute
+                    raise RuntimeError(f"API quota error: {error_msg}")
 
                 # 其他错误，提供通用建议
                 else:
-                    print("\n⚠️  模型调用遇到问题！请检查：")
-                    print("1. API服务状态")
-                    print("2. 模型名称是否正确")
-                    print("3. 请求参数是否有效")
-                    print("\n💡 建议：")
-                    print("- 查看错误详情")
-                    print("- 检查API文档")
-                    print("- 联系技术支持")
-                    # 抛出异常，停止执行
-                    raise RuntimeError(f"模型调用错误: {error_msg}")
+                    print("\n⚠️  Model call error! Check:")
+                    print("1. API service status")
+                    print("2. Is model name correct")
+                    print("3. Are request parameters valid")
+                    print("\n💡 Suggestions:")
+                    print("- Check error details")
+                    print("- Check API documentation")
+                    print("- Contact technical support")
+                    # 抛出异常，停止execute
+                    raise RuntimeError(f"Model call error: {error_msg}")
 
         return model_caller
 
@@ -660,8 +483,9 @@ class MainAgent(BaseAgent):
         model_name: str,
         messages: List[Dict],
         model_config: Dict,
-    ) -> str:
-        """调用OpenAI兼容API"""
+        tools: Optional[List[Dict]] = None,
+    ) -> Dict[str, Any]:
+        """调 with OpenAI兼容API，返回 {"text": str, "tool_calls": list}"""
         client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url)
 
         # 确保消息格式正确
@@ -669,8 +493,15 @@ class MainAgent(BaseAgent):
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
-            if role and content:
-                formatted_messages.append({"role": role, "content": content})
+            entry = {"role": role, "content": content}
+            if "tool_calls" in msg:
+                entry["tool_calls"] = msg["tool_calls"]
+            if "tool_call_id" in msg:
+                entry["tool_call_id"] = msg["tool_call_id"]
+            if "reasoning_content" in msg:
+                entry["reasoning_content"] = msg["reasoning_content"]
+            if role and (content or msg.get("tool_calls") or msg.get("tool_call_id")):
+                formatted_messages.append(entry)
 
         # 处理不同模型的temperature限制
         temperature = model_config.get("temperature", 0.1)
@@ -680,72 +511,114 @@ class MainAgent(BaseAgent):
             temperature = 1.0
 
         # 流式输出
-        _stream_print("🤖 模型思考中")
+        if _is_tty:
+            _stream_print(t("model.thinking"))
         full_response = ""
+        tool_calls_accumulator: Dict[int, Dict[str, str]] = {}
+        self._tool_call_progress: Dict[int, Dict] = {}
 
-        stream = await client.chat.completions.create(
-            model=model_name,
-            messages=formatted_messages,
-            temperature=temperature,
-            max_tokens=model_config.get("max_tokens", 8000),
-            stream=True,  # 启用流式输出
-        )
+        create_kwargs: dict = {
+            "model": model_name,
+            "messages": formatted_messages,
+            "temperature": temperature,
+            "max_tokens": model_config.get("max_tokens", 8000),
+            "stream": True,
+        }
+        if tools:
+            create_kwargs["tools"] = tools
+            create_kwargs["tool_choice"] = "auto"
+
+        stream = await client.chat.completions.create(**create_kwargs)
 
         # ─── 流式响应处理 ───
-        # reasoning_content: 模型的思考过程（Kimi/DeepSeek-R1），用 _stream_print 输出
-        # delta.content: 模型的正式回复，用 _stream_print 输出
-        # 系统标记行（💭、Thought:）：直接 print，不走 _stream_print，前端通过前缀识别
         thinking_printed = False
         thinking_content = ""
         async for chunk in stream:
             delta = chunk.choices[0].delta
-            # 处理 reasoning_content（Kimi/DeepSeek-R1 的 thinking）
+            # 处理 reasoning_content
             reasoning = getattr(delta, 'reasoning_content', None)
             if reasoning:
                 if not thinking_printed:
-                    # ⚠️ 标记行直接 print，不走 _stream_print，否则 \x00 转义会干扰前端识别
-                    print("💭 思考过程:", flush=True)
+                    print("💭 Thinking process:", flush=True)
                     thinking_printed = True
                 thinking_content += reasoning
-                _stream_print(reasoning)  # 模型 token，走转义
+                _stream_print(reasoning)
             # 处理正常内容
             if delta.content is not None:
                 if thinking_printed:
-                    # ⚠️ Thought: 标记行直接 print，前端通过 startsWith('Thought:') 识别类型切换
                     print("\nThought: ", end="", flush=True) if _is_tty else print("\nThought: ", flush=True)
                     thinking_printed = False
                 full_response += delta.content
                 _stream_print(delta.content)
+            # 处理 tool_calls (流式累积)
+            if delta.tool_calls:
+                if not hasattr(self, '_tool_call_progress'):
+                    self._tool_call_progress: Dict[int, Dict] = {}
+                for tc_delta in delta.tool_calls:
+                    idx = tc_delta.index
+                    if idx not in tool_calls_accumulator:
+                        tool_calls_accumulator[idx] = {
+                            "id": "",
+                            "function_name": "",
+                            "function_arguments": "",
+                        }
+                    acc = tool_calls_accumulator[idx]
+                    if idx not in self._tool_call_progress:
+                        self._tool_call_progress[idx] = {"name": "", "last_report": 0}
+                    progress = self._tool_call_progress[idx]
+                    if tc_delta.id:
+                        acc["id"] = tc_delta.id
+                    if tc_delta.function:
+                        if tc_delta.function.name:
+                            acc["function_name"] += tc_delta.function.name
+                            if not progress.get("_name_printed"):
+                                progress["name"] += tc_delta.function.name
+                                fn = progress["name"]
+                                print(f"🛠️ Building tool call: {fn}(...)", flush=True)
+                                progress["_name_printed"] = True
+                        if tc_delta.function.arguments:
+                            chunk = tc_delta.function.arguments
+                            acc["function_arguments"] += chunk
+                            current_len = len(acc["function_arguments"])
+                            if current_len - progress["last_report"] >= 500:
+                                fn = progress["name"] or "?"
+                                print(f"  ⏳ building args ({current_len} chars for {fn})", flush=True)
+                                progress["last_report"] = current_len - (current_len % 500)
 
         if _is_tty:
-            print()  # CLI 换行
+            print()  # CLI newline
+
+        # ─── 构建 tool_calls 列表 ───
+        tool_calls_list = []
+        for idx in sorted(tool_calls_accumulator.keys()):
+            tc = tool_calls_accumulator[idx]
+            if tc["function_name"]:
+                tool_calls_list.append({
+                    "id": tc["id"],
+                    "name": tc["function_name"],
+                    "arguments": tc["function_arguments"],
+                })
 
         # ─── thinking 内容拼接到返回值 ───
-        # 将 thinking 拼到 full_response 前面，格式：
-        #   "💭 思考过程:\n{thinking}\n\nThought: {正式回复}"
-        # 
-        # 这个 full_response 会被用于：
-        #   1. react_loop messages 上下文（模型后续迭代能看到完整的 thinking）
-        #   2. _parse_response 解析出 thought（正则匹配 Thought: 后面的内容）
-        #   3. 保存到会话文件（历史记录需要显示 thinking）
-        #
-        # ⚠️ 不要去掉 thinking 拼接，否则：
-        #   - 上下文不完整，模型丢失推理过程
-        #   - 历史记录看不到 thinking 内容
         if thinking_content:
-            # 去掉 full_response 开头可能的 \n 和 Thought: 前缀（模型可能自己输出了）
-            # 避免拼接后出现 "Thought: \nThought:" 的重复
             clean_response = full_response.lstrip('\n')
-            if clean_response.startswith('Thought:'):
-                clean_response = clean_response[len('Thought:'):].lstrip()
+            # 剥离模型 content 中可能自带的思考前缀（各模型表现不同）
+            thinking_prefixes = [
+                r'^Thought[:\s\n]*', r'^💭\s*Thinking process[:\s\n]*',
+                r'^THINKING[:\s\n]*', r'^thinking[:\s\n]*', r'^reasoning[:\s\n]*',
+            ]
+            for pat in thinking_prefixes:
+                clean_response = re.sub(pat, '', clean_response, flags=re.IGNORECASE).lstrip('\n')
             if clean_response.strip():
-                full_response = f"💭 思考过程:\n{thinking_content}\n\nThought: {clean_response}"
+                full_response = f"💭 Thinking process:\n{thinking_content}\n\nThought: {clean_response}"
             else:
-                # full_response 为空（模型所有内容都在 reasoning_content 中）
-                # 不加 Thought: 前缀，避免 _parse_response 误判为任务完成
-                full_response = f"💭 思考过程:\n{thinking_content}"
+                full_response = f"💭 Thinking process:\n{thinking_content}"
 
-        return full_response if full_response is not None else ""
+        return {
+            "text": full_response if full_response is not None else "",
+            "tool_calls": tool_calls_list,
+            "reasoning_content": thinking_content if thinking_content else None,
+        }
 
     async def _call_anthropic_api(
         self,
@@ -754,8 +627,9 @@ class MainAgent(BaseAgent):
         model_name: str,
         messages: List[Dict],
         model_config: Dict,
-    ) -> str:
-        """调用真正的Anthropic兼容API（如MiniMax）"""
+        tools: Optional[List[Dict]] = None,
+    ) -> Dict[str, Any]:
+        """调 with 真正的Anthropic兼容API（如MiniMax），返回 {"text": str, "tool_calls": list}"""
         # 处理Anthropic兼容端点的URL格式调整
         # MiniMax、DeepSeek、Kimi的Anthropic兼容端点需要特殊处理
         adjusted_base_url = base_url
@@ -769,147 +643,180 @@ class MainAgent(BaseAgent):
             if base_url.endswith("/v1"):
                 # /v1 会导致重复的/v1路径，改为 /anthropic
                 adjusted_base_url = base_url[:-3] + "/anthropic"
-                print(f"🔧 调整URL避免重复/v1: {base_url} -> {adjusted_base_url}")
+                print(t("net.adjust_url_dup", old=base_url, new=adjusted_base_url))
             elif base_url.endswith("/v1/anthropic"):
                 # 已经是 /v1/anthropic，这会导致重复/v1，需要调整
                 # Anthropic SDK会添加/v1/messages，所以实际路径会是 /v1/anthropic/v1/messages
                 # 应该改为 /anthropic
                 adjusted_base_url = base_url.replace("/v1/anthropic", "/anthropic")
-                print(f"🔧 调整URL避免重复路径: {base_url} -> {adjusted_base_url}")
+                print(t("net.adjust_url_path", old=base_url, new=adjusted_base_url))
             elif not base_url.endswith("/anthropic"):
                 # 确保以 /anthropic 结尾
                 adjusted_base_url = base_url.rstrip("/") + "/anthropic"
-                print(f"🔧 添加Anthropic路径: {base_url} -> {adjusted_base_url}")
+                print(t("net.add_anthropic_path", old=base_url, new=adjusted_base_url))
 
-        # 使用真正的Anthropic客户端
-        client = anthropic.Anthropic(
+        # 使 with  AsyncAnthropic 客户端（对标 OpenAI 的 AsyncOpenAI）
+        client = anthropic.AsyncAnthropic(
             api_key=api_key,
             base_url=adjusted_base_url,
         )
 
         # Anthropic格式的消息转换
-        # Anthropic使用不同的消息格式：system参数和messages数组
         system_message = ""
         formatted_messages = []
 
-        for msg in messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            if role and content:
-                if role == "system":
-                    # 系统消息单独处理
-                    system_message = content
-                else:
-                    # Anthropic使用"user"和"assistant"角色
-                    # 注意：Anthropic要求role必须是"user"或"assistant"
-                    anth_role = "user" if role == "user" else "assistant"
-                    formatted_messages.append({"role": anth_role, "content": content})
+        def _make_anth_content(content_val, content_type="text", **extra) -> dict:
+            block = {"type": content_type}
+            if content_type == "text":
+                block["text"] = str(content_val) if content_val else ""
+            elif content_type == "tool_result":
+                block["tool_use_id"] = extra.get("tool_use_id", "")
+                block["content"] = str(content_val) if content_val else ""
+            elif content_type == "tool_use":
+                block["id"] = extra.get("id", "")
+                block["name"] = extra.get("name", "")
+                block["input"] = extra.get("input", {})
+            return block
 
-        # 流式输出
-        _stream_print("🤖 模型思考中")
-        full_response = ""
+        for msg in messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            if role == "system":
+                system_message = content
+                continue
+            if role == "tool":
+                tool_call_id = msg.get("tool_call_id", "")
+                formatted_messages.append({
+                    "role": "user",
+                    "content": [_make_anth_content(content, "tool_result", tool_use_id=tool_call_id)],
+                })
+                continue
+            if role == "assistant":
+                tool_calls = msg.get("tool_calls", [])
+                if tool_calls:
+                    blocks = []
+                    if content:
+                        blocks.append(_make_anth_content(content, "text"))
+                    for tc in tool_calls:
+                        func = tc.get("function", {})
+                        args = func.get("arguments", "{}")
+                        if isinstance(args, str):
+                            try: args = json.loads(args)
+                            except json.JSONDecodeError: args = {}
+                        blocks.append(_make_anth_content(None, "tool_use",
+                            id=tc.get("id", ""), name=func.get("name", ""), input=args))
+                    formatted_messages.append({"role": "assistant", "content": blocks})
+                elif content:
+                    formatted_messages.append({"role": "assistant", "content": content})
+                continue
+            if content:
+                formatted_messages.append({"role": "user", "content": content})
+
+        # Async 流式调 with 
+        if _is_tty:
+            _stream_print(t("model.thinking"))
+        response = ""
+        thinking_content = ""
+        tool_calls_list = []
+
+        async def _do_stream():
+            nonlocal response, thinking_content, tool_calls_list
+            stream_kwargs = {
+                "model": model_name,
+                "max_tokens": model_config.get("max_tokens", 8000),
+                "temperature": model_config.get("temperature", 0.1),
+                "messages": formatted_messages,
+            }
+            if system_message:
+                stream_kwargs["system"] = system_message
+            if tools:
+                stream_kwargs["tools"] = tools
+
+            async with client.messages.stream(**stream_kwargs) as stream:
+                thinking_printed = False
+                async for event in stream:
+                    event_type = getattr(event, 'type', '')
+                    if event_type == 'content_block_start':
+                        block = getattr(event, 'content_block', None)
+                        if block:
+                            bt = getattr(block, 'type', '')
+                            if bt == 'thinking':
+                                if not thinking_printed:
+                                    print("💭 Thinking process:", flush=True)
+                                    thinking_printed = True
+                            elif bt == 'text' and thinking_printed:
+                                print("\nThought: ", end="", flush=True) if _is_tty else print("\nThought: ", flush=True)
+                                thinking_printed = False
+                    elif event_type == 'content_block_delta':
+                        delta = getattr(event, 'delta', None)
+                        if delta:
+                            dt = getattr(delta, 'type', '')
+                            if dt == 'thinking_delta':
+                                chunk = getattr(delta, 'thinking', '')
+                                if chunk: thinking_content += chunk; _stream_print(chunk)
+                            elif dt == 'text_delta':
+                                chunk = getattr(delta, 'text', '')
+                                if chunk: response += chunk; _stream_print(chunk)
+
+                #  with  get_final_message Get 完整的 tool_use（非流式解析，可靠）
+                final = await stream.get_final_message()
+                for block in final.content:
+                    if getattr(block, 'type', '') == 'tool_use':
+                        tool_calls_list.append({
+                            "id": getattr(block, 'id', ''),
+                            "name": getattr(block, 'name', ''),
+                            "arguments": getattr(block, 'input', {}),
+                        })
 
         try:
-            # 使用异步方式处理流式响应
-            import asyncio
-
-            # 在异步环境中运行同步的流式调用
-            loop = asyncio.get_event_loop()
-
-            def sync_stream_call():
-                response = ""
-                thinking_content = ""
-                in_thinking = False
-                # 准备stream参数
-                stream_kwargs = {
+            await _do_stream()
+        except Exception:
+            # 流式失败 → 降级非流式
+            try:
+                response = ""; thinking_content = ""; tool_calls_list = []
+                create_kwargs = {
                     "model": model_name,
                     "max_tokens": model_config.get("max_tokens", 8000),
                     "temperature": model_config.get("temperature", 0.1),
                     "messages": formatted_messages,
                 }
-
-                # 只有在有系统消息时才添加system参数
                 if system_message:
-                    stream_kwargs["system"] = system_message
+                    create_kwargs["system"] = system_message
+                if tools:
+                    create_kwargs["tools"] = tools
+                message = await client.messages.create(**create_kwargs)
+                for block in message.content:
+                    bt = getattr(block, 'type', '')
+                    if bt == 'thinking':
+                        chunk = getattr(block, 'thinking', '')
+                        if chunk: print("💭 Thinking process:", flush=True); print(chunk, flush=True); thinking_content += chunk
+                    elif bt == 'text':
+                        chunk = getattr(block, 'text', '')
+                        if chunk:
+                            print("Thought:", flush=True)
+                            print(chunk, flush=True)
+                            response += chunk
+                    elif bt == 'tool_use':
+                        tool_calls_list.append({
+                            "id": getattr(block, 'id', ''),
+                            "name": getattr(block, 'name', ''),
+                            "arguments": getattr(block, 'input', {}),
+                        })
+            except Exception:
+                pass
 
-                with client.messages.stream(**stream_kwargs) as stream:
-                    for event in stream:
-                        event_type = getattr(event, 'type', '')
+        # thinking 拼接
+        if thinking_content:
+            clean_resp = response.lstrip('\n')
+            if clean_resp.startswith('Thought:'):
+                clean_resp = clean_resp[len('Thought:'):].lstrip()
+            if clean_resp.strip():
+                response = f"💭 Thinking process:\n{thinking_content}\n\nThought: {clean_resp}"
+            else:
+                response = f"💭 Thinking process:\n{thinking_content}"
 
-                        # content_block_start: 新的内容块开始
-                        if event_type == 'content_block_start':
-                            block = getattr(event, 'content_block', None)
-                            if block:
-                                block_type = getattr(block, 'type', '')
-                                if block_type == 'thinking':
-                                    in_thinking = True
-                                    print(f"\n💭 思考过程:", flush=True)
-                                elif block_type == 'text':
-                                    if in_thinking:
-                                        print("\nThought: ", flush=True)
-                                        in_thinking = False
-
-                        # content_block_delta: 内容块增量
-                        elif event_type == 'content_block_delta':
-                            delta = getattr(event, 'delta', None)
-                            if delta:
-                                delta_type = getattr(delta, 'type', '')
-                                if delta_type == 'thinking_delta':
-                                    text = getattr(delta, 'thinking', '')
-                                    if text:
-                                        thinking_content += text
-                                        _stream_print(text)
-                                elif delta_type == 'text_delta':
-                                    text = getattr(delta, 'text', '')
-                                    if text:
-                                        response += text
-                                        _stream_print(text)
-
-                        # content_block_stop: 内容块结束
-                        elif event_type == 'content_block_stop':
-                            if in_thinking:
-                                print("\n", flush=True)
-                                in_thinking = False
-
-                # 把 thinking 内容拼到返回值前面
-                # ⚠️ response 开头可能有模型自己输出的 "\nThought:" 前缀，
-                # 拼接前先清理，避免出现 "Thought: \nThought:" 的重复
-                if thinking_content:
-                    clean_resp = response.lstrip('\n')
-                    if clean_resp.startswith('Thought:'):
-                        clean_resp = clean_resp[len('Thought:'):].lstrip()
-                    if clean_resp.strip():
-                        response = f"💭 思考过程:\n{thinking_content}\n\nThought: {clean_resp}"
-                    else:
-                        response = f"💭 思考过程:\n{thinking_content}"
-
-                return response
-
-            full_response = await loop.run_in_executor(None, sync_stream_call)
-            print()
-            return full_response
-
-        except Exception as e:
-            # 如果Anthropic格式失败，尝试OpenAI格式作为后备
-            error_str = str(e).lower()
-            if (
-                "unsupported" in error_str
-                or "invalid" in error_str
-                or "404" in error_str
-                or "401" in error_str
-            ):
-                print(
-                    f"\n⚠️  Anthropic格式失败 ({error_str[:50]}...)，尝试OpenAI格式..."
-                )
-                # 调整URL为OpenAI端点
-                openai_base_url = base_url
-                if "/anthropic" in base_url:
-                    # 将/anthropic替换为/v1
-                    openai_base_url = base_url.replace("/anthropic", "/v1")
-                return await self._call_openai_api(
-                    api_key, openai_base_url, model_name, messages, model_config
-                )
-            raise
+        print()
+        return {"text": response, "tool_calls": tool_calls_list}
 
     def _create_tools(self, project_path: Path, safety_guard) -> Dict[str, Any]:
         """创建工具集并注册到工具注册表"""
@@ -919,7 +826,7 @@ class MainAgent(BaseAgent):
         web_tools = WebTools(project_path, safety_guard)
         todo_tools = TodoTools(project_path, safety_guard)
 
-        # 保存web_tools引用以便后续清理
+        # 保存web_tools引 with 以便后续清理
         self.web_tools = web_tools
 
         # 包装fetch_url函数以保存结果
@@ -929,12 +836,12 @@ class MainAgent(BaseAgent):
             max_content_length: int = 100000,
             **kwargs,
         ) -> Dict[str, Any]:
-            # 调用原始fetch_url函数
+            # 调 with 原始fetch_url函数
             result = await web_tools.fetch_url(
                 url, timeout, max_content_length, **kwargs
             )
 
-            # 如果成功获取到内容，保存到上下文文件
+            # 如果成功Get 到内容，保存到上下文文件
             if result.get("success") and "content" in result:
                 try:
                     # 创建上下文目录
@@ -945,25 +852,20 @@ class MainAgent(BaseAgent):
                     result_file = context_dir / "web_fetch_result.txt"
                     result_file.write_text(result["content"], encoding="utf-8")
                     print(
-                        f"📁 已保存web_fetch结果到: {result_file.relative_to(project_path)}"
+                        f"📁 Saved web_fetch result to: {result_file.relative_to(project_path)}"
                     )
                 except Exception as e:
-                    print(f"⚠️  保存web_fetch结果失败: {str(e)}")
+                    print(t("web.save_fetch_fail", e=str(e)))
 
             return result
 
         # 主Agent的特殊工具
         tools = {
             # 原子工具
-            "read_file": atomic_tools.read_file,
-            "write_file": atomic_tools.write_file,
             "run_shell": atomic_tools.run_shell,
-            "list_files": atomic_tools.list_files,
-            "search_files": atomic_tools.search_files,
-            # 代码工具
-            "execute_python": code_tools.execute_python,
-            "run_tests": code_tools.run_tests,
-            "debug_code": code_tools.debug_code,
+            # 任务控制工具
+            "finalize_task": self._finalize_task,
+            "run_skills": self._run_skills,
             # 网络工具
             "search_web": web_tools.search_web,
             "fetch_url": wrapped_fetch_url,
@@ -977,16 +879,12 @@ class MainAgent(BaseAgent):
             "add_execution_record": todo_tools.add_execution_record,
             # 管理工具
             "delegate_task": self.delegate_task,
-            "check_task_status": self.check_task_status,
-            "get_project_status": self.get_project_status,
             "create_sub_agent": self.create_sub_agent,
             # MCP工具
             "list_mcp_tools": self.list_mcp_tools,
             "call_mcp_tool": self.call_mcp_tool,
             "get_mcp_status": self.get_mcp_status,
-            # Skills查询工具
-            "list_skills": self._list_skills,
-            "get_skill_info": self._get_skill_info,
+            # Skills查询工具 — 通过 run_skills 的统一入口实现三模式
             # 会话管理工具
             "new_session": self.new_session,
             "continue_session": self.continue_session,
@@ -1028,8 +926,8 @@ class MainAgent(BaseAgent):
         registered_count = 0
 
         for tool_name, tool_func in tools.items():
-            # 使用动态schema获取函数
-            schema = get_schema(tool_name, self.skills_manager)
+            # 使 with 动态schemaGet 函数
+            schema = get_schema(tool_name)
             if schema:
                 registry.register(tool_func, schema)
                 registered_count += 1
@@ -1063,7 +961,7 @@ class MainAgent(BaseAgent):
                 registry.register(tools[func_name], schema)
                 registered_count += 1
 
-        print(f"✅ 已注册 {registered_count} 个工具到注册表")
+        print(t("tools.registered", count=registered_count))
 
         return tools
 
@@ -1077,59 +975,59 @@ class MainAgent(BaseAgent):
         todo_manager: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """
-        执行任务
+        execute任务
 
         Args:
             task: 任务描述
-            init_instructions: 初始化指令
+            init_instructions: initialized指令
             task_dir: 任务目录
             max_iterations: 最大迭代次数
             project_analysis: 项目分析结果（类方法映射）
             todo_manager: to-do-list管理器
 
         Returns:
-            执行结果
+            execute结果
         """
-        print(f"\n🤖 主Agent开始执行任务: {task}")
+        print(t("agent.start_task", task=task))
         self.start_time = asyncio.get_event_loop().time()
 
-        # 如果已有当前会话，复用；否则创建新会话
+        # 如果已有当前会话，复 with ；否则创建新会话
         if self.session_manager.current_session_id:
             session_id = self.session_manager.current_session_id
-            print(f"📋 复用会话ID: {session_id}")
+            print(t("agent.session_reuse", id=session_id))
         else:
             session_id = await self.session_manager.create_session(task)
-            print(f"📋 会话ID: {session_id}")
-        print(f"💡 提示: 使用 --session {session_id} 可以继续此会话")
+            print(t("agent.session_reuse", id=session_id))
+        print(t("agent.session_hint", id=session_id))
 
         # 更新系统提示，包含项目分析结果
         analysis_section = ""
-        if project_analysis and "失败" not in project_analysis:
+        if project_analysis and "failed" not in project_analysis.lower():
             analysis_section = (
-                f"\n\n项目结构分析结果（类方法映射）:\n{project_analysis[:1500]}..."
+                f"\n\nProject structure analysis (class-method mapping):\n{project_analysis[:1500]}..."
             )
-            print("📊 项目分析结果已集成到系统提示中")
+            print(t("context.analysis_integrated"))
 
-        full_system_prompt = f"{self.system_prompt}{analysis_section}\n\n项目初始化指令:\n{init_instructions}"
+        full_system_prompt = f"{self.system_prompt}{analysis_section}\n\nProject init instructions:\n{init_instructions}"
         self.conversation_history[0]["content"] = full_system_prompt
 
         # 添加任务描述
         self.conversation_history.append(
             {
                 "role": "user",
-                "content": f"任务：{task}\n\n请参考项目结构分析结果，制定计划并执行。",
+                "content": f"Task: {task}\n\nPlease reference the project structure analysis to create a plan and execute.",
             }
         )
 
         # ─── 加载同一会话的历史消息（多轮任务上下文衔接） ───
-        # 从 session_manager 获取当前会话的历史消息（不含 system 消息）
+        # 从 session_manager Get 当前会话的历史消息（不含 system 消息）
         # 传给 react_loop.run，让模型在后续轮次中能看到之前的对话
         # ⚠️ 这是多轮任务上下文衔接的关键，不要去掉
         history_messages = await self.session_manager.get_messages(include_system=False)
         # 过滤掉当前任务的消息（还没保存，避免重复）
         # 历史消息是之前轮次保存的，当前任务的消息在 execute 结束后才保存
 
-        # 运行ReAct循环
+        # 运 linesReAct循环
         try:
             result = await self.react_loop.run(
                 initial_prompt=full_system_prompt,
@@ -1140,7 +1038,7 @@ class MainAgent(BaseAgent):
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            print(f"❌ ReAct循环执行失败: {e}")
+            print(t("agent.react_loop_failed", e=str(e)))
             import traceback
             traceback.print_exc()
             raise
@@ -1149,7 +1047,7 @@ class MainAgent(BaseAgent):
                 if hasattr(self, "web_tools"):
                     await self.web_tools.cleanup()
             except Exception as e:
-                print(f"⚠️  清理web_tools时出错: {e}")
+                print(t("agent.clean_web_tools", e=str(e)))
 
         # 把 react_loop 的对话历史保存到 session_manager
         # ─── 保存会话历史 ───────────────────────────────────────────
@@ -1159,14 +1057,14 @@ class MainAgent(BaseAgent):
         #
         # ⚠️ 必须保留完整的 thinking 内容，不要清理掉：
         #   1. 历史记录需要显示 thinking（前端 parseAssistantMessage 能正确解析）
-        #   2. thinking 内容在 react_loop 运行时上下文中也是完整的
-        #      （messages.append 用的是原始 response，包含 thinking）
-        #   3. 去掉 thinking 会导致历史记录不完整，用户看不到模型的推理过程
+        #   2. thinking 内容在 react_loop 运 lines时上下文中也是完整的
+        #      （messages.append  with 的是原始 response，包含 thinking）
+        #   3. 去掉 thinking 会导致历史记录不完整， user看不到模型的推理过程
         #
         # ✅ 任务完成标记只存纯标记，不带内容（内容已在最后一个 step 中保存）
         # ─────────────────────────────────────────────────────────────
         try:
-            # 先保存用户任务消息（如果还没有）
+            # 先保存 user任务消息（如果还没有）
             has_user_msg = any(
                 m.role == "user" and m.content == task
                 for m in self.session_manager.current_messages
@@ -1176,12 +1074,12 @@ class MainAgent(BaseAgent):
 
             steps = self.react_loop.steps
             for step in steps:
-                # 用 raw_response（完整模型响应，含 thinking）保存，而非 step.thought（只有 thought 部分）
+                #  with  raw_response（完整模型响应，含 thinking）保存，而非 step.thought（只有 thought 部分）
                 # raw_response 格式：有 thinking 时 "💭 思考过程:\n{thinking}\n\nThought: {content}"
                 #                   无 thinking 时 "{content}"
                 thought_content = step.raw_response or step.thought
                 # 确保有可识别的前缀（前端 parseAssistantMessage 依赖前缀识别类型）
-                if not thought_content.startswith("Thought:") and not thought_content.startswith("💭 思考过程"):
+                if not thought_content.startswith("Thought:") and not thought_content.startswith("💭 Thinking process"):
                     thought_content = f"Thought: {thought_content}"
                 if step.actions:
                     actions_parts = []
@@ -1189,7 +1087,7 @@ class MainAgent(BaseAgent):
                         part = f"Action: {a.action}"
                         if a.action_input:
                             import json as _json
-                            part += f"\nInput: {_json.dumps(a.action_input, ensure_ascii=False)[:500]}"
+                            part += f"\nAction Input: {_json.dumps(a.action_input, ensure_ascii=False)[:500]}"
                         if a.observation:
                             part += f"\nObservation: {a.observation[:2000]}"
                         actions_parts.append(part)
@@ -1197,11 +1095,14 @@ class MainAgent(BaseAgent):
                 await self.session_manager.add_message("assistant", thought_content)
 
             # ⚠️ 只存纯标记，不要带 summary 内容，否则和最后一个 step 重复
-            await self.session_manager.add_message("assistant", "✅ 任务完成")
+            await self.session_manager.add_message("assistant", "✅ Task completed")
             await self.session_manager._save_session()
+            # 追加保存结构化消息（含 tool_calls / reasoning_content），  for多轮 API 上下文
+            if hasattr(self.react_loop, 'last_messages') and self.react_loop.last_messages:
+                await self.session_manager._save_structured_messages(self.react_loop.last_messages)
             self.session_manager._save_sessions_index()
         except Exception as e:
-            print(f"⚠️  保存会话历史失败: {e}")
+            print(t("error.save_session", e=str(e)))
 
         # 更新统计
         self.iterations = len(self.react_loop.steps)
@@ -1224,7 +1125,7 @@ class MainAgent(BaseAgent):
         context_strategy: str = "isolated",
     ) -> Dict[str, Any]:
         """
-        委托任务给子Agent
+        委托任务给SubAgent
 
         Args:
             task_description: 任务描述
@@ -1236,7 +1137,7 @@ class MainAgent(BaseAgent):
         """
         task_id = f"subtask_{len(self.tasks)}_{datetime.now().timestamp():.0f}"
 
-        print(f"🤝 委托任务给子Agent: {task_description[:50]}...")
+        print(t("subagent.task_start", id=task_description[:50]))
 
         # 创建子任务记录
         self.tasks[task_id] = {
@@ -1248,7 +1149,7 @@ class MainAgent(BaseAgent):
             "result": None,
         }
 
-        # 使用多Agent系统委托
+        # 使 with 多Agent系统委托
         delegation_result = await self.multi_agent_system.delegate_task(
             task_description=task_description,
             task_type=agent_type,
@@ -1267,11 +1168,11 @@ class MainAgent(BaseAgent):
     async def check_task_status(self, task_id: str) -> Dict[str, Any]:
         """检查任务状态"""
         if task_id not in self.tasks:
-            return {"error": f"任务不存在: {task_id}"}
+            return {"error": f"Task not found: {task_id}"}
 
         task = self.tasks[task_id]
 
-        # 检查子Agent状态
+        # 检查SubAgent状态
         if task["status"] == "delegated":
             if task_id in self.multi_agent_system.tasks:
                 subtask = self.multi_agent_system.tasks[task_id]
@@ -1289,45 +1190,45 @@ class MainAgent(BaseAgent):
     async def create_sub_agent(
         self, agent_type: str = "code", capabilities: Optional[List[str]] = None
     ) -> Dict[str, Any]:
-        """创建子Agent"""
+        """创建SubAgent"""
         agent_id = f"sub_{agent_type}_{len(self.sub_agents)}"
 
         # 根据类型选择系统提示
         if agent_type == "code":
-            system_prompt = """你是一个专门的代码编写Agent。
-            专注于：
-            1. 编写高质量、可维护的代码
-            2. 遵循最佳实践和编码规范
-            3. 添加必要的注释和文档
-            4. 编写单元测试
-            5. 遵循越小且越简单原则，在完成任务的同时尽量不要对用户已有的代码做大调整
-            6. 只更新代码文件中少量代码的时候，你尽量增量更新，而不是全量更新
-            7. 尽量基于现有的代码进行扩写或改写，而不是重复造轮子，新建一个增强版的文件或代码块
+            system_prompt = """You are a specialized code-writing agent.
+            Focus on:
+            1. Write high-quality, maintainable code
+            2. Follow best practices and coding standards
+            3. Add necessary comments and documentation
+            4. Write unit tests
+            5. Keep it simple: complete the task with minimal changes to existing code
+            6. Prefer incremental updates over full rewrites for small code changes
+            7. Extend or modify existing code rather than creating new redundant files
 
-            请使用提供的工具完成任务。"""
+            Use the provided tools to complete your task."""
         elif agent_type == "test":
-            system_prompt = """你是一个专门的测试Agent。
-            专注于：
-            1. 编写全面的测试用例
-            2. 测试边界情况和异常处理
-            3. 性能测试和压力测试
-            4. 生成测试报告
+            system_prompt = """You are a specialized testing agent.
+            Focus on:
+            1. Write comprehensive test cases
+            2. Test edge cases and exception handling
+            3. Performance and stress testing
+            4. Generate test reports
 
-            请使用提供的工具完成任务。"""
+            Use the provided tools to complete your task."""
         elif agent_type == "research":
-            system_prompt = """你是一个研究Agent。
-            专注于：
-            1. 查找和分析相关信息
-            2. 整理研究笔记
-            3. 生成研究报告
-            4. 提供参考文献
+            system_prompt = """You are a research agent.
+            Focus on:
+            1. Analyze requirements and scope
+            2. Search for relevant documentation and best practices
+            3. Provide comprehensive analysis and recommendations
 
-            请使用提供的工具完成任务。"""
+            Use the provided tools to complete your task."""
         else:
-            system_prompt = """你是一个通用子Agent。
-            请专注于完成指定的任务。"""
+            system_prompt = """You are a general-purpose sub-agent.
+            Focus on completing the assigned task efficiently.
+            Use the provided tools to complete your task."""
 
-        # 创建子Agent
+        # 创建SubAgent
         sub_agent = SubAgent(
             agent_id=agent_id,
             system_prompt=system_prompt,
@@ -1358,25 +1259,25 @@ class MainAgent(BaseAgent):
                 "connected_servers": tools_result.get("connected_servers", []),
             }
         except Exception as e:
-            return {"error": f"获取MCP工具列表失败: {str(e)}"}
+            return {"error": f"Get MCPtool list failed: {str(e)}"}
 
     async def call_mcp_tool(
         self, tool_name: str, arguments: Optional[Dict] = None
     ) -> Dict[str, Any]:
-        """调用MCP工具"""
+        """调 with MCP工具"""
         try:
             result = await self.mcp_manager.call_tool(tool_name, arguments or {})
             return result
         except Exception as e:
-            return {"error": f"调用MCP工具失败: {str(e)}"}
+            return {"error": f"MCP tool call failed: {str(e)}"}
 
     async def get_mcp_status(self) -> Dict[str, Any]:
-        """获取MCP服务器状态"""
+        """Get MCP server状态"""
         try:
             status_result = await self.mcp_manager.get_server_status()
             return status_result
         except Exception as e:
-            return {"error": f"获取MCP状态失败: {str(e)}"}
+            return {"error": f"Get MCP status failed: {str(e)}"}
 
     async def new_session(
         self, task: str, title: Optional[str] = None
@@ -1387,22 +1288,22 @@ class MainAgent(BaseAgent):
             return {
                 "success": True,
                 "session_id": session_id,
-                "message": "新会话已创建",
+                "message": "New session created",
             }
         except Exception as e:
-            return {"error": f"创建会话失败: {str(e)}"}
+            return {"error": f"Create session failed: {str(e)}"}
 
     async def continue_session(
         self, message: str, session_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """继续当前会话或指定会话"""
         try:
-            # 添加用户消息
+            # 添加 user消息
             added = await self.session_manager.add_message("user", message)
             if not added:
-                return {"error": "消息添加失败，可能超过token限制"}
+                return {"error": "Message add failed, possibly exceeding token limit"}
 
-            # 获取会话历史
+            # Get 会话历史
             messages = await self.session_manager.get_messages(session_id)
 
             return {
@@ -1412,7 +1313,7 @@ class MainAgent(BaseAgent):
                 "conversation_preview": await self.session_manager.get_conversation_history(),
             }
         except Exception as e:
-            return {"error": f"继续会话失败: {str(e)}"}
+            return {"error": f"Continue session failed: {str(e)}"}
 
     async def list_sessions(self) -> Dict[str, Any]:
         """列出所有会话"""
@@ -1420,7 +1321,7 @@ class MainAgent(BaseAgent):
             sessions = await self.session_manager.list_sessions()
             return {"success": True, "sessions": sessions, "count": len(sessions)}
         except Exception as e:
-            return {"error": f"获取会话列表失败: {str(e)}"}
+            return {"error": f"Get session list failed: {str(e)}"}
 
     async def switch_session(self, session_id: str) -> Dict[str, Any]:
         """切换到指定会话"""
@@ -1430,12 +1331,12 @@ class MainAgent(BaseAgent):
                 return {
                     "success": True,
                     "session_id": session_id,
-                    "message": "会话切换成功",
+                    "message": "Session switched successfully",
                 }
             else:
-                return {"error": f"会话不存在: {session_id}"}
+                return {"error": f"Session not found: {session_id}"}
         except Exception as e:
-            return {"error": f"切换会话失败: {str(e)}"}
+            return {"error": f"Switch session failed: {str(e)}"}
 
     async def delete_session(self, session_id: str) -> Dict[str, Any]:
         """删除会话"""
@@ -1445,36 +1346,36 @@ class MainAgent(BaseAgent):
                 return {
                     "success": True,
                     "session_id": session_id,
-                    "message": "会话已删除",
+                    "message": "Session deleted",
                 }
             else:
-                return {"error": f"会话不存在: {session_id}"}
+                return {"error": f"Session not found: {session_id}"}
         except Exception as e:
-            return {"error": f"删除会话失败: {str(e)}"}
+            return {"error": f"Delete session failed: {str(e)}"}
 
     async def get_conversation_history(self, max_length: int = 10) -> Dict[str, Any]:
-        """获取对话历史"""
+        """Get 对话历史"""
         try:
             history = await self.session_manager.get_conversation_history(max_length)
             return {"success": True, "history": history}
         except Exception as e:
-            return {"error": f"获取对话历史失败: {str(e)}"}
+            return {"error": f"Get conversation history failed: {str(e)}"}
 
-    # 移除复杂规划功能，使用ReAct内置的动态规划
+    # 移除复杂规划功能，使 with ReAct内置的动态规划
     # 相关的create_plan、execute_plan_step、get_plan_status等方法已删除
 
     async def get_session_stats(self) -> Dict[str, Any]:
-        """获取会话统计信息"""
+        """Get 会话统计信息"""
         try:
             stats = self.session_manager.get_session_stats()
             return {"success": True, "stats": stats}
         except Exception as e:
-            return {"error": f"获取会话统计失败: {str(e)}"}
+            return {"error": f"Get session stats failed: {str(e)}"}
 
     async def get_project_status(self) -> Dict[str, Any]:
-        """获取项目状态"""
+        """Get 项目状态"""
         try:
-            # 获取Git状态
+            # Get Git状态
             git_status = {}
             try:
                 result = subprocess.run(
@@ -1492,7 +1393,7 @@ class MainAgent(BaseAgent):
                         git_status["changed_files"] = 0
                     git_status["has_changes"] = bool(result.stdout.strip())
             except:
-                git_status["error"] = "Git未初始化或不可用"
+                git_status["error"] = "Git not initialized or unavailable"
 
             # 统计文件
             file_count = 0

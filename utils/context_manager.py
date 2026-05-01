@@ -9,6 +9,7 @@ import asyncio
 import sys
 from pathlib import Path
 from typing import Dict, Any, List
+from aacode.i18n import t
 
 try:
     from config import settings
@@ -41,33 +42,33 @@ class ContextManager:
                     )
                     if init_content.strip():
                         context_parts.append(
-                            f"# 📋 项目初始化指令 (init.md)\n{init_content[:20000]}"
+                            f"# 📋 Project Init Instructions (init.md)\n{init_content[:20000]}"
                         )
                     else:
-                        context_parts.append("# 📋 项目初始化指令\n⚠️ init.md 文件为空")
+                        context_parts.append("# 📋 Project Init Instructions\n⚠️ init.md file is empty")
                 except UnicodeDecodeError:
                     context_parts.append(
-                        "# 📋 项目初始化指令\n⚠️ 文件编码错误，无法读取"
+                        "# 📋 Project Init Instructions\n⚠️ File encoding error, unable to read"
                     )
                 except PermissionError:
-                    context_parts.append("# 📋 项目初始化指令\n⚠️ 权限不足，无法读取")
+                    context_parts.append("# 📋 Project Init Instructions\n⚠️ Insufficient permissions, unable to read")
                 except Exception as e:
                     context_parts.append(
-                        f"# 📋 项目初始化指令\n⚠️ 读取失败: {str(e)[:100]}"
+                        f"# 📋 Project Init Instructions\n⚠️ Read failed: {str(e)[:100]}"
                     )
             else:
                 context_parts.append(
-                    "# 📋 项目初始化指令\n⚠️ init.md 文件不存在，建议创建"
+                    "# 📋 Project Init Instructions\n⚠️ init.md file not found, consider creating one"
                 )
         except Exception as e:
-            context_parts.append(f"# 📋 项目初始化指令\n⚠️ 检查文件失败: {str(e)[:100]}")
+            context_parts.append(f"# 📋 Project Init Instructions\n⚠️ File check failed: {str(e)[:100]}")
 
         # 优化1：待办文件路径始终在上下文中
         if self.current_todo_file:
             try:
                 todo_rel_path = self.current_todo_file.relative_to(self.project_path)
                 context_parts.append(
-                    f"# 📋 当前待办清单\n文件路径: {todo_rel_path}\n提示: 使用待办工具时会自动使用此文件"
+                    f"# 📋 Current Todo List\nFile path: {todo_rel_path}\nTip: This file is auto-used by todo tools"
                 )
             except Exception:
                 pass
@@ -85,7 +86,7 @@ class ContextManager:
                     )
                     if latest_obs and latest_obs.strip():
                         # 显示更多观察内容（从500增加到3000字符）
-                        context_parts.append(f"## 最新观察\n{latest_obs[:3000]}")
+                        context_parts.append(f"## Latest Observation\n{latest_obs[:3000]}")
                 except Exception:
                     # 静默失败，不影响主流程
                     pass
@@ -110,7 +111,7 @@ class ContextManager:
                             )
                             if recent_history:
                                 context_parts.append(
-                                    f"## 近期观察历史\n"
+                                    f"## Recent Observation History\n"
                                     + "\n---\n".join(recent_history[-3:])
                                 )
                 except Exception:
@@ -127,7 +128,7 @@ class ContextManager:
                     errors = errors_file.read_text(encoding="utf-8", errors="ignore")
                     if errors and errors.strip():
                         context_parts.append(
-                            f"## ⚠️ 重要错误历史（避免重复）\n{errors[-800:]}"
+                            f"## ⚠️ Critical Error History (avoid repetition)\n{errors[-800:]}"
                         )  # 最近800字符
                 except Exception:
                     # 静默失败
@@ -138,17 +139,18 @@ class ContextManager:
         # 4. 添加项目路径信息
         try:
             context_parts.append(
-                f"## 工作目录\n当前工作目录: {self.project_path.absolute()}"
+                f"## Working Directory\nCurrent working directory: {self.project_path.absolute()}"
             )
         except Exception:
-            context_parts.append(f"## 工作目录\n当前工作目录: {self.project_path}")
+            pass
+
 
         # 5. 添加重要目录信息（包含常用文档路径）- 增强错误处理
         important_dirs = []
         try:
             aacode_dir = self.project_path / ".aacode"
             if aacode_dir.exists() and aacode_dir.is_dir():
-                important_dirs.append(f"- .aacode/ (系统目录)")
+                important_dirs.append(f"- .aacode/ (system directory)")
                 for subdir_name in ["context", "todos", "tests", "sandboxes"]:
                     try:
                         subdir = aacode_dir / subdir_name
@@ -186,11 +188,11 @@ class ContextManager:
             pass
 
         if doc_files:
-            important_dirs.append(f"\n常用文档:")
+            important_dirs.append(f"\nCommon documents:")
             important_dirs.extend(doc_files[:10])  # 最多10个
 
         if important_dirs:
-            context_parts.append(f"## 重要目录和文档\n" + "\n".join(important_dirs))
+            context_parts.append(f"## Important Directories and Documents\n" + "\n".join(important_dirs))
 
         # 6. 使用bash万能适配器获取项目结构 - 增强错误处理和超时保护
         try:
@@ -234,18 +236,18 @@ class ContextManager:
                     total_files = len(file_list)
                     if total_files >= max_files:
                         context_parts.append(
-                            f"## 项目文件结构\n（显示前 {max_files} 个文件，共约 {max_files}+ 个）\n{chr(10).join(file_list)}"
+                            f"## Project File Structure\n(showing first {max_files} files, ~{max_files}+ total)\n{chr(10).join(file_list)}"
                         )
                     else:
                         context_parts.append(
-                            f"## 项目文件结构\n{chr(10).join(file_list)}"
+                            f"## Project File Structure\n{chr(10).join(file_list)}"
                         )
                 else:
-                    context_parts.append("## 项目文件结构\n项目目录为空")
+                    context_parts.append("## Project File Structure\nProject directory is empty")
             else:
-                context_parts.append("## 项目文件结构\n项目目录为空或无法读取")
+                context_parts.append("## Project File Structure\nProject directory is empty or unreadable")
         except asyncio.TimeoutError:
-            context_parts.append("## 项目文件结构\n获取超时，项目可能较大")
+            context_parts.append("## Project File Structure\nTimed out, project may be large")
         except FileNotFoundError:
             # find命令不可用，尝试使用Python实现
             try:
@@ -286,22 +288,22 @@ class ContextManager:
                     total_files = len(file_list)
                     if total_files >= max_files:
                         context_parts.append(
-                            f"## 项目文件结构\n（显示前 {max_files} 个文件，共约 {max_files}+ 个）\n{chr(10).join(file_list)}"
+                            f"## Project File Structure\n(showing first {max_files} files, ~{max_files}+ total)\n{chr(10).join(file_list)}"
                         )
                     else:
                         context_parts.append(
-                            f"## 项目文件结构\n{chr(10).join(file_list)}"
+                            f"## Project File Structure\n{chr(10).join(file_list)}"
                         )
                 else:
-                    context_parts.append("## 项目文件结构\n项目目录为空")
+                    context_parts.append("## Project File Structure\nProject directory is empty")
             except Exception as e:
-                context_parts.append(f"## 项目文件结构\n获取失败: {str(e)[:100]}")
+                context_parts.append(f"## Project File Structure\nFailed to get: {str(e)[:100]}")
         except Exception as e:
-            context_parts.append(f"## 项目文件结构\n获取失败: {str(e)[:100]}")
+            context_parts.append(f"## Project File Structure\nFailed to get: {str(e)[:100]}")
 
         # 确保至少返回基本信息
         if not context_parts:
-            context_parts.append(f"## 工作目录\n当前工作目录: {self.project_path}")
+            context_parts.append(f"## Working Directory\nCurrent working directory: {self.project_path}")
 
         return "\n\n".join(context_parts)
 
@@ -321,9 +323,9 @@ class ContextManager:
                     observation, encoding="utf-8", errors="ignore"
                 )
             except PermissionError as e:
-                print(f"⚠️ 权限错误：无法写入观察文件 {observation_file}: {e}")
+                print(f"⚠️ Permission error: unable to write observation file {observation_file}: {e}")
             except OSError as e:
-                print(f"⚠️ 系统错误：无法写入观察文件 {observation_file}: {e}")
+                print(f"⚠️ System error: unable to write observation file {observation_file}: {e}")
             except Exception as e:
                 # 静默失败，不影响主流程
                 pass
@@ -369,7 +371,7 @@ class ContextManager:
             # 如果观察中包含错误或警告，记录到重要错误历史
             if any(
                 keyword in observation.lower()
-                for keyword in ["错误", "error", "失败", "failed", "警告", "warning"]
+                for keyword in ["error", "failed", "warning"]
             ):
                 errors_file = self.context_dir / "important_errors.txt"
                 try:
@@ -388,7 +390,7 @@ class ContextManager:
                     combined = (existing_errors + new_error)[-3000:]
                     errors_file.write_text(combined, encoding="utf-8", errors="ignore")
                 except PermissionError:
-                    print(f"⚠️ 权限错误：无法写入错误历史文件")
+                    print(f"⚠️ Permission error: unable to write errors history file")
                 except Exception:
                     pass
 
@@ -430,8 +432,8 @@ class ContextManager:
                         f.write(index_entry)
                 else:
                     with open(index_file, "w", encoding="utf-8") as f:
-                        f.write("# 归档索引\n")
-                        f.write("# 格式: 文件名|哈希|大小|时间戳\n")
+                        f.write("# Archive Index\n")
+                        f.write("# Format: filename|hash|size|timestamp\n")
                         f.write(index_entry)
             except Exception:
                 # 索引创建失败不影响主流程
@@ -439,7 +441,7 @@ class ContextManager:
 
             return str(output_file.relative_to(self.project_path))
         except Exception as e:
-            return f"保存失败: {str(e)}"
+            return f"Save failed: {str(e)}"
 
     async def save_history(self, steps: List[Any]) -> str:
         """保存历史到文件"""
@@ -448,16 +450,16 @@ class ContextManager:
         )
 
         # 简化的历史记录
-        history_content = "# 执行历史\n\n"
+        history_content = "# Execution History\n\n"
         for i, step in enumerate(steps[-10:], 1):  # 只保存最近10步
-            history_content += f"## 步骤 {i}\n"
-            history_content += f"**思考**: {step.thought}\n"
+            history_content += f"## Step {i}\n"
+            history_content += f"**Thought**: {step.thought}\n"
             if step.actions:
                 for j, action_item in enumerate(step.actions, 1):
-                    history_content += f"**动作 {j}**: {action_item.action}\n"
+                    history_content += f"**Action {j}**: {action_item.action}\n"
                     if action_item.observation:
                         history_content += (
-                            f"**观察 {j}**: {action_item.observation[:100]}...\n"
+                            f"**Observation {j}**: {action_item.observation[:100]}...\n"
                         )
             history_content += "\n"
 
@@ -466,7 +468,7 @@ class ContextManager:
             history_file.write_text(history_content, encoding="utf-8")
             return str(history_file.relative_to(self.project_path))
         except Exception as e:
-            return f"保存失败: {str(e)}"
+            return f"Save failed: {str(e)}"
 
     def _prioritize_files(self, file_list: List[str]) -> List[str]:
         """

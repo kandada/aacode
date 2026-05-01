@@ -3,6 +3,7 @@ import asyncio
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
 import json
+from aacode.i18n import t
 
 
 @dataclass
@@ -77,14 +78,14 @@ class MultiAgentSystem:
         return {
             "task_id": task_id,
             "status": "delegated",
-            "message": f"任务已委托给子Agent {task_id}",
+            "message": f"Task delegated to sub-agent {task_id}",
         }
 
     async def _prepare_subagent_context(self, strategy: str) -> str:
         """准备子Agent上下文"""
         if strategy == "isolated":
             # 独立上下文，只传递任务描述
-            return "独立任务执行上下文"
+            return "Independent task execution context"
 
         elif strategy == "shared":
             # 共享完整上下文
@@ -95,7 +96,7 @@ class MultiAgentSystem:
             return await self.context_manager.get_compact_context()
 
         else:
-            return "默认上下文"
+            return "Default context"
 
     async def _create_subagent(
         self, task_id: str, task_description: str, context: str, task_type: str
@@ -103,33 +104,33 @@ class MultiAgentSystem:
         """创建子Agent"""
         # 根据任务类型配置子Agent
         if task_type == "code_analysis":
-            prompt = f"""你是一个代码分析专家。
-任务：{task_description}
+            prompt = f"""You are a code analysis expert.
+Task: {task_description}
 
-请专注于代码分析，提供：
-1. 代码结构分析
-2. 潜在问题
-3. 改进建议
-4. 具体代码示例
+Please focus on code analysis, providing:
+1. Code structure analysis
+2. Potential issues
+3. Improvement suggestions
+4. Specific code examples
 
-请使用JSON格式返回结果。"""
+Please return results in JSON format."""
 
         elif task_type == "testing":
-            prompt = f"""你是一个测试专家。
-任务：{task_description}
+            prompt = f"""You are a testing expert.
+Task: {task_description}
 
-请专注于：
-1. 编写测试用例
-2. 测试覆盖率分析
-3. 边缘情况测试
-4. 性能测试建议
+Please focus on:
+1. Writing test cases
+2. Test coverage analysis
+3. Edge case testing
+4. Performance testing suggestions
 
-请使用JSON格式返回结果。"""
+Please return results in JSON format."""
 
         else:
-            prompt = f"""执行任务：{task_description}
+            prompt = f"""Execute task: {task_description}
 
-上下文：
+Context:
 {context}"""
 
         # 创建简化的子Agent
@@ -137,7 +138,7 @@ class MultiAgentSystem:
             "id": task_id,
             "prompt": prompt,
             "context": context,
-            "tools": ["read_file", "search_files", "execute_python"],
+            "tools": ["run_shell"],
             "max_iterations": 10,
         }
 
@@ -153,10 +154,10 @@ class MultiAgentSystem:
             await asyncio.sleep(2)  # 模拟处理时间
 
             result = {
-                "analysis": "代码分析完成",
-                "issues": ["发现3个潜在问题"],
-                "suggestions": ["建议1", "建议2"],
-                "code_examples": ["示例代码"],
+                "analysis": "Code analysis complete",
+                "issues": ["Found 3 potential issues"],
+                "suggestions": ["Suggestion 1", "Suggestion 2"],
+                "code_examples": ["Example code"],
             }
 
             task.result = result
@@ -172,5 +173,5 @@ class MultiAgentSystem:
     async def _notify_main_agent(self, task: AgentTask):
         """通知主Agent任务完成"""
         # 这里可以实现实际的通知机制
-        print(f"📨 子任务完成: {task.id}")
-        print(f"结果: {task.result}")
+        print(t("multi.task_done", id=task.id))
+        print(t("multi.task_result", result=task.result))

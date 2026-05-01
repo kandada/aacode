@@ -9,6 +9,7 @@ import tempfile
 from typing import Dict, List, Any, Optional
 from pathlib import Path
 import shutil
+from aacode.i18n import t
 
 
 class SandboxManager:
@@ -65,7 +66,7 @@ class SandboxManager:
 
         self.active_sandboxes[sandbox_id] = sandbox_info
 
-        print(f"🛡️  创建沙箱: {sandbox_id}")
+        print(f"🛡️  Creating sandbox: {sandbox_id}")
 
         return {
             "success": True,
@@ -90,7 +91,7 @@ class SandboxManager:
             执行结果
         """
         if sandbox_id not in self.active_sandboxes:
-            return {"error": f"沙箱不存在: {sandbox_id}"}
+            return {"error": f"Sandbox not found: {sandbox_id}"}
 
         sandbox_info = self.active_sandboxes[sandbox_id]
         sandbox_dir = Path(sandbox_info["directory"])
@@ -130,7 +131,7 @@ class SandboxManager:
             except asyncio.TimeoutError:
                 process.terminate()
                 return {
-                    "error": f"命令执行超时 ({timeout}秒)",
+                    "error": f"Command execution timeout ({timeout}s)",
                     "command": command
                 }
 
@@ -174,9 +175,9 @@ class SandboxManager:
             }
 
         except ImportError:
-            return {"error": "docker-py未安装，无法使用Docker沙箱"}
+            return {"error": "docker-py not installed, cannot use Docker sandbox"}
         except Exception as e:
-            return {"error": f"Docker执行失败: {str(e)}"}
+            return {"error": f"Docker execution failed: {str(e)}"}
 
     async def copy_to_sandbox(self,
                               sandbox_id: str,
@@ -184,13 +185,13 @@ class SandboxManager:
                               dest_path: str | None = None) -> Dict[str, Any]:
         """复制文件到沙箱"""
         if sandbox_id not in self.active_sandboxes:
-            return {"error": f"沙箱不存在: {sandbox_id}"}
+            return {"error": f"Sandbox not found: {sandbox_id}"}
 
         sandbox_dir = Path(self.active_sandboxes[sandbox_id]["directory"])
         source = Path(source_path)
 
         if not source.exists():
-            return {"error": f"源文件不存在: {source_path}"}
+            return {"error": f"Source file not found: {source_path}"}
 
         try:
             dest = sandbox_dir / (dest_path or source.name)
@@ -216,14 +217,14 @@ class SandboxManager:
                                 dest_path: str) -> Dict[str, Any]:
         """从沙箱复制文件"""
         if sandbox_id not in self.active_sandboxes:
-            return {"error": f"沙箱不存在: {sandbox_id}"}
+            return {"error": f"Sandbox not found: {sandbox_id}"}
 
         sandbox_dir = Path(self.active_sandboxes[sandbox_id]["directory"])
         source = sandbox_dir / source_path
         dest = Path(dest_path)
 
         if not source.exists():
-            return {"error": f"沙箱文件不存在: {source_path}"}
+            return {"error": f"Sandbox file not found: {source_path}"}
 
         try:
             dest.parent.mkdir(parents=True, exist_ok=True)
@@ -248,7 +249,7 @@ class SandboxManager:
                                software: List[str]) -> Dict[str, Any]:
         """在沙箱中安装软件"""
         if sandbox_id not in self.active_sandboxes:
-            return {"error": f"沙箱不存在: {sandbox_id}"}
+            return {"error": f"Sandbox not found: {sandbox_id}"}
 
         results = []
 
@@ -264,7 +265,7 @@ class SandboxManager:
                 # 在本地尝试安装（需要sudo权限）
                 result = await self.execute_in_sandbox(
                     sandbox_id,
-                    f"which {package} || echo '软件 {package} 未安装'",
+                    f"which {package} || echo 'Package {package} not installed'",
                     timeout=30
                 )
 
@@ -281,7 +282,7 @@ class SandboxManager:
     async def cleanup_sandbox(self, sandbox_id: str) -> Dict[str, Any]:
         """清理沙箱"""
         if sandbox_id not in self.active_sandboxes:
-            return {"error": f"沙箱不存在: {sandbox_id}"}
+            return {"error": f"Sandbox not found: {sandbox_id}"}
 
         try:
             sandbox_info = self.active_sandboxes.pop(sandbox_id)
@@ -304,7 +305,7 @@ class SandboxManager:
             return {
                 "success": True,
                 "sandbox_id": sandbox_id,
-                "message": "沙箱已清理"
+                "message": "Sandbox cleaned up"
             }
 
         except Exception as e:

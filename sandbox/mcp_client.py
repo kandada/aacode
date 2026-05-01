@@ -9,6 +9,7 @@ import json
 from typing import Dict, List, Any, Optional
 import aiohttp
 from aiohttp import ClientTimeout
+from aacode.i18n import t
 
 
 class MCPClient:
@@ -43,16 +44,16 @@ class MCPClient:
                     self.session_id = data.get("session_id")
                     self.tools = data.get("tools", {})
 
-                    print(f"✅ 已连接到MCP服务器，会话ID: {self.session_id}")
-                    print(f"可用工具: {list(self.tools.keys())}")
+                    print(f"✅ Connected to MCP server, session ID: {self.session_id}")
+                    print(f"Available tools: {list(self.tools.keys())}")
 
                     return True
                 else:
-                    print(f"❌ 连接MCP服务器失败: {response.status}")
+                    print(f"❌ Failed to connect MCP server: {response.status}")
                     return False
 
         except Exception as e:
-            print(f"❌ 连接MCP服务器异常: {e}")
+            print(f"❌ MCP server connection exception: {e}")
             return False
         finally:
             # 连接失败时关闭session
@@ -79,11 +80,11 @@ class MCPClient:
     async def list_tools(self) -> Dict[str, Any]:
         """列出可用工具"""
         if not self.session_id or not self.session:
-            return {"error": "未连接到MCP服务器"}
+            return {"error": "Not connected to MCP server"}
 
         try:
             if not self.session:
-                return {"error": "HTTP会话未初始化"}
+                return {"error": "HTTP session not initialized"}
             async with self.session.get(
                 f"{self.server_url}/sessions/{self.session_id}/tools"
             ) as response:
@@ -96,7 +97,7 @@ class MCPClient:
                         "count": len(self.tools),
                     }
                 else:
-                    return {"error": f"获取工具列表失败: {response.status}"}
+                    return {"error": f"Failed to get tool list: {response.status}"}
         except Exception as e:
             return {"error": str(e)}
 
@@ -105,16 +106,16 @@ class MCPClient:
     ) -> Dict[str, Any]:
         """调用MCP工具"""
         if not self.session_id:
-            return {"error": "未连接到MCP服务器"}
+            return {"error": "Not connected to MCP server"}
 
         if tool_name not in self.tools:
-            return {"error": f"工具不存在: {tool_name}"}
+            return {"error": f"Tool not found: {tool_name}"}
 
         try:
             payload = {"tool": tool_name, "arguments": arguments or {}}
 
             if not self.session:
-                return {"error": "HTTP会话未初始化"}
+                return {"error": "HTTP session not initialized"}
             async with self.session.post(
                 f"{self.server_url}/sessions/{self.session_id}/call",
                 json=payload,
@@ -130,12 +131,12 @@ class MCPClient:
                 else:
                     error_text = await response.text()
                     return {
-                        "error": f"工具调用失败: {response.status}",
+                        "error": f"Tool call failed: {response.status}",
                         "details": error_text,
                     }
 
         except asyncio.TimeoutError:
-            return {"error": f"工具调用超时 ({timeout}秒)"}
+            return {"error": f"Tool call timeout ({timeout}s)"}
         except Exception as e:
             return {"error": str(e)}
 
@@ -186,7 +187,7 @@ class LocalMCPClient:
 
     async def connect(self) -> bool:
         """模拟连接"""
-        print("✅ 使用本地MCP客户端")
+        print("✅ Using local MCP client")
         return True
 
     async def disconnect(self):
@@ -206,7 +207,7 @@ class LocalMCPClient:
     ) -> Dict[str, Any]:
         """调用工具"""
         if tool_name not in self.tools:
-            return {"error": f"工具不存在: {tool_name}"}
+            return {"error": f"Tool not found: {tool_name}"}
 
         try:
             result = await self.tools[tool_name](arguments or {})
@@ -222,7 +223,7 @@ class LocalMCPClient:
         args = arguments.get("args", [])
 
         if not command:
-            return {"error": "未指定命令"}
+            return {"error": "Command not specified"}
 
         try:
             full_cmd = [command] + args
@@ -244,12 +245,12 @@ class LocalMCPClient:
 
         file_path = arguments.get("file_path")
         if not file_path:
-            return {"error": "未指定文件路径"}
+            return {"error": "File path not specified"}
 
         try:
             path = Path(file_path)
             if not path.exists():
-                return {"error": "文件不存在"}
+                return {"error": "File not found"}
 
             stat = path.stat()
 
@@ -277,4 +278,4 @@ class LocalMCPClient:
             lines = text.split("\n")
             return {"line_count": len(lines)}
         else:
-            return {"error": f"未知操作: {operation}"}
+            return {"error": f"Unknown operation: {operation}"}

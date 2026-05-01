@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib.parse import quote, urljoin
 import os
 import time
+from aacode.i18n import t
 
 
 class WebTools:
@@ -28,7 +29,7 @@ class WebTools:
                     "/search"
                 ),
                 "enabled": bool(os.getenv("SEARCHXNG_URL")),
-                "description": "自托管搜索引擎聚合器（集成Google、Bing、百度、搜狗等）",
+                "description": "Self-hosted search engine aggregator (integrates Google, Bing, Baidu, Sogou, etc.)",
             }
         }
         self.last_search_time: dict[str, float] = {}
@@ -101,7 +102,7 @@ class WebTools:
             if not self.search_engines.get(engine, {}).get("enabled", False):
                 return {
                     "success": False,
-                    "error": f"搜索引擎 {engine} 不可用",
+                    "error": f"search engine {engine} unavailable",
                     "available_engines": [
                         k for k, v in self.search_engines.items() if v.get("enabled")
                     ],
@@ -111,7 +112,7 @@ class WebTools:
             if not self._check_rate_limit(engine):
                 return {
                     "success": False,
-                    "error": f"搜索引擎 {engine} 速率限制中,请稍后重试",
+                    "error": f"search engine {engine} rate limited, retry later",
                 }
 
             # 执行搜索
@@ -127,7 +128,7 @@ class WebTools:
             return results
 
         except Exception as e:
-            return {"success": False, "error": f"搜索失败: {str(e)}"}
+            return {"success": False, "error": f"Search failed: {str(e)}"}
 
     async def fetch_url(
         self,
@@ -166,7 +167,7 @@ class WebTools:
 
             # URL安全检查
             if not self._is_safe_url(url):
-                return {"success": False, "error": "URL安全检查失败"}
+                return {"success": False, "error": "URL safety check failed"}
 
             if timeout is None:
                 timeout = 30
@@ -182,14 +183,14 @@ class WebTools:
                 ):
                     return {
                         "success": False,
-                        "error": f"不支持的内容类型: {content_type}",
+                        "error": f"unsupported content type: {content_type}",
                     }
 
                 content = await response.text(errors="ignore")
 
                 # 限制内容长度
                 if len(content) > max_content_length:
-                    content = content[:max_content_length] + "\n...[内容已截断]"
+                    content = content[:max_content_length] + "\n...[content truncated]"
 
                 return {
                     "success": True,
@@ -201,9 +202,9 @@ class WebTools:
                 }
 
         except asyncio.TimeoutError:
-            return {"success": False, "error": f"请求超时 ({timeout}秒)"}
+            return {"success": False, "error": f"request timeout ({timeout}s)"}
         except Exception as e:
-            return {"success": False, "error": f"获取网页失败: {str(e)}"}
+            return {"success": False, "error": f"Fetch web page failed: {str(e)}"}
 
     def _choose_best_engine(self) -> str:
         """选择最佳搜索引擎"""
@@ -225,31 +226,31 @@ class WebTools:
         if engine != "searxng":
             return {
                 "success": False,
-                "error": f"不支持的搜索引擎: {engine}，当前只支持searxng",
+                "error": f"unsupported engine: {engine}, only searxng supported",
                 "query": query,
-                "suggestion": "请配置SEARCHXNG_URL环境变量",
+                "suggestion": "Please configure SEARCHXNG_URL environment variable",
             }
 
         # 检查searxng是否启用
         if not self.search_engines.get("searxng", {}).get("enabled", False):
             return {
                 "success": False,
-                "error": "searxng搜索引擎未启用",
+                "error": "searxng search engine not enabled",
                 "query": query,
-                "suggestion": "请设置SEARCHXNG_URL环境变量指向您的searXNG实例",
+                "suggestion": "Please set SEARCHXNG_URL environment variable to point to your searXNG instance",
             }
 
         try:
-            print(f"🔍 使用搜索引擎: {engine}")
+            print(f"🔍 Using search engine: {engine}")
             result = await self._search_searxng(query, max_results, safe_search)
             return result
 
         except Exception as e:
             return {
                 "success": False,
-                "error": f"searxng搜索失败: {str(e)}",
+                "error": f"searxngSearch failed: {str(e)}",
                 "query": query,
-                "suggestion": "请检查searXNG实例是否正常运行，网络连接是否正常",
+                "suggestion": "Please check if the searXNG instance is running and network connection is normal",
             }
 
     def _check_rate_limit(self, engine: str) -> bool:
@@ -344,7 +345,7 @@ class WebTools:
             last_error = None
             for i, test_params in enumerate(param_variations):
                 try:
-                    print(f"🔍 尝试参数组合 {i + 1}: {test_params}")
+                    print(f"🔍 Trying param combo {i+1}: {test_params}")
                     # 确保session存在
                     if self.session is None:
                         await self._ensure_session()
@@ -364,13 +365,13 @@ class WebTools:
 
                                 # 检查是否有错误
                                 if data.get("error"):
-                                    last_error = f"SearXNG错误: {data.get('error')}"
+                                    last_error = f"SearXNG error: {data.get('error')}"
                                     continue
 
                                 # 检查是否有结果
                                 results = data.get("results", [])
                                 if not results:
-                                    last_error = "SearXNG返回空结果"
+                                    last_error = "SearXNG returned empty results"
                                     continue
 
                                 # 处理结果
@@ -400,29 +401,29 @@ class WebTools:
                                 import re
 
                                 # 这里简化处理，实际应该更复杂
-                                last_error = "SearXNG返回HTML格式，需要解析"
+                                last_error = "SearXNG returned HTML format, needs parsing"
                                 continue
 
                         else:
-                            last_error = f"SearXNG HTTP错误: {response.status}"
+                            last_error = f"SearXNG HTTP error: {response.status}"
                             continue
 
                 except asyncio.TimeoutError:
-                    last_error = f"参数组合 {i + 1} 超时"
+                    last_error = f"Parameter combo {i + 1} timeout"
                     continue
                 except Exception as e:
-                    last_error = f"参数组合 {i + 1} 错误: {str(e)}"
+                    last_error = f"Parameter combo {i + 1} error: {str(e)}"
                     continue
 
             return {
                 "success": False,
-                "error": f"SearXNG搜索失败: {last_error}",
+                "error": f"SearXNGSearch failed: {last_error}",
                 "query": query,
-                "suggestion": "请检查searXNG配置和网络连接",
+                "suggestion": "Please check searXNG configuration and network connection",
             }
 
         except Exception as e:
-            return {"success": False, "error": f"SearXNG搜索失败: {str(e)}"}
+            return {"success": False, "error": f"SearXNGSearch failed: {str(e)}"}
 
     async def web_search(self, query: str, max_results: int = 5) -> Dict[str, Any]:
         """兼容性方法"""
@@ -437,7 +438,7 @@ class WebTools:
                 "count": len(result.get("results", [])),
             }
         else:
-            return {"error": result.get("error", "搜索失败"), "success": False}
+            return {"error": result.get("error", "Search failed"), "success": False}
 
     async def search_code(
         self, query: str, language: str = "", max_results: int = 10
@@ -497,11 +498,11 @@ class WebTools:
                 else:
                     return {
                         "success": False,
-                        "error": f"GitHub API错误: {response.status}",
+                        "error": f"GitHub API error: {response.status}",
                     }
 
         except Exception as e:
-            return {"success": False, "error": f"代码搜索失败: {str(e)}"}
+            return {"success": False, "error": f"Code search failed: {str(e)}"}
 
     async def cleanup(self):
         """清理资源，关闭HTTP会话"""
@@ -552,4 +553,4 @@ class WebSearchTools(WebTools):
                 "count": len(result.get("results", [])),
             }
         else:
-            return {"error": result.get("error", "搜索失败"), "success": False}
+            return {"error": result.get("error", "Search failed"), "success": False}

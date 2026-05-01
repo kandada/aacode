@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Union
 import openai
+from aacode.i18n import t
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -47,7 +48,7 @@ class MultimodalTools:
 
         # 检查是否是多模态模型
         if "minimax" in main_model_name or "kimi" in main_model_name:
-            print(f"🔍 检测到主模型 '{settings.model.name}' 支持多模态")
+            print(f"🔍 Detected main model '{settings.model.name}' supports multimodal")
 
             # 如果主模型是多模态模型，优先使用主模型配置
             if "minimax" in main_model_name:
@@ -55,7 +56,7 @@ class MultimodalTools:
                 if model_key in self.models:
                     self.default_model = model_key
                     self.current_model_config = self.models[model_key]
-                    print(f"✅ 多模态工具将使用主模型: {settings.model.name}")
+                    print(f"✅ Multimodal tools will use main model: {settings.model.name}")
                 else:
                     # 动态创建MiniMax配置
                     self._create_minimax_config()
@@ -64,7 +65,7 @@ class MultimodalTools:
                 if model_key in self.models:
                     self.default_model = model_key
                     self.current_model_config = self.models[model_key]
-                    print(f"✅ 多模态工具将使用主模型: {settings.model.name}")
+                    print(f"✅ Multimodal tools will use main model: {settings.model.name}")
 
     def _create_minimax_config(self):
         """动态创建MiniMax多模态配置"""
@@ -92,7 +93,7 @@ class MultimodalTools:
         self.models["minimax_m2.5"] = minimax_config
         self.default_model = "minimax_m2.5"
         self.current_model_config = minimax_config
-        print(f"✅ 已创建MiniMax多模态配置")
+        print(f"✅ Created MiniMax multimodal configuration")
 
     def _get_model_config(self, model_name: Optional[str] = None) -> Dict[str, Any]:
         """获取指定模型的配置"""
@@ -124,7 +125,7 @@ class MultimodalTools:
 
         # 检查文件是否存在
         if not os.path.exists(file_path):
-            return {"valid": False, "error": f"文件不存在: {file_path}"}
+            return {"valid": False, "error": f"File not found: {file_path}"}
 
         # 检查文件大小
         file_size = os.path.getsize(file_path)
@@ -133,7 +134,7 @@ class MultimodalTools:
             actual_size_mb = file_size / (1024 * 1024)
             return {
                 "valid": False,
-                "error": f"文件过大: {actual_size_mb:.1f}MB, 最大支持: {max_size_mb}MB",
+                "error": f"File too large: {actual_size_mb:.1f}MB, max supported: {max_size_mb}MB",
             }
 
         # 检查文件格式
@@ -141,13 +142,13 @@ class MultimodalTools:
         if file_ext not in allowed_formats:
             return {
                 "valid": False,
-                "error": f"不支持的文件格式: {file_ext}, 支持的格式: {', '.join(allowed_formats)}",
+                "error": f"Unsupported file format: {file_ext}, supported formats: {', '.join(allowed_formats)}",
             }
 
         return {"valid": True, "size": file_size}
 
     async def understand_image(
-        self, image_path: str, prompt: str = "请详细描述这张图片的内容", **kwargs
+        self, image_path: str, prompt: str = "Please describe the content of this image in detail", **kwargs
     ) -> Dict[str, Any]:
         """
         理解单张或多张图片的内容
@@ -217,12 +218,12 @@ class MultimodalTools:
             }
 
         except Exception as e:
-            return {"error": f"图片理解失败: {str(e)}"}
+            return {"error": f"Image understanding failed: {str(e)}"}
 
     async def understand_video(
         self,
         video_path: str,
-        prompt: str = "请详细描述这个视频的内容，包括场景、人物、动作等",
+        prompt: str = "Please describe the content of this video in detail, including scenes, characters, actions, etc.",
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -238,7 +239,7 @@ class MultimodalTools:
 
             # 检查模型是否支持视频
             if not model_config.get("video", False):
-                return {"error": f"当前模型 {model_config.get('name')} 不支持视频理解"}
+                return {"error": f"Current model {model_config.get('name')} does not support video understanding"}
 
             # 解析视频路径为完整路径
             video_full_path = Path(video_path)
@@ -284,12 +285,12 @@ class MultimodalTools:
             }
 
         except Exception as e:
-            return {"error": f"视频理解失败: {str(e)}"}
+            return {"error": f"Video understanding failed: {str(e)}"}
 
     async def understand_ui_design(
         self,
         design_path: str,
-        prompt: str = "请详细分析这个UI设计稿，描述布局、色彩、组件等，并尝试生成对应的HTML/CSS前端代码",
+        prompt: str = "Please analyze this UI design in detail, describe the layout, colors, components, etc., and try to generate corresponding HTML/CSS code",
         generate_code: bool = True,
         **kwargs,
     ) -> Dict[str, Any]:
@@ -327,19 +328,19 @@ class MultimodalTools:
             if generate_code:
                 full_prompt = f"""{prompt}
 
-请按照以下格式输出分析结果：
+Please output the analysis result in the following format:
 
-## UI分析
-1. 整体布局：
-2. 色彩方案：
-3. 字体：
-4. 组件：
-5. 响应式设计：
+## UI Analysis
+1. Overall layout:
+2. Color scheme:
+3. Typography:
+4. Components:
+5. Responsive design:
 
-## 前端代码
-请生成对应的HTML/CSS代码（使用纯CSS，不依赖任何框架）：
+## Frontend Code
+Please generate corresponding HTML/CSS code (use pure CSS, no frameworks):
 ```html
-<!-- 完整代码 -->
+<!-- Complete code -->
 ```
 """
             else:
@@ -382,7 +383,7 @@ class MultimodalTools:
             }
 
         except Exception as e:
-            return {"error": f"UI设计稿理解失败: {str(e)}"}
+            return {"error": f"UI design understanding failed: {str(e)}"}
 
     async def _call_vision_api(self, messages: List[Dict], model_config: Dict) -> str:
         """调用多模态模型的API"""
@@ -399,7 +400,7 @@ class MultimodalTools:
         model_name = model_config.get("name") or "kimi-k2.5"
 
         if not api_key:
-            raise ValueError("未设置多模态模型API密钥")
+            raise ValueError("Multimodal model API key not configured")
 
         client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url)
 
@@ -430,8 +431,8 @@ class MultimodalTools:
 
         except Exception as e:
             error_msg = str(e)
-            print(f"⚠️  多模态API调用失败: {error_msg}")
-            print("💡 尝试使用文本模式...")
+            print(f"⚠️  Multimodal API call failed: {error_msg}")
+            print("💡 Trying text mode...")
 
             # 回退到纯文本模式
             text_only_messages = self._convert_to_text_only(messages)
@@ -488,7 +489,7 @@ class MultimodalTools:
                 for part in content:
                     if isinstance(part, dict) and part.get("type") == "text":
                         text_parts.append(part.get("text", ""))
-                text_content = " ".join(text_parts) if text_parts else "[包含图片内容]"
+                text_content = " ".join(text_parts) if text_parts else "[Contains image content]"
                 text_messages.append({"role": role, "content": text_content})
             else:
                 text_messages.append({"role": role, "content": str(content)})
@@ -497,7 +498,7 @@ class MultimodalTools:
     async def analyze_image_consistency(
         self,
         image_paths: str,
-        prompt: str = "请分析这些图片中人物的相似度，判断是否为同一人",
+        prompt: str = "Please analyze the similarity of people in these images and determine if they are the same person",
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -515,7 +516,7 @@ class MultimodalTools:
             paths = [p.strip() for p in image_paths.split(",")]
 
             if len(paths) < 2:
-                return {"error": "需要至少两张图片进行一致性分析"}
+                return {"error": "At least two images are required for consistency analysis"}
 
             # 解析所有图片路径为完整路径
             resolved_paths: List[Path] = []
@@ -552,10 +553,10 @@ class MultimodalTools:
 
             full_prompt = f"""{prompt}
 
-请分析这些图片中的一致性：
-1. 如果是人物图片，请判断面部特征、穿着、场景等是否一致
-2. 如果是物体图片，请分析样式、颜色、特征等是否一致
-3. 给出相似度评分（0-100%）和详细分析
+Please analyze the consistency of these images:
+1. If they are images of people, determine if facial features, clothing, scenes, etc. are consistent
+2. If they are images of objects, analyze if style, color, features, etc. are consistent
+3. Provide a similarity score (0-100%) and detailed analysis
 """
 
             messages = [
@@ -575,7 +576,7 @@ class MultimodalTools:
             }
 
         except Exception as e:
-            return {"error": f"一致性分析失败: {str(e)}"}
+            return {"error": f"Consistency analysis failed: {str(e)}"}
 
 
 def get_multimodal_tools_schema() -> List[Dict[str, Any]]:
@@ -585,17 +586,17 @@ def get_multimodal_tools_schema() -> List[Dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "understand_image",
-                "description": "理解图片内容 - 支持单张或多张图片的理解。可以用于分析截图、照片、设计稿等图片内容。这个工具特别适合需要查看图片但不需要生成代码的场景。",
+                "description": "Understand image content - supports single or multiple images. Can be used to analyze screenshots, photos, design drafts, etc. This tool is especially suitable for scenarios where you need to view images but don't need to generate code.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "image_path": {
                             "type": "string",
-                            "description": "图片路径，支持单张或多张（用逗号分隔）。例如：'screenshot.png' 或 'img1.jpg,img2.png'",
+                            "description": "Image path, supports single or multiple (comma separated). Example: 'screenshot.png' or 'img1.jpg,img2.png'",
                         },
                         "prompt": {
                             "type": "string",
-                            "description": "你想要了解图片的什么问题？例如：'这张图片的主要内容是什么？'",
+                            "description": "What do you want to know about the image? Example: 'What is the main content of this image?'",
                         },
                     },
                     "required": ["image_path"],
@@ -606,14 +607,14 @@ def get_multimodal_tools_schema() -> List[Dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "understand_video",
-                "description": "理解视频内容 - 分析视频中的场景、人物、动作等。需要视频文件路径。",
+                "description": "Understand video content - analyze scenes, characters, actions, etc. in the video. Requires video file path.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "video_path": {"type": "string", "description": "视频文件路径"},
+                        "video_path": {"type": "string", "description": "Video file path"},
                         "prompt": {
                             "type": "string",
-                            "description": "你想要了解视频的什么问题？例如：'视频中发生了什么？'",
+                            "description": "What do you want to know about the video? Example: 'What happened in the video?'",
                         },
                     },
                     "required": ["video_path"],
@@ -624,21 +625,21 @@ def get_multimodal_tools_schema() -> List[Dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "understand_ui_design",
-                "description": "理解UI设计稿/页面截图并生成前端代码 - 这是进行前端开发时的重要工具。可以分析设计稿或页面截图，描述UI布局、色彩、组件等，并尝试生成对应的HTML/CSS代码。这个工具结合了多模态理解和前端开发知识，避免理解与代码脱节。",
+                "description": "Understand UI design drafts/page screenshots and generate frontend code - an important tool for frontend development. Can analyze design drafts or page screenshots, describe UI layout, colors, components, etc., and try to generate corresponding HTML/CSS code. This tool combines multimodal understanding with frontend development knowledge, avoiding disconnection between understanding and code.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "design_path": {
                             "type": "string",
-                            "description": "设计稿路径，支持单张或多张（用逗号分隔）。例如：'mockup.png' 或 'desktop.png,mobile.png'",
+                            "description": "Design draft path, supports single or multiple (comma separated). Example: 'mockup.png' or 'desktop.png,mobile.png'",
                         },
                         "prompt": {
                             "type": "string",
-                            "description": "你想要如何分析这个设计稿？例如：'请分析这个登录页面设计'",
+                            "description": "How do you want to analyze this design? Example: 'Please analyze this login page design'",
                         },
                         "generate_code": {
                             "type": "boolean",
-                            "description": "是否生成前端代码，默认为true",
+                            "description": "Whether to generate frontend code, default is true",
                             "default": True,
                         },
                     },
@@ -650,17 +651,17 @@ def get_multimodal_tools_schema() -> List[Dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "analyze_image_consistency",
-                "description": "分析多张图片的一致性（人物或物体）- 用于检查多张图片中的人物是否为同一人，或者物体样式是否一致。适用于图片创作和视频制作场景。",
+                "description": "Analyze consistency across multiple images (people or objects) - used to check if people in multiple images are the same person, or if object styles are consistent. Suitable for image creation and video production scenarios.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "image_paths": {
                             "type": "string",
-                            "description": "多张图片路径，用逗号分隔。例如：'person1.jpg,person2.jpg'",
+                            "description": "Multiple image paths, comma separated. Example: 'person1.jpg,person2.jpg'",
                         },
                         "prompt": {
                             "type": "string",
-                            "description": "你想要分析哪些方面的一致性？",
+                            "description": "What aspects of consistency do you want to analyze?",
                         },
                     },
                     "required": ["image_paths"],

@@ -12,6 +12,7 @@ from datetime import datetime
 import aiofiles
 import json
 import re
+from aacode.i18n import t
 
 
 class TodoManager:
@@ -64,14 +65,14 @@ class TodoManager:
         self.todo_counter = 0
 
         # 简化待办清单格式：只保留待办和已完成，去掉记录section
-        todo_content = f"""# {clean_project_name} - 待办清单
+        todo_content = f"""# {clean_project_name} - Todo List
 
-**任务**: {task_description}
-**创建**: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+**Task**: {task_description}
+**Created**: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
-## 待办
+## Todo
 
-## 已完成
+## Completed
 """
 
         # 写入文件
@@ -84,15 +85,15 @@ class TodoManager:
             # 异步任务被取消，静默处理
             return ""
         except Exception as e:
-            print(f"⚠️  创建待办清单失败: {e}")
+            print(f"⚠️  Failed to create todo list: {e}")
             return ""
 
-        print(f"📋 创建待办清单: {self.current_todo_file.name}")
+        print(f"📋 Created todo list: {self.current_todo_file.name}")
 
         return str(self.current_todo_file.relative_to(self.project_path))
 
     async def add_todo_item(
-        self, item: str, priority: str = "medium", category: str = "任务"
+        self, item: str, priority: str = "medium", category: str = "Task"
     ) -> Optional[str]:
         """
         添加待办事项
@@ -106,7 +107,7 @@ class TodoManager:
             成功返回 todo_id（如 "t1"），失败返回 None
         """
         if not self.current_todo_file or not self.current_todo_file.exists():
-            print("⚠️  没有活动的待办清单文件")
+            print("⚠️  No active todo list file")
             return None
 
         try:
@@ -123,12 +124,12 @@ class TodoManager:
             lines = content.split("\n")
             insert_pos = -1
             for i, line in enumerate(lines):
-                if line.strip() == "## 待办":
+                if line.strip() == "## Todo":
                     insert_pos = i + 1
                     break
 
             if insert_pos == -1:
-                print("⚠️  找不到待办部分")
+                print("⚠️  Todo section not found")
                 return None
 
             # 生成 todo_id
@@ -150,7 +151,7 @@ class TodoManager:
 
             return todo_id
         except Exception as e:
-            print(f"⚠️  添加待办失败: {e}")
+            print(f"⚠️  Failed to add todo: {e}")
             return None
 
     def _load_counter(self, content: str) -> None:
@@ -176,7 +177,7 @@ class TodoManager:
             是否成功
         """
         if not self.current_todo_file:
-            print("⚠️  没有活动的待办清单文件")
+            print("⚠️  No active todo list file")
             return False
 
         # 读取现有内容
@@ -196,7 +197,7 @@ class TodoManager:
                     item_desc = line.replace("- [ ]", "").strip()
                     item_desc = re.sub(r"^[🔴🟡🟢]\s*\*\*.*?\*\*\s*\[#\w+\]:\s*", "", item_desc)
                     self._add_to_completed_section(lines, item_desc, todo_id)
-                    print(f"✅ 标记完成 [#{todo_id}]: {item_desc[:50]}...")
+                    print(f"✅ Marked complete [#{todo_id}]: {item_desc[:50]}...")
                     break
 
         # 策略2：完整 pattern 文本包含匹配
@@ -215,13 +216,13 @@ class TodoManager:
                     item_desc = line.replace("- [ ]", "").strip()
                     item_desc = re.sub(r"^[🔴🟡🟢]\s*\*\*.*?\*\*\s*(\[#\w+\]:\s*)?", "", item_desc)
                     self._add_to_completed_section(lines, item_desc, matched_id)
-                    print(f"✅ 标记完成: {item_desc[:50]}...")
+                    print(f"✅ Marked complete: {item_desc[:50]}...")
 
         # 策略3：关键词模糊匹配（只标记第一个命中的）
         if not updated and item_pattern:
             pattern_lower = item_pattern.lower()
             # 提取关键词（停用词用子串匹配，解决中文分词粗糙的问题）
-            stop_words = {"的", "了", "一个", "简单", "请", "写", "创建", "程序", "文件", "python", "py"}
+            stop_words = {"the", "a", "an", "is", "of", "in", "to", "and", "for", "python", "py"}
             raw_words = [w for w in re.split(r'[\s,，。、]+', pattern_lower) if w and len(w) > 1]
             # 对每个词，过滤掉包含停用词的部分
             keywords = []
@@ -248,7 +249,7 @@ class TodoManager:
                             item_desc = line.replace("- [ ]", "").strip()
                             item_desc = re.sub(r"^[🔴🟡🟢]\s*\*\*.*?\*\*\s*(\[#\w+\]:\s*)?", "", item_desc)
                             self._add_to_completed_section(lines, item_desc, matched_id)
-                            print(f"✅ 模糊匹配标记完成: {item_desc[:50]}...")
+                            print(f"✅ Fuzzy match marked complete: {item_desc[:50]}...")
                             break
 
         if updated:
@@ -264,7 +265,7 @@ class TodoManager:
         # 查找已完成部分
         completed_section_start = -1
         for i, line in enumerate(lines):
-            if line.strip() == "## 已完成":
+            if line.strip() == "## Completed":
                 completed_section_start = i
                 break
 
@@ -292,7 +293,7 @@ class TodoManager:
             是否成功
         """
         if not self.current_todo_file:
-            print("⚠️  没有活动的待办清单文件")
+            print("⚠️  No active todo list file")
             return False
 
         # 读取现有内容
@@ -315,7 +316,7 @@ class TodoManager:
                 else:
                     lines[i] = f"- [ ] {new_item}"
                 updated = True
-                print(f"🔄 更新待办事项: {new_item[:50]}...")
+                print(f"🔄 Updated todo: {new_item[:50]}...")
 
         if updated:
             # 写入文件
@@ -357,7 +358,7 @@ class TodoManager:
             else:
                 return {
                     "empty": True,
-                    "message": "暂无待办清单，使用 /newtodo 创建新任务",
+                    "message": "No todo lists yet, use /newtodo to create a new task",
                 }
 
         try:
@@ -381,7 +382,7 @@ class TodoManager:
                     total_todos += 1
 
             # 提取项目名称
-            project_name = "未知项目"
+            project_name = "Unknown project"
             for line in lines:
                 if line.startswith("# "):
                     project_name = line.replace("# ", "").split(" - ")[0]
@@ -399,7 +400,7 @@ class TodoManager:
                 "last_updated": datetime.now().isoformat(),
             }
         except Exception as e:
-            return {"error": f"读取待办清单失败: {str(e)}"}
+            return {"error": f"Failed to read todo list: {str(e)}"}
 
     async def list_todo_files(self) -> List[Dict[str, Any]]:
         """
@@ -418,14 +419,14 @@ class TodoManager:
                         second_line = await f.readline()
 
                         # 提取项目名称
-                        project_name = "未知项目"
+                        project_name = "Unknown project"
                         if first_line.startswith("# "):
                             project_name = first_line.replace("# ", "").split(" - ")[0]
 
                         # 提取创建时间
-                        created_time = "未知时间"
-                        if second_line.startswith("**创建**: "):
-                            created_time = second_line.replace("**创建**: ", "").strip()
+                        created_time = "Unknown time"
+                        if second_line.startswith("**Created**: "):
+                            created_time = second_line.replace("**Created**: ", "").strip()
 
                         todo_files.append(
                             {
@@ -448,7 +449,7 @@ class TodoManager:
             )
             return todo_files
         except Exception as e:
-            print(f"⚠️ 列出待办清单文件失败: {e}")
+            print(f"⚠️ Failed to list todo files: {e}")
             return []
 
     async def cleanup_old_todos(self, keep_days: int = 30) -> None:
@@ -467,11 +468,11 @@ class TodoManager:
                 if todo_file.stat().st_mtime < cutoff_time:
                     try:
                         todo_file.unlink()
-                        print(f"🗑️  清理旧待办清单: {todo_file.name}")
+                        print(f"🗑️  Cleaned old todo list: {todo_file.name}")
                     except Exception as e:
-                        print(f"⚠️ 清理待办清单失败 {todo_file.name}: {e}")
+                        print(f"⚠️ Failed to clean todo list {todo_file.name}: {e}")
         except Exception as e:
-            print(f"⚠️ 待办清单清理失败: {e}")
+            print(f"⚠️ Todo list cleanup failed: {e}")
 
 
 # 全局待办管理器实例

@@ -14,6 +14,7 @@ from pathlib import Path
 from datetime import datetime
 import requests
 from dataclasses import dataclass
+from aacode.i18n import t
 
 TIKTOKEN_MIRRORS = [
     "https://raw.githubusercontent.com/openai/tiktoken/main/tiktoken/bpe/cl100k_base.tiktoken",
@@ -46,22 +47,22 @@ def _download_tiktoken_file() -> Optional[str]:
 
     for url in TIKTOKEN_MIRRORS:
         try:
-            print(f"🔄 尝试从镜像下载 tiktoken: {url[:60]}...")
+            print(f"🔄 Attempting to download tiktoken from mirror: {url[:60]}...")
             resp = requests.get(url, timeout=10)
             resp.raise_for_status()
             data = resp.content
 
             actual_hash = hashlib.sha256(data).hexdigest()
             if actual_hash != TIKTOKEN_HASH:
-                print(f"⚠️  hash 不匹配，跳过")
+                print(f"⚠️ Hash mismatch, skipping")
                 continue
 
             with open(cache_path, "wb") as f:
                 f.write(data)
-            print(f"✅ tiktoken 文件下载成功: {cache_path}")
+            print(f"✅ tiktoken download successful: {cache_path}")
             return cache_path
         except Exception as e:
-            print(f"❌ 下载失败: {e}")
+            print(f"❌ Download failed: {e}")
             continue
 
     return None
@@ -79,7 +80,7 @@ def _load_tiktoken_encoding():
         file_size = os.path.getsize(cache_file)
         # 有效的 tiktoken 文件应该远大于 100 字节
         if file_size < 100:
-            print(f"\n⚠️  tiktoken 缓存文件损坏（仅 {file_size} 字节），将使用简单估算")
+            print(f"\n⚠️ tiktoken cache file corrupted (only {file_size} bytes), using simple estimation")
             return None
 
     result = [None]
@@ -99,7 +100,7 @@ def _load_tiktoken_encoding():
     t.join(timeout=5)  # 5秒超时
 
     if t.is_alive():
-        print(f"\n⚠️  tiktoken 加载超时，将使用简单估算")
+        print(f"\n⚠️ tiktoken loading timeout, using simple estimation")
         return None
 
     if exception[0]:
@@ -111,11 +112,11 @@ def _load_tiktoken_encoding():
             or "404" in error_msg
             or "timed out" in error_msg.lower()
         ):
-            print(f"\n⚠️  tiktoken 文件下载失败，将使用简单估算")
+            print(f"\n⚠️ tiktoken download failed, using simple estimation")
             print(
-                f"   手动解决: https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken"
+                f"   Manual fix: https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken"
             )
-            print(f"   保存到: ~/Library/Caches/tiktoken/cl100k_base.tiktoken")
+            print(f"   Save to: ~/Library/Caches/tiktoken/cl100k_base.tiktoken")
         return None
 
     return result[0]
@@ -125,11 +126,14 @@ def _load_tiktoken_encoding():
 class SessionMessage:
     """会话消息"""
 
-    role: str  # user, assistant, system
+    role: str  # user, assistant, system, tool
     content: str
     timestamp: float
     tokens: int = 0
     metadata: Optional[Dict] = None
+    tool_calls: Optional[List[Dict]] = None       # assistant 消息的 tool_calls
+    tool_call_id: Optional[str] = None             # tool 消息的 tool_call_id
+    reasoning_content: Optional[str] = None         # assistant 消息的 reasoning_content
 
 
 @dataclass
@@ -159,6 +163,7 @@ class SessionManager:
         # 当前会话
         self.current_session_id: Optional[str] = None
         self.current_messages: List[SessionMessage] = []
+        self._structured_messages: Optional[List[Dict]] = None
 
         # 会话索引
         self.sessions_index: Dict[str, SessionSummary] = {}
@@ -179,7 +184,7 @@ class SessionManager:
                     for session_id, session_data in data.items():
                         self.sessions_index[session_id] = SessionSummary(**session_data)
             except Exception as e:
-                print(f"⚠️ 加载会话索引失败: {e}")
+                print(t("session.load_error", e=str(e)))
 
     def _save_sessions_index(self):
         """保存会话索引"""
@@ -201,7 +206,7 @@ class SessionManager:
             with open(index_file, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
         except Exception as e:
-            print(f"⚠️ 保存会话索引失败: {e}")
+            print(f"⚠️ Failed to save session index: {e}")
 
     def _count_tokens(self, text: str) -> int:
         """计算文本的token数量"""
@@ -244,14 +249,15 @@ class SessionManager:
         # 添加系统消息和任务
         system_msg = SessionMessage(
             role="system",
-            content=f"你是一个AI编程助手。请按照以下方式工作：\n1. 先规划任务步骤\n2. 逐步执行并验证\n3. 确保代码质量和可维护性",
+            content=f"You are an AI coding assistant. Please work as follows:\n1. First plan the task steps\n2. Execute and verify step by step\n3. Ensure code quality and maintainability",
             timestamp=datetime.now().timestamp(),
             tokens=self._count_tokens(
-                f"你是一个AI编程助手。请按照以下方式工作：\n1. 先规划任务步骤\n2. 逐步执行并验证\n3. 确保代码质量和可维护性"
+                f"You are an AI coding assistant. Please work as follows:\n1. First plan the task steps\n2. Execute and verify step by step\n3. Ensure code quality and maintainability"
             ),
         )
 
         self.current_messages = [system_msg]
+        self._structured_messages = None
         # 只有 task 非空时才添加 user 消息
         if task and task.strip():
             user_msg = SessionMessage(
@@ -283,18 +289,21 @@ class SessionManager:
         current_session_file = self.sessions_dir.parent / "current_session.txt"
         try:
             with open(current_session_file, "w", encoding="utf-8") as f:
-                f.write(f"当前会话ID: {self.current_session_id}\n")
+                f.write(f"Session ID: {self.current_session_id}\n")
                 f.write(
-                    f"创建时间: {datetime.fromtimestamp(self.sessions_index[self.current_session_id].created_at).strftime('%Y-%m-%d %H:%M:%S')}\n"
+                    f"Created: {datetime.fromtimestamp(self.sessions_index[self.current_session_id].created_at).strftime('%Y-%m-%d %H:%M:%S')}\n"
                 )
-                f.write(f"标题: {self.sessions_index[self.current_session_id].title}\n")
-                f.write(f"消息数: {len(self.current_messages)}\n")
-                f.write(f"Token数: {self._get_total_tokens()}\n")
+                f.write(f"Title: {self.sessions_index[self.current_session_id].title}\n")
+                f.write(f"Messages: {len(self.current_messages)}\n")
+                f.write(f"Tokens: {self._get_total_tokens()}\n")
         except Exception as e:
-            print(f"⚠️ 保存当前会话ID失败: {e}")
+            print(t("session.save_id_error", e=str(e)))
 
     async def add_message(
-        self, role: str, content: str, metadata: Optional[Dict] = None
+        self, role: str, content: str, metadata: Optional[Dict] = None,
+        tool_calls: Optional[List[Dict]] = None,
+        tool_call_id: Optional[str] = None,
+        reasoning_content: Optional[str] = None,
     ) -> bool:
         """添加消息到当前会话"""
         if not self.current_session_id:
@@ -317,6 +326,9 @@ class SessionManager:
             timestamp=datetime.now().timestamp(),
             tokens=new_tokens,
             metadata=metadata or {},
+            tool_calls=tool_calls,
+            tool_call_id=tool_call_id,
+            reasoning_content=reasoning_content,
         )
 
         self.current_messages.append(message)
@@ -340,6 +352,22 @@ class SessionManager:
 
         return True
 
+    async def _save_structured_messages(self, messages: List[Dict]):
+        """保存结构化消息到会话文件（含 tool_calls / reasoning_content），与文本消息并存"""
+        if not self.current_session_id:
+            return
+        session_file = self.sessions_dir / f"{self.current_session_id}.json"
+        if not session_file.exists():
+            return
+        try:
+            with open(session_file, "r", encoding="utf-8") as f:
+                session_data = json.load(f)
+            session_data["structured_messages"] = messages
+            with open(session_file, "w", encoding="utf-8") as f:
+                json.dump(session_data, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"⚠️ Failed to save structured message: {e}")
+
     async def get_messages(
         self, session_id: Optional[str] = None, include_system: bool = True
     ) -> List[Dict]:
@@ -352,11 +380,27 @@ class SessionManager:
         if target_session_id != self.current_session_id:
             await self._load_session(target_session_id)
 
+        # 优先返回结构化消息（含 tool_calls / reasoning_content）
+        if self._structured_messages:
+            filtered = []
+            for msg in self._structured_messages:
+                if not include_system and msg.get("role") == "system":
+                    continue
+                filtered.append(msg)
+            return filtered
+
         messages = []
         for msg in self.current_messages:
             if not include_system and msg.role == "system":
                 continue
-            messages.append({"role": msg.role, "content": msg.content})
+            entry = {"role": msg.role, "content": msg.content}
+            if msg.tool_calls:
+                entry["tool_calls"] = msg.tool_calls
+            if msg.tool_call_id:
+                entry["tool_call_id"] = msg.tool_call_id
+            if msg.reasoning_content:
+                entry["reasoning_content"] = msg.reasoning_content
+            messages.append(entry)
 
         return messages
 
@@ -371,7 +415,7 @@ class SessionManager:
         for msg in recent_messages:
             if msg.role == "system":
                 continue
-            role_name = "用户" if msg.role == "user" else "助手"
+            role_name = "User" if msg.role == "user" else "Assistant"
             content_preview = (
                 msg.content[:100] + "..." if len(msg.content) > 100 else msg.content
             )
@@ -392,10 +436,10 @@ class SessionManager:
         old_msgs = self.current_messages[:-3]
         if old_msgs:
             compact_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            summary = f"之前的对话包含{len(old_msgs)}条消息，主要讨论了编程相关的任务。"
+            summary = f"The previous conversation contained {len(old_msgs)} messages, mainly discussing programming-related tasks."
             summary_msg = SessionMessage(
                 role="system",
-                content=f"上下文摘要（压缩时间: {compact_time}）: {summary}",
+                content=f"Context summary (compressed at: {compact_time}): {summary}",
                 timestamp=datetime.now().timestamp(),
                 tokens=self._count_tokens(summary),
             )
@@ -423,6 +467,9 @@ class SessionManager:
                     "timestamp": msg.timestamp,
                     "tokens": msg.tokens,
                     "metadata": msg.metadata,
+                    "tool_calls": msg.tool_calls,
+                    "tool_call_id": msg.tool_call_id,
+                    "reasoning_content": msg.reasoning_content,
                 }
                 for msg in self.current_messages
             ],
@@ -432,7 +479,7 @@ class SessionManager:
             with open(session_file, "w", encoding="utf-8") as f:
                 json.dump(session_data, f, indent=2, ensure_ascii=False)
         except Exception as e:
-            print(f"⚠️ 保存会话失败: {e}")
+            print(t("session.save_error", e=str(e)))
 
     async def _load_session(self, session_id: str):
         """加载指定会话"""
@@ -446,6 +493,7 @@ class SessionManager:
 
             self.current_session_id = session_id
             self.current_messages = []
+            self._structured_messages: Optional[List[Dict]] = session_data.get("structured_messages")
 
             for msg_data in session_data.get("messages", []):
                 message = SessionMessage(
@@ -454,13 +502,16 @@ class SessionManager:
                     timestamp=msg_data["timestamp"],
                     tokens=msg_data.get("tokens", 0),
                     metadata=msg_data.get("metadata"),
+                    tool_calls=msg_data.get("tool_calls"),
+                    tool_call_id=msg_data.get("tool_call_id"),
+                    reasoning_content=msg_data.get("reasoning_content"),
                 )
                 self.current_messages.append(message)
 
             return True
 
         except Exception as e:
-            print(f"⚠️ 加载会话失败: {e}")
+            print(t("session.load_session_error", e=str(e)))
             return False
 
     async def list_sessions(self) -> List[Dict]:

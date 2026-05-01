@@ -306,7 +306,7 @@ asyncio.run(coder.main_agent.list_sessions())"
 ## 🎓 学习资源
 
 ### 文档
-- [README](README.md) - 项目概述
+- [README](README_ch) - 项目概述
 
 
 ## 💬 获取帮助

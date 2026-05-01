@@ -6,7 +6,7 @@ __version__ = "1.6.1"
 __author__ = "xiefujin"
 
 # 修复：无论 __package__ 是否为空，都要确保包可以被导入
-# 当使用 python -c 或作为独立脚本执行时，__package__ 为 None
+# 当使 with  python -c 或作为独立脚本execute时，__package__ 为 None
 try:
     from .main import AICoder
     __all__ = ["AICoder", "__version__"]
@@ -15,7 +15,7 @@ except ImportError:
     import sys
     from pathlib import Path
     
-    # 获取包所在目录
+    # Get 包所在目录
     pkg_dir = Path(__file__).parent
     
     # 添加父目录到 sys.path（这样可以导入 aacode.core 等）

@@ -18,7 +18,8 @@ from enum import Enum
 # 配置日志
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    stream=sys.stdout,
 )
 logger = logging.getLogger("playwright_skill")
 
@@ -61,17 +62,17 @@ def _with_retry(max_retries: int = 3, delay: float = 1.0):
                 except Exception as e:
                     last_error = e
                     if attempt < max_retries - 1:
-                        logger.warning(f"{func.__name__} 第 {attempt + 1} 次失败，{delay}秒后重试: {str(e)}")
+                        logger.warning(f"{func.__name__} attempt {attempt + 1} failed, retrying in {delay}s: {str(e)}")
                         await asyncio.sleep(delay)
                     else:
-                        logger.error(f"{func.__name__} 重试 {max_retries} 次后失败: {str(e)}")
+                        logger.error(f"{func.__name__} failed after {max_retries} retries: {str(e)}")
             return {"success": False, "error": str(last_error)}
         return _wrapper
     return decorator
 
 
 def _get_platform() -> PlatformType:
-    """获取当前操作系统平台"""
+    """Get 当前操作系统平台"""
     system = platform.system().lower()
     if system == "darwin":
         return PlatformType.MACOS
@@ -84,7 +85,7 @@ def _get_platform() -> PlatformType:
 
 
 def _get_default_browser_paths() -> Dict[BrowserType, List[str]]:
-    """获取各平台默认浏览器路径"""
+    """Get 各平台默认浏览器路径"""
     platform_type = _get_platform()
     
     paths = {
@@ -153,10 +154,10 @@ def _check_command_exists(cmd: str) -> bool:
 
 
 def _get_browser_version(executable_path: str) -> Optional[str]:
-    """获取浏览器版本"""
+    """Get 浏览器版本"""
     try:
         if _get_platform() == PlatformType.WINDOWS:
-            # Windows使用wmic获取版本
+            # Windows使 with wmicGet 版本
             result = subprocess.run(
                 ["wmic", "datafile", "where", f"name='{executable_path.replace('/', '\\\\')}'", "get", "Version"],
                 capture_output=True,
@@ -168,7 +169,7 @@ def _get_browser_version(executable_path: str) -> Optional[str]:
                 if len(lines) > 1:
                     return lines[1].strip()
         else:
-            # macOS/Linux使用--version参数
+            # macOS/Linux使 with --version参数
             result = subprocess.run(
                 [executable_path, "--version"],
                 capture_output=True,
@@ -182,7 +183,7 @@ def _get_browser_version(executable_path: str) -> Optional[str]:
                 if version_match:
                     return version_match.group(1)
     except Exception as e:
-        logger.debug(f"获取浏览器版本失败 {executable_path}: {e}")
+        logger.debug(f"Failed to get browser version {executable_path}: {e}")
     
     return None
 
@@ -261,25 +262,25 @@ def _validate_url(url: str) -> Tuple[bool, str]:
         if all([result.scheme, result.netloc]):
             return True, ""
         else:
-            return False, "URL必须包含协议和域名"
+            return False, "URL must include protocol and domain"
     except Exception as e:
-        return False, f"URL解析失败: {str(e)}"
+        return False, f"URL parsing failed: {str(e)}"
 
 
 def _validate_selector(selector: str) -> Tuple[bool, str]:
     """验证CSS选择器"""
     if not selector or not isinstance(selector, str):
-        return False, "选择器不能为空且必须是字符串"
+        return False, "Selector must not be empty and must be a string"
     
     # 基本验证
     if len(selector) > 1000:
-        return False, "选择器过长"
+        return False, "Selector too long"
     
     # 检查危险字符
     dangerous_patterns = ["javascript:", "data:", "vbscript:"]
     for pattern in dangerous_patterns:
         if pattern in selector.lower():
-            return False, f"选择器包含危险内容: {pattern}"
+            return False, f"Selector contains dangerous content: {pattern}"
     
     return True, ""
 
@@ -290,11 +291,11 @@ def _format_error_result(error: Exception, context: str = "") -> Dict[str, Any]:
     
     # 常见错误类型映射
     error_mapping = {
-        "timeout": "操作超时",
-        "not found": "元素未找到",
-        "network": "网络错误",
-        "permission": "权限错误",
-        "protocol": "协议错误"
+        "timeout": "operation timed out",
+        "not found": "element not found",
+        "network": "network error",
+        "permission": "permission error",
+        "protocol": "protocol error"
     }
     
     error_type = "unknown"
@@ -329,7 +330,7 @@ async def _wait_for_page_ready(page, wait_for: Optional[Dict] = None):
     elif "network" in wait_for:
         network_type = wait_for["network"]
         if network_type == "idle":
-            # 使用 fetchidle 代替已废弃的 networkidle
+            # 使 with  fetchidle 代替已废弃的 networkidle
             await page.wait_for_load_state("networkidle")
         elif network_type == "load":
             await page.wait_for_load_state("load")
@@ -339,11 +340,11 @@ async def _wait_for_page_ready(page, wait_for: Optional[Dict] = None):
 
 
 def _get_browser_config(platform_type: Optional[PlatformType] = None) -> Dict[str, Any]:
-    """获取浏览器配置，根据平台自动调整"""
+    """Get 浏览器配置，根据平台自动调整"""
     if platform_type is None:
         platform_type = _get_platform()
     
-    # 平台特定的用户代理
+    # 平台特定的 with 户代理
     user_agents = {
         PlatformType.MACOS: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         PlatformType.WINDOWS: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -355,7 +356,7 @@ def _get_browser_config(platform_type: Optional[PlatformType] = None) -> Dict[st
         "user_agent": user_agents.get(platform_type, user_agents[PlatformType.MACOS]),
         "ignore_https_errors": True,  # 忽略HTTPS证书错误
         "java_script_enabled": True,
-        "bypass_csp": False,  # 谨慎使用
+        "bypass_csp": False,  # 谨慎使 with 
         "locale": "zh-CN" if platform_type == PlatformType.WINDOWS else "en-US"
     }
 
@@ -379,7 +380,7 @@ async def _launch_browser_with_fallback(p, browser_type: BrowserType = BrowserTy
         RuntimeError: 所有浏览器启动尝试都失败
     """
     detected_browsers = _detect_installed_browsers()
-    logger.info(f"检测到 {len(detected_browsers)} 个可用浏览器")
+    logger.info(f"Detected {len(detected_browsers)} available browsers")
     
     # 按优先级排序：首选类型 > Playwright管理 > 系统安装
     browser_priority = [
@@ -404,7 +405,7 @@ async def _launch_browser_with_fallback(p, browser_type: BrowserType = BrowserTy
         
         for browser_info in matching_browsers:
             try:
-                logger.info(f"尝试启动 {target_type.value} 浏览器 (Playwright管理: {prefer_playwright})")
+                logger.info(f"Attempting to launch {target_type.value} browser (Playwright managed: {prefer_playwright})")
                 
                 # 根据浏览器类型选择启动方法
                 if target_type == BrowserType.CHROMIUM:
@@ -446,39 +447,39 @@ async def _launch_browser_with_fallback(p, browser_type: BrowserType = BrowserTy
                 context = await browser.new_context(**config)
                 page = await context.new_page()
                 
-                logger.info(f"成功启动 {target_type.value} 浏览器")
+                logger.info(f"Successfully launched {target_type.value} browser")
                 return browser, context, page
                 
             except Exception as e:
-                error_msg = f"启动 {target_type.value} 失败: {str(e)}"
+                error_msg = f"Failed to launch {target_type.value}: {str(e)}"
                 launch_errors.append(error_msg)
                 logger.warning(error_msg)
                 continue
     
-    # 如果所有尝试都失败，尝试使用Playwright的默认安装
+    # 如果所有尝试都失败，尝试使 with Playwright的默认安装
     try:
-        logger.info("尝试使用Playwright默认安装")
+        logger.info("Attempting to use Playwright default installation")
         browser = await p.chromium.launch(headless=headless)
         config = context_config or _get_browser_config()
         context = await browser.new_context(**config)
         page = await context.new_page()
-        logger.info("成功使用Playwright默认安装启动浏览器")
+        logger.info("Successfully launched browser with Playwright default installation")
         return browser, context, page
     except Exception as e:
-        launch_errors.append(f"Playwright默认安装失败: {str(e)}")
+        launch_errors.append(f"Playwright default installation failed: {str(e)}")
     
     # 生成详细的错误信息
     error_details = "\n".join(launch_errors)
     platform_info = _get_platform().value
-    browsers_found = [f"{b.type.value} ({'Playwright' if b.is_playwright_managed else '系统'})" 
+    browsers_found = [f"{b.type.value} ({'Playwright' if b.is_playwright_managed else 'System'})" 
                      for b in detected_browsers]
     
     raise RuntimeError(
-        f"无法启动任何浏览器。\n"
-        f"平台: {platform_info}\n"
-        f"检测到的浏览器: {', '.join(browsers_found) if browsers_found else '无'}\n"
-        f"错误详情:\n{error_details}\n"
-        f"请运行以下命令安装浏览器:\n"
+        f"Unable to launch any browser.\n"
+        f"Platform: {platform_info}\n"
+        f"Detected browsers: {', '.join(browsers_found) if browsers_found else 'None'}\n"
+        f"Error details:\n{error_details}\n"
+        f"Please run the following commands to install browsers:\n"
         f"  pip install playwright\n"
         f"  playwright install chromium chrome firefox"
     )
@@ -551,7 +552,7 @@ async def browser_automation(
             - retry_attempts: 重试次数
     """
     start_time = asyncio.get_event_loop().time() if hasattr(asyncio, 'get_event_loop') else 0
-    logger.info(f"browser_automation 开始执行: {url}")
+    logger.info(f"browser_automation starting: {url}")
     
     # 参数验证
     validation_errors = []
@@ -559,47 +560,47 @@ async def browser_automation(
     # 验证URL
     url_valid, url_error = _validate_url(url)
     if not url_valid:
-        validation_errors.append(f"URL验证失败: {url_error}")
+        validation_errors.append(f"URL validation failed: {url_error}")
     
     # 验证actions
     if actions:
         if not isinstance(actions, list):
-            validation_errors.append("actions必须是列表")
+            validation_errors.append("actions must be a list")
         else:
             for i, action in enumerate(actions):
                 if not isinstance(action, dict):
-                    validation_errors.append(f"action[{i}]必须是字典")
+                    validation_errors.append(f"action[{i}] must be a dict")
                 elif "type" not in action:
-                    validation_errors.append(f"action[{i}]缺少type字段")
+                    validation_errors.append(f"action[{i}] missing type field")
                 elif action.get("selector"):
                     selector_valid, selector_error = _validate_selector(action["selector"])
                     if not selector_valid:
-                        validation_errors.append(f"action[{i}]选择器无效: {selector_error}")
+                        validation_errors.append(f"action[{i}] selector invalid: {selector_error}")
     
     # 验证extract
     if extract:
         if not isinstance(extract, list):
-            validation_errors.append("extract必须是列表")
+            validation_errors.append("extract must be a list")
         else:
             valid_extract_types = {"text", "html", "links", "images", "table", "title", "metadata", "all"}
             for extract_type in extract:
                 if extract_type not in valid_extract_types:
-                    validation_errors.append(f"不支持的extract类型: {extract_type}")
+                    validation_errors.append(f"Unsupported extract type: {extract_type}")
     
     # 验证timeout
     if not isinstance(timeout, int) or timeout < 1000 or timeout > 300000:
-        validation_errors.append("timeout必须在1000-300000毫秒之间")
+        validation_errors.append("timeout must be between 1000-300000ms")
     
     # 验证browser_type
     valid_browser_types = {"chromium", "chrome", "firefox", "webkit"}
     if browser_type.lower() not in valid_browser_types:
-        validation_errors.append(f"不支持的browser_type: {browser_type}")
+        validation_errors.append(f"Unsupported browser_type: {browser_type}")
     
     if validation_errors:
         return {
             "success": False,
             "url": url,
-            "error": "参数验证失败",
+            "error": "Parameter validation failed",
             "validation_errors": validation_errors,
             "platform": _get_platform().value
         }
@@ -613,10 +614,10 @@ async def browser_automation(
         return {
             "success": False,
             "url": url,
-            "error": "Playwright未安装",
+            "error": "Playwright not installed",
             "error_type": "import_error",
             "platform": _get_platform().value,
-            "solution": "请运行: pip install playwright && playwright install chromium chrome firefox"
+            "solution": "Please run: pip install playwright && playwright install chromium chrome firefox"
         }
     
     result = {
@@ -670,14 +671,14 @@ async def browser_automation(
                 await page.goto(url, wait_until="domcontentloaded")
                 navigation_end = asyncio.get_event_loop().time() if hasattr(asyncio, 'get_event_loop') else 0
                 
-                logger.info(f"已导航到: {url}")
+                logger.info(f"Navigated to: {url}")
                 result["actions_performed"].append({
                     "type": "goto", 
                     "url": url,
                     "duration": navigation_end - navigation_start if navigation_end > navigation_start else 0
                 })
                 
-                # 获取页面标题
+                # Get 页面标题
                 result["title"] = await page.title()
                 
                 # 执行预加载等待
@@ -716,7 +717,7 @@ async def browser_automation(
                         if element:
                             await element.screenshot(path=screenshot_path)
                         else:
-                            logger.warning(f"截图元素未找到: {selector}")
+                            logger.warning(f"Screenshot element not found: {selector}")
                             await page.screenshot(path=screenshot_path, full_page=full_page)
                     else:
                         await page.screenshot(path=screenshot_path, full_page=full_page)
@@ -738,7 +739,7 @@ async def browser_automation(
                 return result
                 
         except PlaywrightTimeoutError as e:
-            error_result = _format_error_result(e, "操作超时")
+            error_result = _format_error_result(e, "Operation timed out")
             error_result.update({
                 "url": url,
                 "retry_attempts": retry_attempts,
@@ -746,14 +747,14 @@ async def browser_automation(
             })
             
             if attempt < retry_count:
-                logger.warning(f"第 {attempt + 1} 次尝试超时，{retry_delay}秒后重试")
+                logger.warning(f"Attempt {attempt + 1} timed out, retrying in {retry_delay}s")
                 await asyncio.sleep(retry_delay)
                 continue
             else:
                 return error_result
                 
         except Exception as e:
-            error_result = _format_error_result(e, "浏览器自动化失败")
+            error_result = _format_error_result(e, "Browser automation failed")
             error_result.update({
                 "url": url,
                 "retry_attempts": retry_attempts,
@@ -761,7 +762,7 @@ async def browser_automation(
             })
             
             if attempt < retry_count:
-                logger.warning(f"第 {attempt + 1} 次尝试失败，{retry_delay}秒后重试: {str(e)}")
+                logger.warning(f"Attempt {attempt + 1} failed, retrying in {retry_delay}s: {str(e)}")
                 await asyncio.sleep(retry_delay)
                 continue
             else:
@@ -778,7 +779,7 @@ async def browser_automation(
     return {
         "success": False,
         "url": url,
-        "error": f"所有 {retry_count + 1} 次尝试都失败",
+        "error": f"All {retry_count + 1} attempts failed",
         "error_type": "max_retries_exceeded",
         "platform": _get_platform().value,
         "retry_attempts": retry_attempts,
@@ -962,7 +963,7 @@ async def scrape_dynamic_page(
     retry_count: int = 2
 ) -> Dict[str, Any]:
     """
-    抓取动态网页内容 - 适用于JavaScript渲染的页面
+    抓取动态网页内容 - 适 with 于JavaScript渲染的页面
     
     Args:
         url: 目标URL
@@ -980,7 +981,7 @@ async def scrape_dynamic_page(
         抓取结果
     """
     start_time = asyncio.get_event_loop().time() if hasattr(asyncio, 'get_event_loop') else 0
-    logger.info(f"scrape_dynamic_page 开始执行: {url}")
+    logger.info(f"scrape_dynamic_page starting: {url}")
     
     # 参数验证
     url_valid, url_error = _validate_url(url)
@@ -988,7 +989,7 @@ async def scrape_dynamic_page(
         return {
             "success": False,
             "url": url,
-            "error": f"URL验证失败: {url_error}",
+            "error": f"URL validation failed: {url_error}",
             "platform": _get_platform().value
         }
     
@@ -999,7 +1000,7 @@ async def scrape_dynamic_page(
                 return {
                     "success": False,
                     "url": url,
-                    "error": f"选择器[{i}]无效: {selector_error}",
+                    "error": f"Selector [{i}] invalid: {selector_error}",
                     "platform": _get_platform().value
                 }
     
@@ -1009,7 +1010,7 @@ async def scrape_dynamic_page(
             return {
                 "success": False,
                 "url": url,
-                "error": f"等待选择器无效: {selector_error}",
+                "error": f"Wait selector invalid: {selector_error}",
                 "platform": _get_platform().value
             }
     
@@ -1019,7 +1020,7 @@ async def scrape_dynamic_page(
         return {
             "success": False,
             "url": url,
-            "error": "Playwright未安装",
+            "error": "Playwright not installed",
             "error_type": "import_error",
             "platform": _get_platform().value
         }
@@ -1051,7 +1052,7 @@ async def scrape_dynamic_page(
                 page.set_default_navigation_timeout(timeout)
                 
                 await page.goto(url, wait_until="domcontentloaded")
-                logger.info(f"已导航到: {url}")
+                logger.info(f"Navigated to: {url}")
                 
                 if wait_for_selector:
                     await page.wait_for_selector(wait_for_selector, timeout=timeout)
@@ -1111,11 +1112,11 @@ async def scrape_dynamic_page(
                 
         except PlaywrightTimeoutError as e:
             if attempt < retry_count:
-                logger.warning(f"第 {attempt + 1} 次尝试超时，1秒后重试")
+                logger.warning(f"Attempt {attempt + 1} timed out, retrying in 1s")
                 await asyncio.sleep(1)
                 continue
             else:
-                error_result = _format_error_result(e, "抓取超时")
+                error_result = _format_error_result(e, "Scraping timed out")
                 error_result.update({
                     "url": url,
                     "retry_attempts": attempt,
@@ -1125,11 +1126,11 @@ async def scrape_dynamic_page(
                 
         except Exception as e:
             if attempt < retry_count:
-                logger.warning(f"第 {attempt + 1} 次尝试失败，1秒后重试: {str(e)}")
+                logger.warning(f"Attempt {attempt + 1} failed, retrying in 1s: {str(e)}")
                 await asyncio.sleep(1)
                 continue
             else:
-                error_result = _format_error_result(e, "抓取失败")
+                error_result = _format_error_result(e, "Scraping failed")
                 error_result.update({
                     "url": url,
                     "retry_attempts": attempt,
@@ -1147,7 +1148,7 @@ async def scrape_dynamic_page(
     return {
         "success": False,
         "url": url,
-        "error": f"所有 {retry_count + 1} 次尝试都失败",
+        "error": f"All {retry_count + 1} attempts failed",
         "error_type": "max_retries_exceeded",
         "platform": _get_platform().value,
         "retry_attempts": retry_count,
@@ -1190,7 +1191,7 @@ async def take_screenshot(
         截图结果
     """
     start_time = asyncio.get_event_loop().time() if hasattr(asyncio, 'get_event_loop') else 0
-    logger.info(f"take_screenshot 开始执行: {url}")
+    logger.info(f"take_screenshot starting: {url}")
     
     # 参数验证
     url_valid, url_error = _validate_url(url)
@@ -1199,7 +1200,7 @@ async def take_screenshot(
             "success": False,
             "url": url,
             "screenshot_path": output_path,
-            "error": f"URL验证失败: {url_error}",
+            "error": f"URL validation failed: {url_error}",
             "platform": _get_platform().value
         }
     
@@ -1210,7 +1211,7 @@ async def take_screenshot(
                 "success": False,
                 "url": url,
                 "screenshot_path": output_path,
-                "error": f"选择器无效: {selector_error}",
+                "error": f"Selector invalid: {selector_error}",
                 "platform": _get_platform().value
             }
     
@@ -1221,7 +1222,7 @@ async def take_screenshot(
                 "success": False,
                 "url": url,
                 "screenshot_path": output_path,
-                "error": f"等待选择器无效: {selector_error}",
+                "error": f"Wait selector invalid: {selector_error}",
                 "platform": _get_platform().value
             }
     
@@ -1230,7 +1231,7 @@ async def take_screenshot(
             "success": False,
             "url": url,
             "screenshot_path": output_path,
-            "error": "delay必须在0-30000毫秒之间",
+            "error": "delay must be between 0-30000ms",
             "platform": _get_platform().value
         }
     
@@ -1239,7 +1240,7 @@ async def take_screenshot(
             "success": False,
             "url": url,
             "screenshot_path": output_path,
-            "error": "视口尺寸必须在100-5000像素之间",
+            "error": "Viewport dimensions must be between 100-5000 pixels",
             "platform": _get_platform().value
         }
     
@@ -1250,7 +1251,7 @@ async def take_screenshot(
             "success": False,
             "url": url,
             "screenshot_path": output_path,
-            "error": "Playwright未安装",
+            "error": "Playwright not installed",
             "error_type": "import_error",
             "platform": _get_platform().value
         }
@@ -1286,7 +1287,7 @@ async def take_screenshot(
                 page.set_default_navigation_timeout(timeout)
                 
                 await page.goto(url, wait_until="domcontentloaded")
-                logger.info(f"已导航到: {url}")
+                logger.info(f"Navigated to: {url}")
                 
                 if wait_for_selector:
                     await page.wait_for_selector(wait_for_selector, timeout=timeout)
@@ -1305,7 +1306,7 @@ async def take_screenshot(
                         await element.screenshot(path=output_path)
                         result["element_found"] = True
                         
-                        # 获取元素信息
+                        # Get 元素信息
                         element_info = await page.evaluate("""(el) => {
                             const rect = el.getBoundingClientRect();
                             return {
@@ -1322,7 +1323,7 @@ async def take_screenshot(
                         result["element_info"] = element_info
                     else:
                         result["success"] = False
-                        result["error"] = f"未找到元素: {selector}"
+                        result["error"] = f"Element not found: {selector}"
                         result["element_found"] = False
                 else:
                     await page.screenshot(path=output_path, full_page=full_page)
@@ -1333,7 +1334,7 @@ async def take_screenshot(
                 else:
                     result["file_exists"] = False
                     result["success"] = False
-                    result["error"] = "截图文件未生成"
+                    result["error"] = "Screenshot file not generated"
                 
                 result["retry_attempts"] = attempt
                 result["duration"] = (asyncio.get_event_loop().time() if hasattr(asyncio, 'get_event_loop') else 0) - start_time
@@ -1343,11 +1344,11 @@ async def take_screenshot(
                 
         except PlaywrightTimeoutError as e:
             if attempt < retry_count:
-                logger.warning(f"第 {attempt + 1} 次尝试超时，1秒后重试")
+                logger.warning(f"Attempt {attempt + 1} timed out, retrying in 1s")
                 await asyncio.sleep(1)
                 continue
             else:
-                error_result = _format_error_result(e, "截图超时")
+                error_result = _format_error_result(e, "Screenshot timed out")
                 error_result.update({
                     "url": url,
                     "screenshot_path": output_path,
@@ -1358,11 +1359,11 @@ async def take_screenshot(
                 
         except Exception as e:
             if attempt < retry_count:
-                logger.warning(f"第 {attempt + 1} 次尝试失败，1秒后重试: {str(e)}")
+                logger.warning(f"Attempt {attempt + 1} failed, retrying in 1s: {str(e)}")
                 await asyncio.sleep(1)
                 continue
             else:
-                error_result = _format_error_result(e, "截图失败")
+                error_result = _format_error_result(e, "Screenshot failed")
                 error_result.update({
                     "url": url,
                     "screenshot_path": output_path,
@@ -1382,7 +1383,7 @@ async def take_screenshot(
         "success": False,
         "url": url,
         "screenshot_path": output_path,
-        "error": f"所有 {retry_count + 1} 次尝试都失败",
+        "error": f"All {retry_count + 1} attempts failed",
         "error_type": "max_retries_exceeded",
         "platform": _get_platform().value,
         "retry_attempts": retry_count,
@@ -1401,7 +1402,7 @@ async def test_element_exists(
     check_visibility: bool = True
 ) -> Dict[str, Any]:
     """
-    测试页面元素是否存在 - 用于前端测试
+    测试页面元素是否存在 -  with 于前端测试
     
     Args:
         url: 目标URL
@@ -1417,7 +1418,7 @@ async def test_element_exists(
         测试结果
     """
     start_time = asyncio.get_event_loop().time() if hasattr(asyncio, 'get_event_loop') else 0
-    logger.info(f"test_element_exists 开始执行: {url}, selector: {selector}")
+    logger.info(f"test_element_exists starting: {url}, selector: {selector}")
     
     # 参数验证
     url_valid, url_error = _validate_url(url)
@@ -1427,7 +1428,7 @@ async def test_element_exists(
             "url": url,
             "selector": selector,
             "exists": False,
-            "error": f"URL验证失败: {url_error}",
+            "error": f"URL validation failed: {url_error}",
             "platform": _get_platform().value
         }
     
@@ -1438,7 +1439,7 @@ async def test_element_exists(
             "url": url,
             "selector": selector,
             "exists": False,
-            "error": f"选择器无效: {selector_error}",
+            "error": f"Selector invalid: {selector_error}",
             "platform": _get_platform().value
         }
     
@@ -1450,7 +1451,7 @@ async def test_element_exists(
                 "url": url,
                 "selector": selector,
                 "exists": False,
-                "error": f"等待选择器无效: {selector_error}",
+                "error": f"Wait selector invalid: {selector_error}",
                 "platform": _get_platform().value
             }
     
@@ -1462,7 +1463,7 @@ async def test_element_exists(
             "url": url,
             "selector": selector,
             "exists": False,
-            "error": "Playwright未安装",
+            "error": "Playwright not installed",
             "error_type": "import_error",
             "platform": _get_platform().value
         }
@@ -1496,7 +1497,7 @@ async def test_element_exists(
                 page.set_default_navigation_timeout(timeout)
                 
                 await page.goto(url, wait_until="domcontentloaded")
-                logger.info(f"已导航到: {url}")
+                logger.info(f"Navigated to: {url}")
                 
                 if wait_for_selector:
                     await page.wait_for_selector(wait_for_selector, timeout=timeout)
@@ -1509,7 +1510,7 @@ async def test_element_exists(
                 result["exists"] = len(elements) > 0
                 
                 if elements:
-                    # 获取第一个元素的信息
+                    # Get 第一个元素的信息
                     first_element = elements[0]
                     element_info = await page.evaluate("""(el, checkVisibility) => {
                         const rect = el.getBoundingClientRect();
@@ -1546,7 +1547,7 @@ async def test_element_exists(
                     result["element_info"] = element_info
                     result["visible"] = element_info["visible"]
                     
-                    # 获取所有匹配元素的基本信息
+                    # Get 所有匹配元素的基本信息
                     if len(elements) > 1:
                         result["all_elements"] = []
                         for i, element in enumerate(elements[:10]):  # 限制前10个
@@ -1571,11 +1572,11 @@ async def test_element_exists(
                 
         except PlaywrightTimeoutError as e:
             if attempt < retry_count:
-                logger.warning(f"第 {attempt + 1} 次尝试超时，1秒后重试")
+                logger.warning(f"Attempt {attempt + 1} timed out, retrying in 1s")
                 await asyncio.sleep(1)
                 continue
             else:
-                error_result = _format_error_result(e, "元素测试超时")
+                error_result = _format_error_result(e, "Element test timed out")
                 error_result.update({
                     "url": url,
                     "selector": selector,
@@ -1587,11 +1588,11 @@ async def test_element_exists(
                 
         except Exception as e:
             if attempt < retry_count:
-                logger.warning(f"第 {attempt + 1} 次尝试失败，1秒后重试: {str(e)}")
+                logger.warning(f"Attempt {attempt + 1} failed, retrying in 1s: {str(e)}")
                 await asyncio.sleep(1)
                 continue
             else:
-                error_result = _format_error_result(e, "元素测试失败")
+                error_result = _format_error_result(e, "Element test failed")
                 error_result.update({
                     "url": url,
                     "selector": selector,
@@ -1613,7 +1614,7 @@ async def test_element_exists(
         "url": url,
         "selector": selector,
         "exists": False,
-        "error": f"所有 {retry_count + 1} 次尝试都失败",
+        "error": f"All {retry_count + 1} attempts failed",
         "error_type": "max_retries_exceeded",
         "platform": _get_platform().value,
         "retry_attempts": retry_count,
@@ -1623,7 +1624,7 @@ async def test_element_exists(
 
 async def _get_system_browser_info() -> Dict[str, Any]:
     """
-    获取系统浏览器信息 - 用于诊断和调试
+    Get 系统浏览器信息 -  with 于诊断和调试
     
     Returns:
         浏览器信息
@@ -1680,9 +1681,9 @@ async def _check_playwright_installation() -> Dict[str, Any]:
         try:
             import playwright
             result["playwright_installed"] = True
-            result["playwright_version"] = "未知(已安装)"
+            result["playwright_version"] = "Unknown (installed)"
         except ImportError:
-            result["errors"].append("Playwright包未安装")
+            result["errors"].append("Playwright package not installed")
             return result
     
     # 检查浏览器
@@ -1702,7 +1703,7 @@ async def _check_playwright_installation() -> Dict[str, Any]:
                     if os.path.exists(browser_path):
                         result["browsers_installed"].append(browser_type.value)
     except Exception as e:
-        result["errors"].append(f"检查浏览器时出错: {str(e)}")
+        result["errors"].append(f"Error checking browser: {str(e)}")
     
     # 检查系统浏览器
     system_browsers = _detect_installed_browsers()
@@ -1718,52 +1719,46 @@ async def _check_playwright_installation() -> Dict[str, Any]:
     return result
 
 
-# 使用示例
+# 使 with 示例
 async def _example_usage():
-    """使用示例"""
-    print("=== Playwright Skill 使用示例 ===")
-    
-    # 1. 检查系统信息
-    print("\n1. 系统浏览器信息:")
-    browser_info = await _get_system_browser_info()
-    print(f"平台: {browser_info['platform']}")
-    print(f"检测到的浏览器: {len(browser_info['detected_browsers'])} 个")
-    
-    # 2. 检查安装状态
-    print("\n2. Playwright安装状态:")
-    install_status = await _check_playwright_installation()
-    print(f"Playwright已安装: {install_status['playwright_installed']}")
+    """使 with 示例"""
+    print("=== Playwright Skill Usage Examples ===")
+
+    print("\n1. System browser info:")
+    browser_info_result = asyncio.run(get_browser_info())
+    print(f"Platform: {browser_info_result['platform']}")
+    print(f"Detected browsers: {len(browser_info_result['detected_browsers'])}")
+
+    print("\n2. Playwright installation status:")
+    install_status = asyncio.run(check_playwright_install())
+    print(f"Playwright installed: {install_status['playwright_installed']}")
     if install_status['playwright_installed']:
-        print(f"版本: {install_status.get('playwright_version', '未知')}")
-        print(f"Playwright管理的浏览器: {', '.join(install_status['browsers_installed'])}")
-    
-    # 3. 测试简单操作
-    print("\n3. 测试简单操作:")
+        print(f"Version: {install_status.get('playwright_version', 'Unknown')}")
+        print(f"Playwright-managed browsers: {', '.join(install_status['browsers_installed'])}")
+    else:
+        for error in install_status.get('errors', []):
+            print(f"  - {error}")
+
+    print("\n3. Test simple operation:")
+    test_url = "https://www.google.com"
     try:
-        # 测试百度首页
-        test_url = "https://www.baidu.com"
-        print(f"测试URL: {test_url}")
-        
-        # 测试元素存在
-        test_result = await test_element_exists(
+        print(f"Test URL: {test_url}")
+        test_result = asyncio.run(test_element_exists(
             url=test_url,
-            selector="#kw",
-            timeout=10000,
-            retry_count=1
-        )
-        
-        if test_result["success"]:
-            print(f"元素存在: {test_result['exists']}")
-            if test_result["exists"]:
-                print(f"元素数量: {test_result['count']}")
-                print(f"元素可见: {test_result['visible']}")
+            selector="input[name='q']",
+            timeout=15000
+        ))
+        if test_result['success']:
+            print(f"Element exists: {test_result['exists']}")
+            if test_result['exists']:
+                print(f"Element count: {test_result['count']}")
+                print(f"Element visible: {test_result['visible']}")
         else:
-            print(f"测试失败: {test_result['error']}")
-            
+            print(f"Test failed: {test_result['error']}")
     except Exception as e:
-        print(f"示例执行出错: {str(e)}")
-    
-    print("\n=== 示例结束 ===")
+        print(f"Example execution error: {str(e)}")
+
+    print("\n=== End of examples ===")
 
 
 if __name__ == "__main__":

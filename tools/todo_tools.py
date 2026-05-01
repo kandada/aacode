@@ -22,22 +22,22 @@ class TodoTools:
         description: Optional[str] = None,
         item: Optional[str] = None,
         priority: str = "medium",
-        category: str = "任务",
+        category: str = "Task",
         task_id: Optional[str] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """
-        添加待办事项(兼容多种参数格式)
+        添加Todo item(兼容多种参数格式)
 
         Args:
-            description: 待办事项描述(优先使用)
-            item: 待办事项描述(兼容旧格式)
-            title: 待办事项标题(兼容旧格式)
+            description: Todo item描述(优先使 with )
+            item: Todo item描述(兼容旧格式)
+            title: Todo item标题(兼容旧格式)
             priority: 优先级 (high/medium/low)
             category: 分类
-            task_id: 任务ID(可选,用于关联)
+            task_id: 任务ID(可选, with 于关联)
 
-        注意:**kwargs 用于接收并忽略模型可能传入的额外参数
+        注意:**kwargs  with 于接收并忽略模型可能传入的额外参数
 
         Returns:
             操作结果
@@ -48,7 +48,7 @@ class TodoTools:
         if not item_desc:
             return {
                 "success": False,
-                "error": "缺少待办事项描述(需要 description 或 item 参数)",
+                "error": "Missing todo item description (need description or item param)",
             }
         try:
             from ..utils.todo_manager import get_todo_manager
@@ -60,15 +60,15 @@ class TodoTools:
                 todo_manager.current_todo_file is None
                 or not todo_manager.current_todo_file.exists()
             ):
-                # 尝试获取最近的待办清单文件
+                # 尝试Get 最近的Todo files
                 files = await todo_manager.list_todo_files()
                 if files:
-                    # 使用最新的待办清单文件
+                    # 使 with 最新的Todo files
                     latest_file = todo_manager.todo_dir / files[0]["filename"]
                     todo_manager.current_todo_file = latest_file
                 else:
                     # 创建默认待办清单
-                    await todo_manager.create_todo_list("默认任务", "默认项目")
+                    await todo_manager.create_todo_list("Default Task", "Default Project")
 
             success = await todo_manager.add_todo_item(item_desc, priority, category)
 
@@ -77,7 +77,7 @@ class TodoTools:
                 result = {
                     "success": True,
                     "todo_id": todo_id_val,
-                    "message": f"已添加待办事项 [#{todo_id_val}]: {item_desc}（完成时请用 mark_todo_completed(todo_id=\"{todo_id_val}\")）",
+                    "message": f"Added todo item [#{todo_id_val}]: {item_desc} (use mark_todo_completed(todo_id=\"{todo_id_val}\") when done)",
                     "item": item_desc,
                     "priority": priority,
                     "category": category,
@@ -86,32 +86,32 @@ class TodoTools:
                 print(f"✅ {result['message']}")
                 return result
             else:
-                result = {"success": False, "error": "添加待办事项失败"}
+                result = {"success": False, "error": "Add todo item failed"}
                 print(f"⚠️  {result['error']}")
                 return result
 
         except Exception as e:
-            return {"success": False, "error": f"添加待办事项时出错: {str(e)}"}
+            return {"success": False, "error": f"Error adding todo item: {str(e)}"}
 
     async def mark_todo_completed(
         self, item_pattern: str = None, todo_id: str = None, **kwargs
     ) -> Dict[str, Any]:
         """
-        标记待办事项为完成
+        标记Todo item为完成
 
         Args:
-            item_pattern: 待办事项匹配模式（文本）
-            todo_id: 待办事项ID（如 "t1"），由 add_todo_item 返回，优先使用
-            **kwargs: 兼容模型常用参数名（title/item/name/task/todo）
+            item_pattern: Todo item匹配模式（文本）
+            todo_id: Todo itemID（如 "t1"），由 add_todo_item 返回，优先使 with 
+            **kwargs: 兼容模型常 with 参数名（title/item/name/task/todo）
 
         Returns:
             操作结果
         """
-        # 从 kwargs 提取 todo_id（兼容模型可能用的参数名）
+        # 从 kwargs 提取 todo_id（兼容模型可能 with 的参数名）
         if not todo_id:
             todo_id = kwargs.get("todo_id") or kwargs.get("id")
 
-        # 兼容多种参数名获取 item_pattern
+        # 兼容多种参数名Get  item_pattern
         if not item_pattern:
             for key in ("title", "item", "name", "task", "todo", "description"):
                 val = kwargs.get(key)
@@ -122,7 +122,7 @@ class TodoTools:
         if not item_pattern and not todo_id:
             return {
                 "success": False,
-                "error": "缺少 todo_id 或 item_pattern 参数。建议使用 add_todo_item 返回的 todo_id。",
+                "error": "Missing todo_id or item_pattern param. Use todo_id from add_todo_item.",
             }
 
         try:
@@ -138,7 +138,7 @@ class TodoTools:
                 match_info = f"[#{todo_id}]" if todo_id else item_pattern
                 result = {
                     "success": True,
-                    "message": f"已标记待办事项为完成: {match_info}",
+                    "message": f"Marked todo complete: {match_info}",
                     "todo_id": todo_id,
                     "item_pattern": item_pattern,
                 }
@@ -148,25 +148,25 @@ class TodoTools:
                 match_info = f"[#{todo_id}]" if todo_id else item_pattern
                 result = {
                     "success": False,
-                    "error": f"未找到匹配的待办事项: {match_info}",
+                    "error": f"No matching todo item found: {match_info}",
                 }
                 print(f"⚠️  {result['error']}")
                 return result
 
         except Exception as e:
-            return {"success": False, "error": f"标记待办事项完成时出错: {str(e)}"}
+            return {"success": False, "error": f"Error marking todo complete: {str(e)}"}
 
     async def update_todo_item(
         self, old_pattern: str, new_item: str, **kwargs
     ) -> Dict[str, Any]:
         """
-        更新待办事项
+        更新Todo item
 
         Args:
-            old_pattern: 原待办事项匹配模式
-            new_item: 新待办事项描述
+            old_pattern: 原Todo item匹配模式
+            new_item: 新Todo item描述
 
-        注意:**kwargs 用于接收并忽略模型可能传入的额外参数
+        注意:**kwargs  with 于接收并忽略模型可能传入的额外参数
 
         Returns:
             操作结果
@@ -181,24 +181,24 @@ class TodoTools:
             if success:
                 return {
                     "success": True,
-                    "message": f"已更新待办事项: {old_pattern} -> {new_item}",
+                    "message": f"Todo item updated: {old_pattern} -> {new_item}",
                     "old_pattern": old_pattern,
                     "new_item": new_item,
                 }
             else:
                 return {
                     "success": False,
-                    "error": f"未找到匹配的待办事项: {old_pattern}",
+                    "error": f"No matching todo item found: {old_pattern}",
                 }
 
         except Exception as e:
-            return {"success": False, "error": f"更新待办事项时出错: {str(e)}"}
+            return {"success": False, "error": f"Error updating todo item: {str(e)}"}
 
     async def get_todo_summary(self, **kwargs) -> Dict[str, Any]:
         """
-        获取待办清单摘要
+        Get 待办清单摘要
 
-        注意:**kwargs 用于接收并忽略模型可能传入的额外参数
+        注意:**kwargs  with 于接收并忽略模型可能传入的额外参数
 
         Returns:
             摘要信息
@@ -213,14 +213,14 @@ class TodoTools:
             return {"success": "error" not in summary, **summary}
 
         except Exception as e:
-            return {"success": False, "error": f"获取待办清单摘要时出错: {str(e)}"}
+            return {"success": False, "error": f"Error getting todo summary: {str(e)}"}
 
     async def list_todo_files(self) -> Dict[str, Any]:
         """
-        列出所有待办清单文件
+        列出所有Todo files
 
         Returns:
-            待办清单文件列表
+            Todo files列表
         """
         try:
             from ..utils.todo_manager import get_todo_manager
@@ -232,13 +232,13 @@ class TodoTools:
             return {"success": True, "files": files, "count": len(files)}
 
         except Exception as e:
-            return {"success": False, "error": f"列出待办清单文件时出错: {str(e)}"}
+            return {"success": False, "error": f"Error listing todo files: {str(e)}"}
 
     async def add_execution_record(
         self, record: str = None, description: str = None, **kwargs
     ) -> Dict[str, Any]:
         """
-        添加执行记录（已废弃，过程日志由 .aacode/logs/ 承担）
+        添加execute记录（已废弃，过程日志由 .aacode/logs/ 承担）
 
         保留方法签名以向后兼容，静默返回成功。
 
@@ -247,5 +247,5 @@ class TodoTools:
         """
         return {
             "success": True,
-            "message": "执行记录已合并到日志系统",
+            "message": "Execution records have been merged into the log system",
         }
