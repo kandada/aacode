@@ -1,4 +1,4 @@
-[English](README) | 
+[English](README.md) | 
 
 # 🤖 AACode - CLI编程Agent
 

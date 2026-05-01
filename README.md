@@ -1,4 +1,4 @@
-[中文](README_ch) |
+[中文](README_ch.md) |
 
 # 🤖 AACode - CLI Programming Agent
 
