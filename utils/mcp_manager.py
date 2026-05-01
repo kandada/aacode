@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional, Union
 import aiohttp
 from dataclasses import dataclass, field
+from aacode.i18n import t
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -68,7 +69,7 @@ class MCPManager:
                 self._load_default_config()
 
         except Exception as e:
-            print(f"⚠️ 加载MCP配置失败: {e}")
+            print(f"⚠️ Failed to load MCP config: {e}")
             self._load_default_config()
 
     def _load_default_config(self):
@@ -190,7 +191,7 @@ class MCPManager:
                 json.dump(config_data, f, indent=2, ensure_ascii=False)
 
         except Exception as e:
-            print(f"⚠️ 保存MCP配置失败: {e}")
+            print(f"⚠️ Failed to save MCP config: {e}")
 
     async def connect_all(self) -> Dict[str, Any]:
         """连接所有启用的MCP服务器"""
@@ -211,7 +212,7 @@ class MCPManager:
     async def connect_server(self, server_name: str) -> Dict[str, Any]:
         """连接指定的MCP服务器"""
         if server_name not in self.servers:
-            return {"success": False, "error": f"服务器配置不存在: {server_name}"}
+            return {"success": False, "error": f"Server configuration not found: {server_name}"}
 
         server_config = self.servers[server_name]
 
@@ -227,7 +228,7 @@ class MCPManager:
                 if not server_config.url:
                     return {
                         "success": False,
-                        "error": f"SSE服务器 '{server_name}' 缺少URL配置",
+                        "error": f"SSE server '{server_name}' missing URL config",
                     }
                 client = MCPClient(
                     server_url=server_config.url, client_name=f"ai_coder_{server_name}"
@@ -237,7 +238,7 @@ class MCPManager:
             else:
                 return {
                     "success": False,
-                    "error": f"不支持的MCP服务器类型: {server_config.type}",
+                    "error": f"Unsupported MCP server type: {server_config.type}",
                 }
 
             # 连接服务器
@@ -266,10 +267,10 @@ class MCPManager:
                     "tools_count": tools_result.get("count", 0),
                 }
             else:
-                return {"success": False, "error": f"连接MCP服务器失败: {server_name}"}
+                return {"success": False, "error": f"Failed to connect MCP server: {server_name}"}
 
         except Exception as e:
-            return {"success": False, "error": f"连接MCP服务器异常: {str(e)}"}
+            return {"success": False, "error": f"MCP server connection exception: {str(e)}"}
 
     async def disconnect_server(self, server_name: str):
         """断开MCP服务器连接"""
@@ -279,7 +280,7 @@ class MCPManager:
                 del self.clients[server_name]
                 self.connected_servers[server_name] = False
             except Exception as e:
-                print(f"⚠️ 断开MCP服务器失败: {e}")
+                print(f"⚠️ Failed to disconnect MCP server: {e}")
 
     async def disconnect_all(self):
         """断开所有MCP服务器连接"""
@@ -304,7 +305,7 @@ class MCPManager:
                             "info": tool_info,
                         }
             except Exception as e:
-                print(f"⚠️ 获取 {server_name} 工具列表失败: {e}")
+                print(f"⚠️ Failed to get tools from {server_name}: {e}")
 
         return {
             "success": True,
@@ -329,10 +330,10 @@ class MCPManager:
                         actual_tool_name = tool_name
                         break
                 else:
-                    return {"success": False, "error": f"工具不存在: {tool_name}"}
+                    return {"success": False, "error": f"Tool not found: {tool_name}"}
 
             if server_name not in self.clients:
-                return {"success": False, "error": f"MCP服务器未连接: {server_name}"}
+                return {"success": False, "error": f"MCP server not connected: {server_name}"}
 
             client = self.clients[server_name]
             result = await client.call_tool(actual_tool_name, arguments or {})
@@ -344,7 +345,7 @@ class MCPManager:
             return result
 
         except Exception as e:
-            return {"success": False, "error": f"调用MCP工具失败: {str(e)}"}
+            return {"success": False, "error": f"Failed to call MCP tool: {str(e)}"}
 
     async def get_server_status(self) -> Dict[str, Any]:
         """获取所有服务器状态"""
@@ -387,11 +388,11 @@ class MCPManager:
             else:
                 return {
                     "success": True,
-                    "message": f"MCP服务器已添加但未启用: {server_config.name}",
+                    "message": f"MCP server added but not enabled: {server_config.name}",
                 }
 
         except Exception as e:
-            return {"success": False, "error": f"添加MCP服务器失败: {str(e)}"}
+            return {"success": False, "error": f"Failed to add MCP server: {str(e)}"}
 
     async def remove_server(self, server_name: str) -> Dict[str, Any]:
         """移除MCP服务器"""
@@ -405,15 +406,15 @@ class MCPManager:
                 del self.servers[server_name]
                 self.save_config()
 
-            return {"success": True, "message": f"MCP服务器已移除: {server_name}"}
+            return {"success": True, "message": f"MCP server removed: {server_name}"}
 
         except Exception as e:
-            return {"success": False, "error": f"移除MCP服务器失败: {str(e)}"}
+            return {"success": False, "error": f"Failed to remove MCP server: {str(e)}"}
 
     async def enable_server(self, server_name: str) -> Dict[str, Any]:
         """启用MCP服务器"""
         if server_name not in self.servers:
-            return {"success": False, "error": f"服务器不存在: {server_name}"}
+            return {"success": False, "error": f"Server not found: {server_name}"}
 
         self.servers[server_name].enabled = True
         self.save_config()
@@ -423,7 +424,7 @@ class MCPManager:
     async def disable_server(self, server_name: str) -> Dict[str, Any]:
         """禁用MCP服务器"""
         if server_name not in self.servers:
-            return {"success": False, "error": f"服务器不存在: {server_name}"}
+            return {"success": False, "error": f"Server not found: {server_name}"}
 
         # 断开连接
         if server_name in self.clients:
@@ -433,7 +434,7 @@ class MCPManager:
         self.servers[server_name].enabled = False
         self.save_config()
 
-        return {"success": True, "message": f"MCP服务器已禁用: {server_name}"}
+        return {"success": True,                     "message": f"MCP server disabled: {server_name}"}
 
     async def auto_discover_servers(self) -> Dict[str, Any]:
         """自动发现本地MCP服务器"""

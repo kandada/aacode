@@ -20,7 +20,7 @@ class NodePosition:
     end_col_offset: Optional[int] = None
 
     def to_range(self) -> str:
-        """转换为行范围字符串"""
+        """转换为 lines范围字符串"""
         if self.end_line:
             return f"{self.line}-{self.end_line}"
         return str(self.line)
@@ -51,7 +51,7 @@ class ASTNode:
         return result
 
     def find_node_at_line(self, line: int) -> Optional["ASTNode"]:
-        """查找指定行的节点"""
+        """查找指定 lines的节点"""
         if self.position.line <= line and (
             self.position.end_line is None or line <= self.position.end_line
         ):
@@ -207,7 +207,7 @@ class LightAST:
             return ""
 
         try:
-            # 尝试获取源代码
+            # 尝试Get 源代码
             start_line = getattr(expr, "lineno", 1) - 1
             end_line = getattr(expr, "end_lineno", start_line + 2)
             lines = self.lines[start_line:end_line]
@@ -229,7 +229,7 @@ class LightAST:
                         result_lines.append(line)
                 return "\n".join(result_lines)
         except Exception:
-            # 使用ast.unparse
+            # 使 with ast.unparse
             try:
                 return ast.unparse(expr)
             except Exception:
@@ -256,13 +256,13 @@ class LightAST:
         return self.root.find_nodes("Import") + self.root.find_nodes("ImportFrom")
 
     def find_node_at_line(self, line: int) -> Optional[ASTNode]:
-        """查找指定行的节点"""
+        """查找指定 lines的节点"""
         if not self.root:
             return None
         return self.root.find_node_at_line(line)
 
     def get_code_slice(self, start_line: int, end_line: int) -> str:
-        """获取代码片段"""
+        """Get 代码片段"""
         if not self.lines:
             return ""
 
@@ -302,7 +302,7 @@ class IncrementalASTHelper:
     @staticmethod
     def analyze_for_update(code: str, update_type: str, **kwargs) -> Dict[str, Any]:
         """
-        分析代码以进行增量更新
+        分析代码以进 lines增量更新
 
         Args:
             code: 源代码
@@ -399,38 +399,38 @@ class IncrementalASTHelper:
         if not new_code.strip() and update_type != "delete":
             result["warnings"].append("新代码为空")
 
-        # 行号验证
+        #  lines号验证
         line_number = kwargs.get("line_number")
         start_line = kwargs.get("start_line")
         end_line = kwargs.get("end_line")
 
         if line_number is not None and line_number < 1:
-            result["errors"].append(f"无效的行号: {line_number}")
+            result["errors"].append(f"无效的 lines号: {line_number}")
             result["valid"] = False
 
         if start_line is not None and start_line < 1:
-            result["errors"].append(f"无效的起始行: {start_line}")
+            result["errors"].append(f"无效的起始 lines: {start_line}")
             result["valid"] = False
 
         if end_line is not None and end_line < 1:
-            result["errors"].append(f"无效的结束行: {end_line}")
+            result["errors"].append(f"无效的结束 lines: {end_line}")
             result["valid"] = False
 
         if start_line is not None and end_line is not None and start_line > end_line:
-            result["errors"].append(f"起始行({start_line})大于结束行({end_line})")
+            result["errors"].append(f"起始 lines({start_line})大于结束 lines({end_line})")
             result["valid"] = False
 
-        # 行范围验证
+        #  lines范围验证
         line_range = kwargs.get("line_range")
         if line_range:
             if "-" in line_range:
                 try:
                     start, end = map(int, line_range.split("-"))
                     if start < 1 or end < 1 or start > end:
-                        result["errors"].append(f"无效的行范围: {line_range}")
+                        result["errors"].append(f"无效的 lines范围: {line_range}")
                         result["valid"] = False
                 except ValueError:
-                    result["errors"].append(f"无法解析行范围: {line_range}")
+                    result["errors"].append(f"无法解析 lines范围: {line_range}")
                     result["valid"] = False
 
         # 语法验证
@@ -489,7 +489,7 @@ class IncrementalASTHelper:
                     {
                         "action": "update_line",
                         "line": line_number,
-                        "description": f"更新第{line_number}行",
+                        "description": f"更新第{line_number} lines",
                     }
                 )
 
@@ -503,12 +503,12 @@ class IncrementalASTHelper:
                         "action": "replace_range",
                         "start": start_line,
                         "end": end_line,
-                        "description": f"替换{start_line}-{end_line}行",
+                        "description": f"替换{start_line}-{end_line} lines",
                     }
                 )
             else:
                 plan["steps"].append(
-                    {"action": "replace_file", "description": "替换整个文件"}
+                    {"action": "replace_file", "description": "替换整 files"}
                 )
 
         elif update_type == "insert_before":
@@ -518,7 +518,7 @@ class IncrementalASTHelper:
                     {
                         "action": "insert_before_line",
                         "line": line_number,
-                        "description": f"在第{line_number}行之前插入",
+                        "description": f"在第{line_number} lines之前插入",
                     }
                 )
 
@@ -529,7 +529,7 @@ class IncrementalASTHelper:
                     {
                         "action": "insert_after_line",
                         "line": line_number,
-                        "description": f"在第{line_number}行之后插入",
+                        "description": f"在第{line_number} lines之后插入",
                     }
                 )
 
@@ -604,7 +604,7 @@ def analyze_code_structure(code: str) -> Dict[str, Any]:
 
 def get_ast_analysis_for_incremental_update(code: str, **kwargs) -> Dict[str, Any]:
     """
-    为增量更新获取AST分析
+    为增量更新Get AST分析
 
     Args:
         code: 源代码

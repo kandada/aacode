@@ -38,7 +38,7 @@ class BaseAgent(ABC):
             {"role": "system", "content": system_prompt}
         ]
 
-        # 执行统计
+        # execute统计
         self.iterations = 0
         self.tool_calls = 0
         self.start_time = None
@@ -51,20 +51,20 @@ class BaseAgent(ABC):
         task_dir: Optional[Path] = None,
         max_iterations: int = 20,
     ) -> Dict[str, Any]:
-        """执行任务（子类必须实现）"""
+        """execute任务（子类必须实现）"""
         pass
 
     async def call_model(self, messages: List[Dict]) -> str:
-        """调用模型"""
+        """调 with 模型"""
         try:
             return await self.model_caller(messages)
         except Exception as e:
-            raise Exception(f"模型调用失败: {str(e)}")
+            raise Exception(f"Model call failed: {str(e)}")
 
     async def call_tool(self, tool_name: str, tool_input: Dict) -> Any:
-        """调用工具"""
+        """调 with 工具"""
         if tool_name not in self.tools:
-            return {"error": f"工具不存在: {tool_name}"}
+            return {"error": f"Tool not found: {tool_name}"}
 
         tool_func = self.tools[tool_name]
 
@@ -82,10 +82,10 @@ class BaseAgent(ABC):
             return result
 
         except Exception as e:
-            return {"error": f"工具执行失败: {str(e)}"}
+            return {"error": f"Tool execution failed: {str(e)}"}
 
     def get_stats(self) -> Dict[str, Any]:
-        """获取Agent统计信息"""
+        """Get Agent统计信息"""
         return {
             "agent_id": self.agent_id,
             "iterations": self.iterations,
@@ -102,7 +102,7 @@ class BaseAgent(ABC):
 
     async def _parse_model_response(self, response: str) -> tuple:
         """解析模型响应（增强健壮性）"""
-        # 方法1: 尝试解析标准JSON块
+        # Method 1: 尝试解析标准JSON块
         json_patterns = [
             r"```json\n(.*?)\n```",  # 标准json块
             r"```JSON\n(.*?)\n```",  # 大写JSON
@@ -135,7 +135,7 @@ class BaseAgent(ABC):
                 except json.JSONDecodeError:
                     continue
 
-        # 方法2: 尝试直接解析整个响应为JSON
+        # Method 2: 尝试直接解析整个响应为JSON
         try:
             data = json.loads(response.strip())
             thought = (
@@ -181,16 +181,13 @@ class BaseAgent(ABC):
         action_input = None
 
         # 支持多种键名格式
-        thought_keys = ["Thought:", "思考:", "Thinking:", "Reasoning:", "分析:"]
-        action_keys = ["Action:", "动作:", "Tool:", "Function:", "工具:"]
+        thought_keys = ["Thought:", "Thinking:", "Reasoning:"]
+        action_keys = ["Action:", "Tool:", "Function:"]
         action_input_keys = [
             "Action Input:",
             "Action_Input:",
-            "动作输入:",
             "Input:",
-            "输入:",
             "Parameters:",
-            "参数:",
         ]
 
         current_section = None
@@ -230,14 +227,14 @@ class BaseAgent(ABC):
                         section_found = True
                         break
 
-            # 如果没有检测到标题，继续当前部分的内容
+            # 如果没有Detected 标题，继续当前部分的内容
             if not section_found and current_section:
                 if current_section == "thought" and thought:
                     thought += " " + line_stripped
                 elif current_section == "action" and action:
                     action += " " + line_stripped
 
-        # 如果没有找到thought，使用响应的前200个字符
+        # 如果没有Found thought，使 with 响应的前200个字符
         if not thought:
             thought = response[:200] + "..." if len(response) > 200 else response
 

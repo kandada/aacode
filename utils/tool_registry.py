@@ -28,7 +28,7 @@ class ToolParameter:
         if value is not None and not isinstance(value, self.type):
             return (
                 False,
-                f"参数 '{self.name}' 期望类型为 {self.type.__name__}，实际类型为 {type(value).__name__}",
+                f"Parameter '{self.name}' expected type {self.type.__name__}, got {type(value).__name__}",
             )
         return True, None
 
@@ -76,17 +76,17 @@ class ToolSchema:
                     missing_params.append(param.name)
 
         if missing_params:
-            error_msg = f"❌ 缺少必需参数: {', '.join(missing_params)}\n\n"
-            error_msg += "📋 参数说明:\n"
+            error_msg = f"❌ Missing required parameters: {', '.join(missing_params)}\n\n"
+            error_msg += "📋 Parameter details:\n"
             for param_name in missing_params:
                 param = next(p for p in self.parameters if p.name == param_name)
                 aliases_str = (
-                    f" (别名: {', '.join(param.aliases)})" if param.aliases else ""
+                    f" (aliases: {', '.join(param.aliases)})" if param.aliases else ""
                 )
                 error_msg += f"  • {param.name}{aliases_str} ({param.type.__name__})\n"
                 error_msg += f"    {param.description}\n"
                 if param.example is not None:
-                    error_msg += f"    💡 示例: {param.example}\n"
+                    error_msg += f"    💡 Example: {param.example}\n"
             return False, error_msg
 
         # 检查参数类型
@@ -132,31 +132,31 @@ class ToolSchema:
         doc += f"{self.description}\n\n"
 
         if self.parameters:
-            doc += "### 参数\n\n"
+            doc += "### Parameters\n\n"
             for param in self.parameters:
-                required_str = "必需" if param.required else "可选"
+                required_str = "Required" if param.required else "Optional"
                 default_str = (
-                    f"，默认值: {param.default}" if param.default is not None else ""
+                    f", default: {param.default}" if param.default is not None else ""
                 )
 
                 # 添加别名信息
                 aliases_str = ""
                 if param.aliases:
-                    aliases_str = f" (别名: {', '.join(param.aliases)})"
+                    aliases_str = f" (aliases: {', '.join(param.aliases)})"
 
                 doc += f"- **{param.name}**{aliases_str} ({param.type.__name__}, {required_str}{default_str})\n"
                 doc += f"  {param.description}\n"
                 if param.example is not None:
-                    doc += f"  示例: `{param.example}`\n"
+                    doc += f"  Example: `{param.example}`\n"
                 doc += "\n"
 
         if self.returns:
-            doc += f"### 返回值\n\n{self.returns}\n\n"
+            doc += f"### Return Value\n\n{self.returns}\n\n"
 
         if self.examples:
-            doc += "### 使用示例\n\n"
+            doc += "### Usage Examples\n\n"
             for i, example in enumerate(self.examples, 1):
-                doc += f"示例 {i}:\n```python\n"
+                doc += f"Example {i}:\n```python\n"
                 doc += f"{self.name}("
                 params = [f"{k}={repr(v)}" for k, v in example.items()]
                 doc += ", ".join(params)
@@ -188,29 +188,29 @@ class ToolRegistry:
         self.schemas[schema.name] = schema
 
     def get_schema(self, tool_name: str) -> Optional[ToolSchema]:
-        """获取工具schema"""
+        """Get 工具schema"""
         return self.schemas.get(tool_name)
 
     def get_tool(self, tool_name: str) -> Optional[Callable]:
-        """获取工具函数"""
+        """Get 工具函数"""
         return self.tools.get(tool_name)
 
     def validate_call(self, tool_name: str, params: Dict) -> ValidationResult:
-        """验证工具调用"""
+        """验证工具调 with """
         schema = self.get_schema(tool_name)
         if not schema:
             return ValidationResult(
-                valid=False, error_message=f"工具 '{tool_name}' 不存在"
+                valid=False, error_message=f"Tool '{tool_name}' not found"
             )
 
         valid, error_msg = schema.validate(params)
         return ValidationResult(valid=valid, error_message=error_msg)
 
     def get_documentation(self, tool_name: str) -> str:
-        """获取工具文档"""
+        """Get 工具文档"""
         schema = self.get_schema(tool_name)
         if not schema:
-            return f"工具 '{tool_name}' 不存在"
+            return f"Tool '{tool_name}' not found"
         return schema.get_documentation()
 
     def list_tools(self) -> List[str]:
@@ -218,8 +218,8 @@ class ToolRegistry:
         return sorted(self.schemas.keys())
 
     def get_all_documentation(self) -> str:
-        """获取所有工具的文档"""
-        doc = "# 可用工具列表\n\n"
+        """Get 所有工具的文档"""
+        doc = "# Available Tools\n\n"
         for tool_name in self.list_tools():
             doc += self.get_documentation(tool_name)
             doc += "\n---\n\n"
@@ -235,18 +235,18 @@ class ToolRegistry:
 
     def format_tool_not_found_error(self, tool_name: str) -> str:
         """格式化工具不存在的错误消息"""
-        error_msg = f"错误：未知工具 '{tool_name}'\n\n"
+        error_msg = f"Error: Unknown tool '{tool_name}'\n\n"
 
         # 建议相似的工具
         similar = self.suggest_similar_tools(tool_name)
         if similar:
-            error_msg += f"你是否想使用以下工具？\n"
+            error_msg += f"Did you mean one of the following tools?\n"
             for tool in similar:
                 error_msg += f"  - {tool}\n"
             error_msg += "\n"
 
-        # 列出所有可用工具
-        error_msg += "可用工具列表：\n"
+        # 列出所有可 with 工具
+        error_msg += "Available tools:\n"
         for tool in self.list_tools():
             schema = self.get_schema(tool)
             if schema and schema.description:
@@ -260,5 +260,5 @@ _global_registry = ToolRegistry()
 
 
 def get_global_registry() -> ToolRegistry:
-    """获取全局工具注册表"""
+    """Get 全局工具注册表"""
     return _global_registry

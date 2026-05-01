@@ -2,10 +2,11 @@
 # core/react_loop.py
 """
 轻量化ReAct循环实现
-支持异步工具调用和上下文管理
+支持异步工具调 with 和上下文管理
 """
 
 import asyncio
+import time
 import json
 import re
 import sys
@@ -23,11 +24,12 @@ else:
     from ..utils.agent_logger import get_logger
     from ..utils.tool_registry import get_global_registry
     from ..config import settings
+from aacode.i18n import t
 
 
 @dataclass
 class ActionItem:
-    """单个动作项"""
+    """单个Action项"""
 
     action: str
     action_input: Dict
@@ -39,7 +41,7 @@ class ReActStep:
     """ReAct单步记录"""
 
     thought: str
-    raw_response: str = ""  # 模型完整响应（含 thinking），用于保存会话历史
+    raw_response: str = ""  # 模型完整响应（含 thinking），  forSave 会话历史
     actions: Optional[List[ActionItem]] = None
     timestamp: float = 0.0
 
@@ -62,14 +64,14 @@ class AsyncReActLoop:
         context_config: Optional[Any] = None,
     ):
         """
-        初始化ReAct循环
+        initializedReAct循环
 
         Args:
-            model_caller: 异步模型调用函数
+            model_caller: 异步模型调 with 函数
             tools: 工具字典
             context_manager: 上下文管理器
             max_iterations: 最大迭代次数
-            project_path: 项目路径（用于日志记录）
+            project_path: 项目路径（  for日志记录）
             todo_manager: 待办管理器
             context_config: 上下文配置
         """
@@ -87,7 +89,7 @@ class AsyncReActLoop:
         # 上下文配置
         self.context_config = context_config
 
-        # Token计数器（用于智能缩减）
+        # Token计数器（  for智能缩减）
         from ..utils.session_manager import _load_tiktoken_encoding
 
         self.encoding = _load_tiktoken_encoding()
@@ -100,22 +102,22 @@ class AsyncReActLoop:
         history_messages: Optional[List[Dict]] = None,
     ) -> Dict[str, Any]:
         """
-        运行ReAct循环
+        运 linesReAct循环
 
         Args:
             initial_prompt: 初始提示
             task_description: 任务描述
             todo_manager: to-do-list管理器
-            history_messages: 同一会话的历史对话消息（用于多轮任务上下文衔接）
+            history_messages: 同一会话的历史对话消息（  for多轮任务上下文衔接）
 
         Returns:
-            执行结果
+            execute结果
         """
         # 开始日志记录
         if self.logger:
             task_id = await self.logger.start_task(task_description)
 
-        print(f"🚀 开始ReAct循环，最多{self.max_iterations}次迭代")
+        print(f"🚀 Starting ReAct loop, max {self.max_iterations} iterations")
 
         # 初始上下文
         self.current_context = await self.context_manager.get_context()
@@ -128,36 +130,36 @@ class AsyncReActLoop:
                 if "error" not in todo_summary:
                     todo_section = f"""
 
-📋 任务待办清单
-简单任务比如仅仅是回答用户，不需要制定和更新待办清单，查看相关文件和分析后快速回答即可。
-复杂任务则请你使用待办任务清单:
-- 待办清单文件: {todo_summary.get("todo_file", "未知")}
-- 总事项: {todo_summary.get("total_todos", 0)} 
-- 已完成: {todo_summary.get("completed_todos", 0)}
-- 待处理: {todo_summary.get("pending_todos", 0)}
-- 完成率: {todo_summary.get("completion_rate", 0):.1f}%
+📋 Task Todo List
+For simple tasks like just answering a user question, there's no need to create or update a todo list. Check relevant files and analyze quickly before answering.
+For complex tasks, please use the todo task list:
+- Todo files: {todo_summary.get("todo_file", "Unknown")}
+- Total items: {todo_summary.get("total_todos", 0)} 
+- Completed: {todo_summary.get("completed_todos", 0)}
+- Pending: {todo_summary.get("pending_todos", 0)}
+- Completion rate: {todo_summary.get("completion_rate", 0):.1f}%
 
-备注：
-1. add_todo_item 会返回 todo_id（如 t1、t2），请记住它
-2. 标记完成时，优先使用 mark_todo_completed(todo_id="t1")，精确可靠
-3. 如果发现需要新的任务步骤，添加新的待办事项
-4. 如果任务计划有变，更新现有的待办事项
+Notes:
+1. add_todo_item will return a todo_id (e.g., t1, t2), please remember it
+2. When marking complete, prefer mark_todo_completed(todo_id="t1"), which is precise and reliable
+3. If new task steps are needed, add new Todo items
+4. If the task plan changes, update existing Todo items
 
-示例：
-add_todo_item(description="实现认证API") → 返回 todo_id: "t1"
-mark_todo_completed(todo_id="t1") → 精确标记完成
+Example:
+add_todo_item(description="Implement authentication API") → returns todo_id: "t1"
+mark_todo_completed(todo_id="t1") → precisely marked complete
 
 """
             except Exception as e:
-                print(f"⚠️  获取待办清单摘要失败: {e}")
+                print(f"⚠️  Failed to get todo summarized: {e}")
 
         system_prompt = f"""{initial_prompt}{todo_section}
         
-重要提示 - 思考中的规划：
-在每次思考时，请自然地进行规划：
-- 如果是复杂任务（涉及应用、系统、项目、架构等），在前几次思考时先分析需求、检查环境、制定计划
-- 如果任务中包含"规划"、"分析"、"检查"、"重新"、"计划"、"策略"、"需求"等关键词，在思考中主动进行规划
-- 保持思考的自然性，将规划作为思考过程的一部分，而不是独立的任务
+Important - Planning in Thought:
+During each thought, naturally plan:
+- For complex tasks (involving applications, systems, projects, architecture, etc.), analyze requirements, check the environment, and formulate a plan in the first few thoughts
+- If the task contains keywords like "plan", "analyze", "check", "redesign", "strategy", "requirements", proactively plan in your thoughts
+- Keep thinking natural, treating planning as part of the thought process, not a separate task
 
 """
 
@@ -178,12 +180,12 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
                 if role in ("user", "assistant") and content:
                     messages.append({"role": role, "content": content})
             if len(history_messages) > 0:
-                print(f"📜 已加载 {len(history_messages)} 条历史消息到上下文")
+                print(f"📜 Loaded {len(history_messages)}  history messages into context")
 
         messages.append(
             {
                 "role": "user",
-                "content": f"任务：{task_description}\n\n当前上下文：\n{self.current_context}\n\n请按照Thought->Action的格式执行（不要输出Observation，系统会自动执行工具并返回结果）",
+                "content": f"Task: {task_description}\n\nCurrent context:\n{self.current_context}\n\nPlease follow the Thought->Action format to execute (do not output Observation; the system will automatically execute tools and return results)",
             },
         )
 
@@ -191,43 +193,71 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
 
         for iteration in range(self.max_iterations):
             iteration_start = asyncio.get_event_loop().time()
-            print(f"\n🔄 迭代 {iteration + 1}/{self.max_iterations}")
+            print(f"\n🔄 Iteration {iteration + 1}/{self.max_iterations}")
 
-            # 调用模型获取思考
+            # 调 with 模型Get 思考
             model_start = asyncio.get_event_loop().time()
             response = await self.model_caller(messages)
             model_time = asyncio.get_event_loop().time() - model_start
 
-            # 记录模型调用
+            # 提取文本和 tool_calls（兼容旧版返回字符串）
+            if isinstance(response, dict):
+                response_text = response.get("text", "")
+                native_tool_calls = response.get("tool_calls", [])
+                reasoning_content = response.get("reasoning_content", None)
+            else:
+                response_text = response
+                native_tool_calls = []
+                reasoning_content = None
+
+            # Log model call
             if self.logger:
                 await self.logger.log_model_call(
                     messages=messages,
-                    response=response,
+                    response=response_text,
                     response_time=model_time,
                     model_info={"iteration": iteration + 1},
                 )
 
-            # 解析响应（支持多个action）
-            thought, actions = self._parse_response(response)
+            # 解析响应
+            if native_tool_calls:
+                # ─── 原生 Tool Calling 路径 ───
+                thought = response_text
+                actions = []
+                for tc in native_tool_calls:
+                    arguments = tc["arguments"]
+                    if isinstance(arguments, str):
+                        try:
+                            arguments = json.loads(arguments)
+                        except json.JSONDecodeError:
+                            arguments = {}
+                    actions.append(ActionItem(
+                        action=tc["name"],
+                        action_input=arguments,
+                    ))
+            else:
+                # ─── 文本解析路径（回退） ───
+                thought, actions = self._parse_response(response_text)
 
             # 自动更新待办清单（已简化：不再自动记录思考过程）
             # if todo_manager:
             #     await self._update_todo_from_thought(thought, todo_manager)
 
-            # 记录步骤（raw_response 保留完整模型响应，含 thinking，用于会话历史保存）
+            # 记录步骤（raw_response 保留完整模型响应，含 thinking，  for会话历史Save ）
             step = ReActStep(
-                thought=thought, raw_response=response, actions=[], timestamp=asyncio.get_event_loop().time()
+                thought=thought, raw_response=response_text, actions=[], timestamp=asyncio.get_event_loop().time()
             )
             self.steps.append(step)
 
             # 注意：模型思考内容已在 main_agent.py 中流式打印，此处不再重复显示
 
-            # 检查是否完成（没有action表示任务完成）
-            if not actions or await self._is_task_completed(
-                thought, actions[0].action if actions else None, task_description
-            ):
-                print("✅ 任务完成")
-                # thought 内容已在流式输出中打印过，不再重复打印
+            # 检查是否完成
+            if native_tool_calls:
+                # 原生 Tool Calling: 有 tool_calls = 未完成，继续execute
+                pass
+            elif not actions:
+                # 无 tool_calls 且无文本 actions → 任务完成
+                print(t("agent.task_done", default="✅ Task completed"))
                 total_time = asyncio.get_event_loop().time() - start_time
                 if self.logger:
                     await self.logger.log_iteration(
@@ -235,32 +265,32 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
                         thought=thought,
                         action=None,
                         action_input=None,
-                        execution_time=asyncio.get_event_loop().time()
-                        - iteration_start,
+                        execution_time=asyncio.get_event_loop().time() - iteration_start,
                     )
                     await self.logger.finish_task(
                         final_status="completed",
                         total_iterations=iteration + 1,
                         total_time=total_time,
-                        summary={"final_thought": response},
+                        summary={"final_thought": response_text},
                     )
+                self.last_messages = messages
                 return {
                     "status": "completed",
-                    "final_thought": response,
+                    "final_thought": response_text,
                     "iterations": iteration + 1,
                     "steps": self.steps,
                     "total_time": total_time,
                 }
 
-            # 执行所有动作（增强错误处理和重试机制）
+            # execute所有Action（增强错误处理和重试机制）
             all_observations = []
-            all_observations_for_display = []  # 用于显示的简化版本
+            all_observations_for_display = []  #   for显示的简化版本
 
             for i, action_item in enumerate(actions):
-                print(f"🛠️  动作 {i + 1}/{len(actions)}: {action_item.action}")
+                print(f"🛠️  Action {i + 1}/{len(actions)}: {action_item.action}")
                 action_start = asyncio.get_event_loop().time()
 
-                # 添加重试机制（使用配置的最大重试次数，来自 aacode_config.yaml）
+                # 添加重试机制（使 with 配置的最大重试次数，来自 aacode_config.yaml）
                 max_retries = settings.limits.max_retries
                 retry_count = 0
                 observation = None
@@ -268,7 +298,7 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
 
                 while retry_count < max_retries:
                     try:
-                        # 获取完整的工具执行结果
+                        # Get 完整的工具execute结果
                         full_result = await self._execute_action_internal(
                             action_item.action, action_item.action_input
                         )
@@ -276,20 +306,18 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
                         # 为Agent保留完整结果
                         observation = full_result
 
-                        # 为用户显示生成简化版本
+                        # 为 user显示生成简化版本
                         observation_for_display = self._format_observation_for_display(
                             action_item.action, full_result
                         )
 
                         # 检查是否需要重试（某些错误可以重试）
                         if observation and isinstance(observation, str):
-                            if "错误" in observation or "error" in observation.lower():
-                                # 检查是否是可重试的错误
+                            if "error" in observation.lower():
                                 retryable_errors = [
                                     "timeout",
                                     "connection",
                                     "temporary",
-                                    "暂时",
                                 ]
                                 if any(
                                     err in observation.lower()
@@ -298,7 +326,7 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
                                     retry_count += 1
                                     if retry_count < max_retries:
                                         print(
-                                            f"⚠️  动作失败，{retry_count}/{max_retries} 次重试..."
+                                            f"⚠️  Action failed, retry {retry_count}/{max_retries}..."
                                         )
                                         await asyncio.sleep(1)  # 等待1秒后重试
                                         continue
@@ -311,16 +339,16 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
                         retry_count += 1
                         if retry_count < max_retries:
                             print(
-                                f"⚠️  动作异常，{retry_count}/{max_retries} 次重试: {str(e)}"
+                                f"⚠️  Action error, retry {retry_count}/{max_retries}: {str(e)}"
                             )
                             await asyncio.sleep(1)
                         else:
-                            observation = f"执行错误（已重试{max_retries}次）: {str(e)}"
+                            observation = f"Execution error (retried {max_retries} times): {str(e)}"
                             observation_for_display = observation
                             break
 
                 if observation is None:
-                    observation = f"执行失败：未获得结果（已重试{max_retries}次）"
+                    observation = f"Execution failed: no result (retried {max_retries} times)"
                     observation_for_display = observation
 
                 action_time = asyncio.get_event_loop().time() - action_start
@@ -329,10 +357,10 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
                 action_item.observation = observation
                 assert step.actions is not None, "step.actions should not be None"
                 step.actions.append(action_item)
-                all_observations.append(observation)  # Agent获取完整内容
+                all_observations.append(observation)  # AgentGet 完整内容
                 all_observations_for_display.append(
                     observation_for_display or observation or ""
-                )  # 用户看到简化版本
+                )  #  user看到简化版本
 
                 # 实时打印 Observation（供客户端显示）
                 display_obs = observation_for_display or observation or ""
@@ -340,14 +368,14 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
                     # 截断过长的输出，避免刷屏
                     max_display = 3000
                     if len(display_obs) > max_display:
-                        display_obs = display_obs[:max_display] + f"\n... (已截断，共{len(observation_for_display or observation)}字符)"
+                        display_obs = display_obs[:max_display] + f"\n... (truncated, {len(observation_for_display or observation)} chars total)"
                     print(f"📋 Observation:\n{display_obs}", flush=True)
 
                 # 🔥 新增：从错误中自动更新待办清单
                 if todo_manager:
                     await self._update_todo_from_error(observation, todo_manager)
 
-                # 记录工具调用
+                # Log tool call
                 if self.logger:
                     await self.logger.log_tool_call(
                         tool_name=action_item.action,
@@ -355,7 +383,7 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
                         result=observation,
                         execution_time=action_time,
                         success=not (
-                            observation.startswith("错误")
+                            observation.lower().startswith("error")
                             or "error" in observation.lower()
                         ),
                         metadata=(
@@ -363,38 +391,87 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
                         ),
                     )
 
-            # 合并所有观察结果（Agent获取完整内容）
+            # 合并所有观察结果（AgentGet 完整内容）
             observation = "\n".join(
-                [f"动作 {i + 1} 结果: {obs}" for i, obs in enumerate(all_observations)]
+                [f"Action {i + 1}  result: {obs}" for i, obs in enumerate(all_observations)]
             )
 
-            # 合并显示版本（用户看到简化版本）
+            # 合并显示版本（ user看到简化版本）
             observation_for_display = "\n".join(
                 [
-                    f"动作 {i + 1} 结果: {obs}"
+                    f"Action {i + 1}  result: {obs}"
                     for i, obs in enumerate(all_observations_for_display)
                 ]
             )
 
-            # 添加到上下文消息（Agent获取完整内容，包括 thinking）
-            # ⚠️ response 包含完整的 "💭 思考过程:\n{thinking}\n\nThought: {content}"
-            # 不要清理或截断 response，模型需要看到完整的推理过程
-            messages.append({"role": "assistant", "content": response})
-            messages.append(
-                {
-                    "role": "user",
-                    # ⚠️ 这是 react_loop 迭代驱动消息，不是用户输入
-                    # 用 [系统] 前缀明确区分，避免模型误以为是用户在说话
-                    "content": f"[系统] 工具执行结果如下，请根据结果继续执行下一步（Thought→Action），如果任务已完成则直接输出最终总结。\n\n观察：{observation}",
-                }
-            )
+            # 添加到上下文消息
+            if native_tool_calls:
+                # ─── 原生 Tool Calling 消息格式 ───
+                # assistant 消息包含 tool_calls
+                assistant_msg: dict = {"role": "assistant", "content": response_text}
+                # kimi-k2 等模型要求 reasoning_content 必须在 assistant 消息中保持一致
+                if reasoning_content:
+                    assistant_msg["reasoning_content"] = reasoning_content
+                openai_tool_calls = []
+                for tc in native_tool_calls:
+                    args_str = json.dumps(tc["arguments"], ensure_ascii=False) if isinstance(tc["arguments"], dict) else str(tc["arguments"])
+                    openai_tool_calls.append({
+                        "id": tc.get("id", f"call_{len(openai_tool_calls)}"),
+                        "type": "function",
+                        "function": {
+                            "name": tc["name"],
+                            "arguments": args_str,
+                        },
+                    })
+                assistant_msg["tool_calls"] = openai_tool_calls
+                messages.append(assistant_msg)
+
+                # tool 结果消息
+                for tc, observation_item in zip(native_tool_calls, all_observations):
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.get("id", ""),
+                        "content": str(observation_item),
+                    })
+            else:
+                # ─── 文本解析消息格式（保持不变） ───
+                messages.append({"role": "assistant", "content": response_text})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": f"[System] Tool execution result below. Please continue to the next step (Thought→Action) based on the result. If the task is completed, output the final summary directly.\n\nObservation: {observation}",
+                    }
+                )
 
             # 上下文一致性检查（在 messages 更新后，确保 assistant token 统计正确）
+
+            # 检查是否有 finalize_task：消息已记录到会话历史，现在可以安全返回
+            finalize_action = next((a for a in actions if a.action == "finalize_task"), None)
+            if finalize_action:
+                summary_text = finalize_action.action_input.get("summary", "Task completed") if finalize_action.action_input else "Task completed"
+                print(t("agent.task_done_summary", summary=summary_text))
+                total_time = asyncio.get_event_loop().time() - start_time
+                if self.logger:
+                    await self.logger.finish_task(
+                        final_status="completed",
+                        total_iterations=iteration + 1,
+                        total_time=total_time,
+                        summary={"summary": summary_text},
+                    )
+                self.last_messages = messages
+                return {
+                    "status": "completed",
+                    "final_thought": summary_text,
+                    "iterations": iteration + 1,
+                    "steps": self.steps,
+                    "total_time": total_time,
+                }
+
             await self._validate_context_consistency(
                 all_observations, all_observations_for_display, messages
             )
 
-            # 记录迭代（使用完整observation）
+            # Log iteration（使 with 完整observation）
             if self.logger:
                 await self.logger.log_iteration(
                     iteration=iteration + 1,
@@ -405,7 +482,7 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
                     execution_time=asyncio.get_event_loop().time() - iteration_start,
                 )
 
-            # 更新上下文（使用完整observation）
+            # 更新上下文（使 with 完整observation）
             await self.context_manager.update(observation)
             self.current_context = await self.context_manager.get_compact_context()
 
@@ -418,12 +495,12 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
             )
 
             if current_tokens > trigger_tokens:
-                print(f"📊 当前token数: {current_tokens}, 触发阈值: {trigger_tokens}")
+                print(f"📊 Current tokens: {current_tokens}, trigger threshold: {trigger_tokens}")
                 await self._compact_context(messages)
                 if self.logger:
                     await self.logger.log_context_update(
                         update_type="compact",
-                        content=f"在第{iteration + 1}次迭代后执行上下文缩减（token数: {current_tokens}）",
+                        content=f"Context compaction executed after iteration {iteration + 1} (tokens: {current_tokens})",
                     )
 
         total_time = asyncio.get_event_loop().time() - start_time
@@ -437,158 +514,17 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
                 },
             )
 
-        print("\n⚠️  达到最大迭代次数，任务可能未完成")
-        print(f"💡 提示：你可以继续执行追加任务来完成剩余工作")
+        print("\n⚠️  Maximum iterations reached, task may not be complete")
+        print(f"💡 Tip: continue the session to finish remaining work")
 
+        self.last_messages = messages
         return {
             "status": "max_iterations_reached",
             "iterations": self.max_iterations,
             "steps": self.steps,
             "total_time": total_time,
-            "message": "达到最大迭代次数，建议继续会话完成任务",
+            "message": "Maximum iterations reached, suggest continuing the session to complete the task",
         }
-
-    async def _is_task_completed(
-        self, thought: str, first_action: Optional[str], task_description: str,
-        thinking_content: str = ""
-    ) -> bool:
-        """
-        使用模型判断任务是否已完成
-
-        Args:
-            thought: 当前思考内容
-            first_action: 第一个动作（如果有）
-            task_description: 原始任务描述
-            thinking_content: 模型的思考过程（重要！）
-
-        Returns:
-            是否任务已完成
-        """
-        # 如果没有action，才可能是任务完成
-        if not first_action:
-            # 检查最近的执行记录中是否有错误
-            has_recent_errors = await self._check_recent_errors()
-            if has_recent_errors:
-                print("⚠️  检测到最近的执行错误，任务未完成，继续解决问题")
-                return False
-
-            # 使用模型判断
-            try:
-                # 获取最近的执行结果上下文
-                recent_context = await self._get_recent_execution_context()
-
-                completion_check_prompt = f"""请判断以下任务是否已经完成。
-
-原始任务：{task_description}
-
-💭 模型思考过程：
-{thinking_content[:1000] if thinking_content else "无"}
-
-当前行动：
-{thought[:300] if thought else "未生成行动"}
-
-最近执行情况：
-{recent_context}
-
-判断标准：
-1. 核心目标是否已实现（例如：代码已编写且测试通过）
-2. 是否有错误需要修复
-3. 是否有未完成的子任务
-
-请只回答 "YES" 或 "NO"：
-- YES: 任务已全部完成
-- NO: 还有工作需要做
-
-回答："""
-
-                messages = [{"role": "user", "content": completion_check_prompt}]
-                response = await self.model_caller(messages)
-
-                # 解析响应
-                response_clean = response.strip().upper()
-                if "YES" in response_clean[:10]:  # 检查前10个字符
-                    return True
-                else:
-                    return False
-
-            except Exception as e:
-                print(f"⚠️  模型判断任务完成状态失败: {e}")
-                # 回退到简单判断：如果有错误就不算完成
-                if has_recent_errors:
-                    return False
-                return True
-
-        # 如果有action，检查是否是最终确认动作
-        final_actions = ["finalize", "complete_task", "finish"]
-        if first_action.lower() in final_actions:
-            return True
-
-        return False
-
-    async def _check_recent_errors(self) -> bool:
-        """检查最近的步骤中是否有错误"""
-        if not self.steps:
-            return False
-
-        # 检查最近3步
-        recent_steps = self.steps[-3:]
-        error_keywords = [
-            "error",
-            "exception",
-            "traceback",
-            "failed",
-            "failure",
-            "错误",
-            "异常",
-            "失败",
-            "importerror",
-            "syntaxerror",
-            "nameerror",
-            "typeerror",
-            "valueerror",
-            "attributeerror",
-        ]
-
-        for step in recent_steps:
-            if step.actions:
-                for action in step.actions:
-                    if action.observation:
-                        obs_lower = action.observation.lower()
-                        if any(keyword in obs_lower for keyword in error_keywords):
-                            return True
-
-        return False
-
-    async def _get_recent_execution_context(self) -> str:
-        """获取最近的执行上下文（用于任务完成判断）"""
-        if not self.steps:
-            return "无执行记录"
-
-        # 获取最近3步的摘要
-        recent_steps = self.steps[-3:]
-        context_parts = []
-
-        for i, step in enumerate(recent_steps):
-            context_parts.append(
-                f"\n步骤 {len(self.steps) - len(recent_steps) + i + 1}:"
-            )
-            context_parts.append(f"  思考: {step.thought[:500]}...")
-
-            if step.actions:
-                for action in step.actions:
-                    context_parts.append(f"  动作: {action.action}")
-                    if action.observation:
-                        # 检查是否有错误
-                        obs_preview = action.observation[:1000]
-                        if any(
-                            kw in action.observation.lower()
-                            for kw in ["error", "错误", "failed", "失败"]
-                        ):
-                            context_parts.append(f"  ❌ 结果: {obs_preview}...")
-                        else:
-                            context_parts.append(f"  ✅ 结果: {obs_preview}...")
-
-        return "\n".join(context_parts)
 
     def _parse_response(self, response: str) -> tuple:
         """解析模型响应（支持多个action）- 增强健壮性版本"""
@@ -661,14 +597,14 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
                         return thought, actions
                 except json.JSONDecodeError as e:
                     # 记录JSON解析错误，但继续尝试其他格式
-                    print(f"⚠️  JSON解析失败 (pattern {pattern[:20]}...): {str(e)}")
+                    print(f"⚠️  JSON parse failed (pattern {pattern[:20]}...): {str(e)}")
                     if json_str:
-                        print(f"⚠️  尝试的JSON: {json_str[:100]}...")
+                        print(f"⚠️  Attempted JSON: {json_str[:100]}...")
                     else:
-                        print(f"⚠️  尝试的JSON: [无法获取JSON字符串]")
+                        print(f"⚠️  Attempted JSON: [unable to extract JSON string]")
                     continue
                 except Exception as e:
-                    print(f"⚠️  JSON处理异常: {str(e)}")
+                    print(f"⚠️  JSON processing exception: {str(e)}")
                     continue
 
         # 阶段2: 解析文本格式（支持多个action）
@@ -686,7 +622,7 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
         while i < len(lines):
             line = lines[i].strip()
 
-            # 匹配Action行（支持编号，但Action名称不能是"Input"）
+            # 匹配Action lines（支持编号，但Action名称不能是"Input"）
             action_match = re.match(
                 r"Action\s*(\d+)?[:\s]+(?!Input)(.+)", line, re.IGNORECASE
             )
@@ -707,7 +643,7 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
                 # 清理action名称（移除可能的引号和空格）
                 action_name = action_name.strip("`\"' ")
 
-                # 查找对应的Action Input（最多向下查找10行）
+                # 查找对应的Action Input（最多向下查找10 lines）
                 action_input = {}
                 found_input = False
 
@@ -720,9 +656,9 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
                     ):
                         break
 
-                    # 匹配Action Input行
+                    # 匹配 Action Input / Input  lines
                     input_match = re.match(
-                        r"Action\s+Input\s*(\d+)?[:\s]+(.+)", input_line, re.IGNORECASE
+                        r"(?:Action\s*)?Input\s*(\d+)?[:\s]+(.+)", input_line, re.IGNORECASE
                     )
 
                     if input_match:
@@ -747,13 +683,73 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
                                 action_input = json.loads(clean_input)
                                 found_input = True
                                 break
-                            except json.JSONDecodeError as e:
-                                # JSON解析失败，提供详细错误信息
-                                print(f"⚠️  Action Input JSON解析失败: {str(e)} | 原始输入: {input_text[:100]}...")
+                            except json.JSONDecodeError:
+                                # 单 linesJSON parse failed，尝试收集后续 lines拼接完整JSON
+                                collected_lines: list[str] = [input_text]
+                                for k in range(j + 1, min(j + 20, len(lines))):
+                                    # 遇到下一个Action标记则停止收集
+                                    if re.match(
+                                        r"\s*(?:Thought|Action|Observation)[:\s]",
+                                        lines[k],
+                                        re.IGNORECASE,
+                                    ):
+                                        break
+                                    # 遇到空 lines也停止收集
+                                    if not lines[k].strip():
+                                        break
+                                    collected_lines.append(lines[k])
+
+                                    # 方式1: 字面换 lines连接（适  for原本就合法的多 linesJSON）
+                                    json_text1 = "\n".join(collected_lines)
+                                    clean1 = (
+                                        json_text1.replace("```json", "")
+                                        .replace("```", "")
+                                        .strip()
+                                    )
+                                    clean1 = self._fix_json_format(clean1)
+                                    try:
+                                        action_input = json.loads(clean1)
+                                        found_input = True
+                                        break
+                                    except json.JSONDecodeError:
+                                        pass
+
+                                if found_input:
+                                    break
+
+                                # 方式2:  with  json.dumps 安全转义（终极兜底）
+                                # 提取 command 原始值，json.dumps 自动处理所有特殊字符
+                                # （换 lines、双引号、反斜杠、\b \t \r 等转义序列）
+                                full_raw = "\n".join(collected_lines)
+                                cmd_match = re.match(
+                                    r'\s*\{\s*"(command|cmd|shell|script|exec)"\s*:\s*"',
+                                    full_raw,
+                                )
+                                if cmd_match:
+                                    key_name = cmd_match.group(1)
+                                    raw_value = full_raw[cmd_match.end():]
+                                    raw_value = re.sub(r'"\s*\}?\s*$', '', raw_value)
+                                    safe_value = json.dumps(raw_value)
+                                    for kn in [key_name, "command"]:
+                                        safe_json = '{"' + kn + '": ' + safe_value + '}'
+                                        try:
+                                            action_input = json.loads(safe_json)
+                                            found_input = True
+                                            break
+                                        except json.JSONDecodeError:
+                                            continue
+                                    if found_input:
+                                        break
+
+                                if found_input:
+                                    break
+
+                                # 多 lines收集仍失败，提供详细错误信息
+                                print(f"⚠️  Action Input JSON parse failed: multi-line JSON unresolvable | raw input: {input_text[:100]}...")
                                 action_input = {
-                                    "_error": f"JSON格式错误: {str(e)}",
-                                    "_raw": input_text,
-                                    "_suggestion": "请检查JSON格式：1) 键名需要双引号 2) 字符串值需要双引号 3) 不要有尾随逗号",
+                                    "_error": "JSON format error: multi-line text cannot be parsed as valid JSON",
+                                    "_raw": input_text[:500],
+                                    "_suggestion": "Check JSON format: 1) Keys must use double quotes 2) String values must use double quotes 3) Use \\\\n to escape multi-line commands 4) Or use heredoc for multi-line commands",
                                 }
                                 found_input = True
                                 break
@@ -763,7 +759,7 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
                             found_input = True
                             break
 
-                # 添加action（即使没有找到input也添加空字典）
+                # 添加action（即使没有Found input也添加空字典）
                 actions.append(
                     ActionItem(
                         action=action_name,
@@ -773,7 +769,7 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
 
             i += 1
 
-        # 如果没有解析到thought，使用响应的前200字符
+        # 如果没有解析到thought，使 with 响应的前200字符
         if not thought:
             thought = response[:500] + ("..." if len(response) > 200 else "")
 
@@ -781,14 +777,10 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
 
     def _fix_json_format(self, json_str: str) -> str:
         """尝试修复常见的JSON格式问题"""
-        # 移除尾随逗号
         json_str = re.sub(r",\s*}", "}", json_str)
         json_str = re.sub(r",\s*]", "]", json_str)
-
-        # 修复单引号为双引号（但要小心字符串内的单引号）
-        # 这是一个简化的实现，可能不完美
-        # json_str = json_str.replace("'", '"')
-
+        # 修复 JSON 结构字符前出现的转义换 lines（多 lines收集时可能产生）
+        json_str = re.sub(r'\\n(\s*[}\]",:\]])', r"\1", json_str)
         return json_str
 
     def _parse_non_json_input(self, input_text: str) -> Dict:
@@ -809,8 +801,8 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
 
     def _format_observation_for_display(self, action: str, result: Any) -> str:
         """
-        格式化observation用于显示给用户（简化版本）
-        Agent内部仍然获取完整结果
+        格式化observation  for显示给 user（简化版本）
+        Agent内部仍然Get 完整结果
         """
         # 特殊处理：read_file显示可折叠预览
         if action == "read_file" and isinstance(result, dict) and result.get("success"):
@@ -819,16 +811,16 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
             size = result.get("size", 0)
             content = result.get("content", "")
 
-            # 显示前20行作为预览
+            # 显示前20 lines作为预览
             preview_lines = content.split("\n")[:20]
             preview = "\n".join(preview_lines)
 
             if len(content.split("\n")) > 20:
-                return f"📄 {path} ({lines}行, {size}字符)\n```\n{preview}\n...\n```\n📋 显示前20行，完整内容已保存（共{len(content.split('\n'))}行）"
+                return f"📄 {path} ({lines} lines, {size} chars)\n```\n{preview}\n...\n```\n📋 Showing first 20 lines, full content saved ({len(content.split('\n'))} lines total)"
             else:
-                return f"📄 {path} ({lines}行, {size}字符)\n```\n{preview}\n```"
+                return f"📄 {path} ({lines} lines, {size} chars)\n```\n{preview}\n```"
 
-        # 其他动作返回完整结果（可能被截断）
+        # 其他Action返回完整结果（可能被截断）
         result_str = str(result)
 
         # 判断内容类型
@@ -885,24 +877,24 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
         # 如果超过阈值，只显示预览
         if len(result_str) > truncate_threshold:
             preview = result_str[:preview_length]
-            return f"{preview}...\n\n（输出过长已截断，共{len(result_str)}字符，Agent已获取完整内容）"
+            return f"{preview}...\n\n(Output too long, truncated. {len(result_str)} chars total. Agent received full content)"
 
         # 中等长度的输出
         medium_threshold = truncate_threshold // 2
         if len(result_str) > medium_threshold:
             return (
                 result_str[:medium_threshold]
-                + f"...\n\n（已截断，共{len(result_str)}字符）"
+                + f"...\n\n(Truncated, {len(result_str)} chars total)"
             )
 
         return result_str
 
     async def _execute_action_internal(self, action: str, action_input: Dict) -> str:
-        """执行动作（内部方法，返回完整结果）"""
+        """executeAction（内部方法，返回完整结果）"""
         registry = get_global_registry()
 
         if action not in self.tools:
-            # 使用工具注册表提供友好的错误消息
+            # 使 with 工具注册表提供友好的错误消息
             return registry.format_tool_not_found_error(action)
 
         try:
@@ -911,24 +903,24 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
                 action_input = {}
 
             if not isinstance(action_input, dict):
-                return f'错误：动作输入必须是字典格式，当前类型：{type(action_input)}\n提示：请使用 {{"key": "value"}} 格式'
+                return f'Error: Action input must be a dict, current type: {type(action_input)}\nHint: Please use {{"key": "value"}} format'
 
             # 检查是否包含JSON解析错误
             if "_error" in action_input:
                 error_detail = action_input["_error"]
                 raw_input = action_input.get("_raw", "N/A")
-                suggestion = action_input.get("_suggestion", "请检查JSON格式")
-                return f"❌ 参数解析错误\n\n错误: {error_detail}\n原始输入: {raw_input}\n\n💡 {suggestion}"
+                suggestion = action_input.get("_suggestion", "Check JSON format")
+                return f"❌ Parameter parsing error\n\nError: {error_detail}\nRaw input: {raw_input}\n\n💡 {suggestion}"
 
-            # 使用工具注册表验证参数
+            # 使 with 工具注册表验证参数
             validation_result = registry.validate_call(action, action_input)
             if not validation_result.valid:
                 # 返回详细的验证错误消息
-                error_msg = f"❌ 参数验证失败\n\n{validation_result.error_message}\n\n"
-                # 添加工具文档引用
+                error_msg = f"❌ Parameter validation failed\n\n{validation_result.error_message}\n\n"
+                # 添加工具文档引 with 
                 doc = registry.get_documentation(action)
                 if doc:
-                    error_msg += f"📖 工具文档：\n{doc[:500]}..."
+                    error_msg += f"📖 Tool docs:\n{doc[:500]}..."
                 return error_msg
 
             # 规范化参数（将别名转换为标准名称）
@@ -936,15 +928,23 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
             if schema:
                 action_input = schema.normalize_params(action_input)
 
-            # 异步执行工具（增加超时保护）
+            # 异步execute工具（增加timeout保护 + 心跳）
+            async def _heartbeat(act, start):
+                while True:
+                    await asyncio.sleep(3)
+                    elapsed = int(time.time() - start)
+                    print(f"⏳ {act} running... ({elapsed}s)", flush=True)
+
+            hb_task: asyncio.Task | None = None
+            action_start = time.time()
+            if action != "finalize_task":
+                hb_task = asyncio.create_task(_heartbeat(action, action_start))
             try:
                 if asyncio.iscoroutinefunction(self.tools[action]):
-                    # 为异步工具添加超时保护（默认60秒）
                     result = await asyncio.wait_for(
                         self.tools[action](**action_input), timeout=60.0
                     )
                 else:
-                    # 同步函数转异步（也添加超时）
                     result = await asyncio.wait_for(
                         asyncio.get_event_loop().run_in_executor(
                             None, lambda: self.tools[action](**action_input)
@@ -952,31 +952,37 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
                         timeout=60.0,
                     )
             except asyncio.TimeoutError:
-                return f"⏱️ 执行超时\n\n动作 '{action}' 执行超过60秒\n\n💡 提示：任务可能过于复杂，考虑分解为更小的步骤"
+                return f"⏱️ Execution timeout\n\nAction '{action}' timed out after 60s\n\n💡 Tip: Task may be too complex, consider breaking into smaller steps"
             except asyncio.CancelledError:
-                # 任务被取消，重新抛出以便上层处理
                 raise
+            finally:
+                if hb_task:
+                    hb_task.cancel()
+                    try:
+                        await hb_task
+                    except asyncio.CancelledError:
+                        pass
 
             # 处理结果（增强None检查）
             if result is None:
-                return "✅ 执行成功（无返回值）"
+                return "✅ Execution successful (no return value)"
 
             # 处理字典结果（增强错误检测）
             if isinstance(result, dict):
                 if result.get("error"):  # 只在有实际错误内容时才报错
                     error_msg = result["error"]
                     # 提供更友好的错误提示
-                    if "permission" in error_msg.lower() or "权限" in error_msg:
-                        return f"🔒 权限错误\n\n{error_msg}\n\n💡 提示：\n- 检查文件/目录权限\n- 可能需要修改权限或使用其他路径\n- 使用 run_shell 执行 chmod 命令修改权限"
-                    elif "not found" in error_msg.lower() or "不存在" in error_msg:
-                        return f"🔍 未找到错误\n\n{error_msg}\n\n💡 提示：\n- 检查文件/目录是否存在\n- 确认路径是否正确\n- 使用 list_files 查看可用文件"
-                    elif "timeout" in error_msg.lower() or "超时" in error_msg:
-                        return f"⏱️ 超时错误\n\n{error_msg}\n\n💡 提示：\n- 网络请求或操作超时\n- 可以重试或检查网络连接\n- 考虑增加超时时间"
+                    if "permission" in error_msg.lower():
+                        return f"🔒 Permission Error\n\n{error_msg}\n\n💡 Tips:\n- Check file/directory permissions\n- May need to modify permissions or use another path\n- Use run_shell to execute chmod commands"
+                    elif "not found" in error_msg.lower():
+                        return f"🔍 Not Found Error\n\n{error_msg}\n\n💡 Tips:\n- Check if file/directory exists\n- Verify the path is correct\n- Use run_shell + find/ls to view available files"
+                    elif "timeout" in error_msg.lower():
+                        return f"⏱️ Timeout Error\n\n{error_msg}\n\n💡 Tips:\n- Network request or operation timed out\n- Try retrying or check network connection\n- Consider increasing timeout"
                     else:
-                        return f"❌ 错误：{error_msg}"
+                        return f"❌ Error: {error_msg}"
                 elif "success" in result and not result["success"]:
-                    reason = result.get("message") or result.get("reason") or "未知原因"
-                    return f"❌ 执行失败：{reason}"
+                    reason = result.get("message") or result.get("reason") or "Unknown reason"
+                    return f"❌ Execution failed: {reason}"
 
             # 优化：根据内容类型动态调整截断阈值（从配置读取）
             result_str = str(result)
@@ -1035,7 +1041,13 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
                 truncate_threshold = settings.output.normal_output_threshold
                 preview_length = settings.output.normal_output_preview
 
-            # 如果超过阈值，保存到文件
+            # 尊重 run_shell 的 max_output 设置，不做第二层截断
+            max_output_setting = None
+            if action == "run_shell" and isinstance(result, dict):
+                # run_shell 默认不截断，完全信任 atomic_tools 的处理
+                truncate_threshold = 999999999
+
+            # 如果超过阈值，Save 到文件
             if len(result_str) > truncate_threshold:
                 try:
                     output_file = await self.context_manager.save_large_output(
@@ -1043,7 +1055,7 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
                     )
                     # 返回预览内容
                     preview = result_str[:preview_length]
-                    # 如果是测试输出且启用了摘要，尝试提取摘要
+                    # 如果是测试输出且启 with 了 summarized ，尝试提取 summarized 
                     if is_test_output and settings.output.test_summary_enabled:
                         summary_lines = []
                         for line in result_str.split("\n"):
@@ -1062,22 +1074,22 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
                             ):
                                 summary_lines.append(line)
                         if summary_lines:
-                            # 使用配置的最大行数
+                            # 使 with 配置的最大 lines数
                             max_lines = settings.output.test_summary_max_lines
                             summary = "\n".join(summary_lines[-max_lines:])
-                            return f"📄 输出过长（{len(result_str)}字符），已保存到文件：{output_file}\n\n📊 测试摘要：\n{summary}\n\n💡 使用 read_file 工具查看完整内容"
+                            return f"📄 Output too long ({len(result_str)} chars), saved to file: {output_file}\n\n📊 Test summary:\n{summary}\n\n💡 Use read_file tool to view full content"
 
-                    return f"📄 输出过长（{len(result_str)}字符），已保存到文件：{output_file}\n\n💡 使用 read_file 工具查看完整内容\n\n前{preview_length}字符预览：\n{preview}..."
+                    return f"📄 Output too long ({len(result_str)} chars), saved to file: {output_file}\n\n💡 Use read_file tool to view full content\n\nFirst {preview_length} chars preview:\n{preview}..."
                 except Exception as e:
-                    # 如果保存失败，返回更多内容
-                    return f"{result_str[:preview_length]}...\n\n⚠️ （输出过长已截断，保存失败：{str(e)}）"
+                    # 如果Save 失败，返回更多内容
+                    return f"{result_str[:preview_length]}...\n\n⚠️ (Output too long, truncated. Save failed: {str(e)})"
 
             # 对于中等长度的输出，返回更多内容
             medium_threshold = truncate_threshold // 2
             if len(result_str) > medium_threshold:
                 return (
                     result_str[:medium_threshold]
-                    + f"...\n\n（已截断，共{len(result_str)}字符）"
+                + f"...\n\n(Truncated, {len(result_str)} chars total)"
                 )
 
             return result_str
@@ -1085,42 +1097,42 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
         except TypeError as e:
             # 参数错误（增强提示）
             error_str = str(e)
-            error_msg = f"❌ 执行错误：参数不匹配\n\n{error_str}\n\n"
+            error_msg = f"❌ Execution error: parameter mismatch\n\n{error_str}\n\n"
 
             # 尝试提取缺失或多余的参数信息
             if "missing" in error_str.lower():
-                error_msg += "💡 可能原因：缺少必需参数\n"
+                error_msg += "💡 Possible cause: missing required parameters\n"
             elif (
                 "unexpected" in error_str.lower()
                 or "got an unexpected" in error_str.lower()
             ):
-                error_msg += "💡 可能原因：使用了不存在的参数名\n"
+                error_msg += "💡 Possible cause: non-existent parameter name used\n"
             elif "takes" in error_str.lower() and "positional" in error_str.lower():
-                error_msg += "💡 可能原因：参数数量不匹配\n"
+                error_msg += "💡 Possible cause: parameter count mismatch\n"
 
-            error_msg += f"\n📝 你的输入：\n"
-            error_msg += f"  动作：{action}\n"
-            error_msg += f"  参数：{action_input}\n\n"
+            error_msg += f"\n📝 Your input:\n"
+            error_msg += f"  Action: {action}\n"
+            error_msg += f"  Parameters: {action_input}\n\n"
 
             # 添加工具文档（完整版）
             doc = registry.get_documentation(action)
             if doc:
-                error_msg += f"📖 正确的工具文档：\n{doc}\n"
+                error_msg += f"📖 Correct tool documentation:\n{doc}\n"
 
             # 添加常见错误提示
-            error_msg += "\n🔧 常见解决方法：\n"
-            error_msg += "  1. 检查参数名是否拼写正确\n"
-            error_msg += "  2. 确认所有必需参数都已提供\n"
-            error_msg += "  3. 检查参数类型是否正确（字符串、数字等）\n"
-            error_msg += "  4. 参考上面的工具文档和示例\n"
+            error_msg += "\n🔧 Common solutions:\n"
+            error_msg += "  1. Check if parameter names are spelled correctly\n"
+            error_msg += "  2. Ensure all required parameters are provided\n"
+            error_msg += "  3. Verify parameter types are correct (string, number, etc.)\n"
+            error_msg += "  4. Refer to the tool documentation and examples above\n"
 
             return error_msg
         except FileNotFoundError as e:
-            return f"🔍 执行错误：文件未找到\n\n{str(e)}\n\n💡 提示：\n- 检查文件路径是否正确\n- 确认文件是否存在\n- 使用 list_files 查看可用文件"
+            return f"🔍 Execution error: file not found\n\n{str(e)}\n\n💡 Tips:\n- Check if file path is correct\n- Verify the file exists\n- Use run_shell + find/ls to view available files"
         except PermissionError as e:
-            return f"🔒 执行错误：权限不足\n\n{str(e)}\n\n💡 提示：\n- 可能需要修改文件权限\n- 使用 run_shell 执行 chmod 命令\n- 或选择有权限的目录"
+            return f"🔒 Execution error: insufficient permissions\n\n{str(e)}\n\n💡 Tips:\n- May need to modify file permissions\n- Use run_shell to execute chmod command\n- Or choose a directory with proper access"
         except ConnectionError as e:
-            return f"🌐 执行错误：网络连接失败\n\n{str(e)}\n\n💡 提示：\n- 检查网络连接\n- 稍后重试\n- 检查防火墙设置"
+            return f"🌐 Execution error: network connection failed\n\n{str(e)}\n\n💡 Tips:\n- Check network connection\n- Retry later\n- Check firewall settings"
         except Exception as e:
             # 提供更详细的错误信息（增强诊断）
             import traceback
@@ -1131,28 +1143,28 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
 
             # 特殊错误类型的友好提示
             friendly_tips = {
-                "JSONDecodeError": "JSON格式错误，请检查输入的JSON字符串格式",
-                "KeyError": "缺少必需的键，请检查输入参数",
-                "ValueError": "值错误，请检查输入参数的值是否有效",
-                "ImportError": "导入错误，可能缺少依赖包，使用 run_shell 安装",
-                "ModuleNotFoundError": "模块未找到，使用 run_shell 安装依赖包",
-                "AttributeError": "属性错误，对象可能不存在该属性或方法",
-                "IndexError": "索引错误，列表索引超出范围",
-                "KeyboardInterrupt": "用户中断操作",
+                "JSONDecodeError": "JSON format error, check the input JSON string format",
+                "KeyError": "Missing required key, check the input parameters",
+                "ValueError": "Value error, check if the input parameter value is valid",
+                "ImportError": "Import error, possibly missing dependency package, use run_shell to install",
+                "ModuleNotFoundError": "Module not found, use run_shell to install the dependency package",
+                "AttributeError": "Attribute error, the object may not have this attribute or method",
+                "IndexError": "Index error, list index out of range",
+                "KeyboardInterrupt": "user interrupted operation",
             }
 
-            tip = friendly_tips.get(error_type, "请检查错误信息并修正")
+            tip = friendly_tips.get(error_type, "Check the error message and fix accordingly")
 
-            return f"❌ 执行错误：{error_type}\n\n{error_msg}\n\n💡 提示：{tip}\n\n📋 详细信息：\n{error_trace[:300]}..."
+            return f"❌ Execution error: {error_type}\n\n{error_msg}\n\n💡 Tip: {tip}\n\n📋 Details:\n{error_trace[:300]}..."
 
     async def _compact_context(self, messages: List[Dict]):
         """上下文缩减 - 智能版：让模型参与判断重要信息，并缩减文件内容"""
-        print("📦 执行智能上下文缩减...")
+        print("📦 Executing smart context compaction...")
 
-        # 保存完整历史到文件
+        # Save 完整历史到文件
         history_file = await self.context_manager.save_history(self.steps)
 
-        # 从配置获取参数
+        # 从配置Get 参数
         keep_messages = (
             self.context_config.compact_keep_messages if self.context_config else 20
         )
@@ -1170,7 +1182,7 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
 
         # 计算需要缩减的消息范围
         if len(messages) <= keep_messages:
-            print("✅ 消息数量未超过阈值，无需缩减")
+            print("✅ Message count within threshold, no compaction needed")
             return
 
         # 提取需要总结的中间消息（保留系统提示、前N轮、最近N轮）
@@ -1190,19 +1202,19 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
         )
 
         if not middle_messages:
-            print("✅ 没有中间消息需要缩减")
+            print("✅ No intermediate messages to compact")
             return
 
-        # 智能缩减文件内容：将大段文件内容保存到.aacode，只保留摘要
+        # 智能缩减文件内容：将大段文件内容Save 到.aacode，只保留 summarized 
         middle_messages = await self._compact_file_contents(middle_messages)
 
-        # 使用模型生成三块智能摘要
+        # 使 with 模型生成三块智能 summarized 
         try:
             summaries = await self._generate_three_part_summary(
                 middle_messages, self.steps[-summary_steps:]
             )
         except Exception as e:
-            print(f"⚠️  智能摘要生成失败，使用简单摘要: {e}")
+            print(t("context.smart_summary_fail", e=str(e)))
             summary = await self._generate_summary(self.steps[-summary_steps:])
             summaries = {
                 "file_content_summary": "",
@@ -1214,29 +1226,29 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
         compacted_messages = system_messages.copy()
         compacted_messages.extend(first_rounds_messages)  # 添加前N轮（任务规划）
 
-        # 插入三块智能摘要
+        # 插入三块智能 summarized 
         compact_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        summary_content = f"""## 🧠 智能历史摘要（AI生成）
+        summary_content = f"""## 🧠 Smart History Summary (AI Generated)
 
-**⏰ 压缩时间**: {compact_time}
+**⏰ Compaction Time**: {compact_time}
 
-### 📁 文件内容摘要
-{summaries["file_content_summary"] or "无文件读取操作"}
+### 📁 File Content Summary
+{summaries["file_content_summary"] or "No file read operations"}
 
-### 🔧 工具执行摘要
-{summaries["tool_execution_summary"] or "无工具执行"}
+### 🔧 Tool Execution Summary
+{summaries["tool_execution_summary"] or "No tool execution"}
 
-### 💡 重要信息（保留原样）
-{summaries["keep_original_summary"] or "无需特别保留的信息"}
+### 💡 Important Information (Kept Original)
+{summaries["keep_original_summary"] or "No special information to retain"}
 
-**完整历史**: {history_file}
+**Full History**: {history_file}
 
-**重要提示**: 
-- 上述摘要由AI分析生成，分类保留了关键信息
-- 文件内容已归档，可通过归档路径重新读取
-- 如需查看完整历史，使用 read_file 工具读取上述文件
-- 继续执行当前任务，参考最近的观察结果
-- 避免重复已完成的工作"""
+**Important Notes**: 
+- The above summary was generated by AI analysis, categorically retaining key information
+- File contents have been archived and can be re-read via the archive path
+- To view the full history, use the read_file tool to read the above file
+- Continue executing the current task, referencing recent observations
+- Avoid duplicating already completed work"""
 
         compacted_messages.append({"role": "system", "content": summary_content})
 
@@ -1250,18 +1262,15 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
         messages.clear()
         messages.extend(compacted_messages)
 
-        print(f"✅ 智能上下文缩减完成：{len(messages)} 条消息 | Token: {old_tokens} → {new_tokens} (减少 {(old_tokens - new_tokens) / old_tokens * 100:.1f}%) | 保护前{protect_first_rounds}轮 | 保留最近{keep_rounds}轮 | 摘要{len(middle_messages)}条")
+        print(f"✅ Smart context compaction done: {len(messages)} messages | Token: {old_tokens} → {new_tokens} (reduced {(old_tokens - new_tokens) / old_tokens * 100:.1f}%) | Protected first {protect_first_rounds} rounds | Kept last {keep_rounds} rounds | Summarized {len(middle_messages)} messages")
 
     async def _compact_file_contents(self, messages: List[Dict]) -> List[Dict]:
         """
-        智能缩减内容：将大段内容保存到.aacode，只保留摘要和路径
+        智能缩减内容：将大段内容Save 到.aacode，只保留 summarized 和路径
 
         处理的内容类型：
-        1. read_file 的文件内容
+        1. read_file 的文件内容（已移除，现通过run_shell读取）
         2. run_shell 的长输出
-        3. search_files 的搜索结果
-        4. list_files 的文件列表
-        5. execute_python 的执行输出
 
         Args:
             messages: 消息列表
@@ -1275,7 +1284,7 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
             content = msg.get("content", "")
 
             # 跳过已经归档的内容（避免重复处理）
-            if "[已归档]" in content or "归档路径:" in content:
+            if "[Archived]" in content or "Archive path:" in content:
                 compacted.append(msg)
                 continue
 
@@ -1298,52 +1307,52 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
                     content_type = self._detect_content_type(content, content_block)
                     identifier = self._extract_identifier(content, content_type)
 
-                    # 保存到.aacode/context/
+                    # Save 到.aacode/context/
                     try:
                         saved_path = await self.context_manager.save_large_output(
                             content_block,
                             f"{content_type}_{identifier}_{asyncio.get_event_loop().time():.0f}.txt",
                         )
 
-                        # 生成智能摘要
+                        # 生成智能 summarized 
                         summary = self._generate_content_summary(
                             content_block, content_type
                         )
 
-                        # 替换为简短引用（包含摘要、路径和哈希）
+                        # 替换为简短引 with （包含 summarized 、路径和哈希）
                         # 从路径中提取哈希值
                         import re
 
                         hash_match = re.search(r"_([a-f0-9]{8})\.txt$", saved_path)
-                        hash_info = f"哈希: {hash_match.group(1)}" if hash_match else ""
+                        hash_info = f"Hash: {hash_match.group(1)}" if hash_match else ""
 
                         if content_type == "file_content":
-                            replacement = f"""[{self._get_content_type_name(content_type)}已归档]
-原文件: {identifier}
-归档路径: {saved_path}
-大小: {len(content_block)} 字符
+                            replacement = f"""[{self._get_content_type_name(content_type)} Archived]
+Original file: {identifier}
+Archive path: {saved_path}
+Size: {len(content_block)} chars
 {hash_info}
-摘要: {summary}
-💡 如需查看完整内容，使用 read_file 工具读取归档文件: {saved_path}"""
+Summary: {summary}
+💡 To view full content, use run_shell to read the archive file: {saved_path}"""
                         else:
-                            replacement = f"""[{self._get_content_type_name(content_type)}已归档]
-标识: {identifier}
-归档路径: {saved_path}
-大小: {len(content_block)} 字符
+                            replacement = f"""[{self._get_content_type_name(content_type)} Archived]
+Identifier: {identifier}
+Archive path: {saved_path}
+Size: {len(content_block)} chars
 {hash_info}
-摘要: {summary}
-💡 如需查看完整内容，使用 read_file 工具读取归档文件: {saved_path}"""
+Summary: {summary}
+💡 To view full content, use run_shell to read the archive file: {saved_path}"""
 
                         new_content = new_content.replace(content_block, replacement)
                         content_modified = True
 
                     except Exception as e:
-                        print(f"⚠️  保存{content_type}内容失败: {e}")
+                        print(f"⚠️  Save {content_type} content failed: {e}")
 
                 # 策略2：如果没有代码块，但内容很长（>1500字符），检查是否有大段文本
                 if not content_modified and len(content) > 1500:
                     # 检查是否有搜索结果、文件列表等
-                    if "匹配" in content or "search" in content.lower():
+                    if "match" in content.lower() or "search" in content.lower():
                         content_type = "search_results"
                         identifier = self._extract_identifier(content, content_type)
 
@@ -1358,24 +1367,24 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
                             )
 
                             if content_type == "file_content":
-                                new_content = f"""[{self._get_content_type_name(content_type)}已归档]
-原文件: {identifier}
-归档路径: {saved_path}
-大小: {len(content)} 字符
-摘要: {summary}
-💡 如需查看完整内容，使用 read_file 工具读取归档文件，或自己搜索文件"""
+                                new_content = f"""[{self._get_content_type_name(content_type)} Archived]
+Original file: {identifier}
+Archive path: {saved_path}
+Size: {len(content)} chars
+Summary: {summary}
+💡 To view full content, use read_file to read the archive file, or search for files yourself"""
                             else:
-                                new_content = f"""[{self._get_content_type_name(content_type)}已归档]
-标识: {identifier}
-归档路径: {saved_path}
-大小: {len(content)} 字符
-摘要: {summary}
-💡 如需查看完整内容，使用 read_file 工具读取归档文件，或自己自主搜索需要的文件"""
+                                new_content = f"""[{self._get_content_type_name(content_type)} Archived]
+Identifier: {identifier}
+Archive path: {saved_path}
+Size: {len(content)} chars
+Summary: {summary}
+💡 To view full content, use read_file to read the archive file, or search for files yourself"""
 
                             content_modified = True
 
                         except Exception as e:
-                            print(f"⚠️  保存{content_type}内容失败: {e}")
+                            print(f"⚠️  Save {content_type} content failed: {e}")
 
                 # 如果内容被修改，更新消息
                 if content_modified:
@@ -1393,23 +1402,16 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
         # 检查上下文关键词
         if any(
             kw in full_lower
-            for kw in ["文件内容", "file content", "读取文件", "read_file"]
+            for kw in ["file content", "read_file"]
         ):
             return "file_content"
         elif any(
             kw in full_lower
-            for kw in ["执行命令", "run_shell", "命令输出", "command output", "stdout"]
+            for kw in ["Executing command", "run_shell", "command output", "stdout"]
         ):
             return "shell_output"
         elif any(
-            kw in full_lower for kw in ["搜索结果", "search_files", "search results"]
-        ):
-            return "search_results"
-        elif any(kw in full_lower for kw in ["文件列表", "list_files", "file list"]):
-            return "file_list"
-        elif any(
-            kw in full_lower
-            for kw in ["执行结果", "execute_python", "代码输出", "code output"]
+            kw in full_lower             for kw in ["code output"]
         ):
             return "code_output"
         else:
@@ -1422,7 +1424,7 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
 
         if content_type == "file_content":
             # 策略1: 从观察内容开头提取文件路径（read_file 的标准格式）
-            # 格式: "观察：文件内容\n```python\n# path/to/file.py\n..."
+            # format: "观察：文件内容\n```python\n# path/to/file.py\n..."
             match = re.search(
                 r"```[a-z]*\s*\n\s*#\s*([^\n]+\.[\w]+)", full_content, re.IGNORECASE
             )
@@ -1431,7 +1433,7 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
 
             # 策略2: 查找明确的文件路径标记
             match = re.search(
-                r"(?:文件路径|file path|读取文件|read_file)[:\s]+([^\n\s]+\.[\w]+)",
+                r"(?:file path|read_file)[:\s]+([^\n\s]+\.[\w]+)",
                 full_content,
                 re.IGNORECASE,
             )
@@ -1452,7 +1454,7 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
         elif content_type == "shell_output":
             # 提取命令
             match = re.search(
-                r"(?:命令|command)[:\s]+([^\n]+)", full_content, re.IGNORECASE
+                r"(?:command)[:\s]+([^\n]+)", full_content, re.IGNORECASE
             )
             if match:
                 cmd = match.group(1).strip()
@@ -1470,7 +1472,7 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
         elif content_type == "search_results":
             # 提取搜索查询
             match = re.search(
-                r"(?:搜索|search|query)[:\s]+([^\n]+)", full_content, re.IGNORECASE
+                r"(?:search|query)[:\s]+([^\n]+)", full_content, re.IGNORECASE
             )
             if match:
                 query = (
@@ -1493,7 +1495,7 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
             return "content"
 
     def _generate_content_summary(self, content_block: str, content_type: str) -> str:
-        """生成内容的智能摘要"""
+        """生成内容的智能 summarized """
         # 提取前200字符作为预览
         preview = content_block[:200].replace("\n", " ").strip()
         if len(content_block) > 200:
@@ -1503,137 +1505,116 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
         if content_type == "shell_output":
             # 检查是否有错误
             if "error" in content_block.lower() or "failed" in content_block.lower():
-                preview = "⚠️ 包含错误信息 | " + preview
+                preview = "⚠️ Contains error info | " + preview
             elif (
                 "success" in content_block.lower() or "passed" in content_block.lower()
             ):
-                preview = "✅ 执行成功 | " + preview
+                preview = "✅ Execution successful | " + preview
 
         elif content_type == "search_results":
             # 统计匹配数
             import re
 
             matches = len(re.findall(r"\n", content_block[:1000]))
-            preview = f"约 {matches} 个匹配 | " + preview
+            preview = f"~{matches} matches | " + preview
 
         elif content_type == "file_list":
             # 统计文件数
             import re
 
             files = len(re.findall(r"\n", content_block[:1000]))
-            preview = f"约 {files} 个文件 | " + preview
+            preview = f"~{files} files | " + preview
 
         return preview
 
     def _get_content_type_name(self, content_type: str) -> str:
-        """获取内容类型的友好名称"""
+        """Get friendly name for content type"""
         names = {
-            "file_content": "文件内容",
-            "shell_output": "命令输出",
-            "search_results": "搜索结果",
-            "file_list": "文件列表",
-            "code_output": "代码输出",
-            "content": "内容",
+            "file_content": "File Content",
+            "shell_output": "Shell Output",
+            "search_results": "Search Results",
+            "file_list": "File List",
+            "code_output": "Code Output",
+            "content": "Content",
         }
-        return names.get(content_type, "内容")
+        return names.get(content_type, "Content")
 
     async def _generate_intelligent_summary(
         self, middle_messages: List[Dict], recent_steps: List[ReActStep]
     ) -> str:
-        """使用模型生成智能摘要"""
-        # 构建摘要请求
-        summary_prompt = f"""请分析以下对话历史和执行步骤，生成一个简洁但全面的摘要。
+        """Use model to generate intelligent summary"""
+        # 构建 summarized 请求
+        summary_prompt = f"""Please analyze the following conversation history and execution steps, and generate a concise but comprehensive summary.
 
-**摘要要求**：
-1. 保留所有关键决策和重要发现
-2. 记录已完成的主要任务和子任务
-3. 标注遇到的重要错误和解决方案
-4. 保留重要的文件路径、配置信息
-5. 删除冗余和重复的信息
-6. 使用结构化格式（标题、列表）
-7. 控制在500-800字符内
+**Summary Requirements**:
+1. Retain all key decisions and important discoveries
+2. Record completed main tasks and subtasks
+3. Note important errors encountered and solutions
+4. Retain important file paths and configuration information
+5. Remove redundant and duplicate information
+6. Use structured format (headings, lists)
+7. Keep within 500-800 characters
 
-**工具内容卸载原则**（重要！）：
-对于已经完成其目的的工具输出，应该适当缩减，但必须保留归档路径：
+**Tool Content Offloading Principles** (Important!):
+For tool outputs that have completed their purpose, they should be appropriately condensed, but archive paths must be retained:
 
-1. **已归档的内容**：
-   - 如果看到 "[xxx已归档]" 标记，说明完整内容已保存
-   - 摘要中必须保留归档路径，格式：`归档: .aacode/context/xxx.txt`
-   - 可以进一步精简摘要，但不能删除归档路径
+1. **Archived Content**:
+   - If you see "[xxx Archived]" markers, the full content has been saved
+   - Archive paths must be retained in the summary, format: `Archive: .aacode/context/xxx.txt`
+   - The summary can be further condensed, but archive paths cannot be deleted
 
-2. **read_file 的内容**：
-   - 如果文件内容已经被使用（如：已经根据内容编写了代码、已经理解了配置）
-   - 摘要：保留关键信息 + 归档路径
-   - 例：`已读取 config.py，了解数据库配置 | 归档: .aacode/context/file_content_xxx.txt`
+2. **read_file Content**:
+   - If the file content has already been used (e.g., code has been written based on it, configuration has been understood)
+   - Summary: Retain key info + archive path
+   - Example: `Read config.py, understood database config | Archive: .aacode/context/file_content_xxx.txt`
 
-3. **run_shell 的输出**：
-   - 如果命令输出已经被处理（如：已经根据版本信息安装了包）
-   - 摘要：保留结果 + 归档路径
-   - 例：`执行 pytest，15 passed | 归档: .aacode/context/shell_output_xxx.txt`
+3. **run_shell Output**:
+- If the command output has already been processed (e.g., packages installed based on version info)
+   - Summary: Retain results + archive path
+   - Example: `Ran pytest, 15 passed | Archive: .aacode/context/shell_output_xxx.txt`
 
-4. **search_files 的结果**：
-   - 如果搜索结果已经被使用（如：已经找到目标文件）
-   - 摘要：保留关键发现 + 归档路径
-   - 例：`搜索到 10 个匹配，定位到 utils/helper.py | 归档: .aacode/context/search_results_xxx.txt`
+ 4. **run_shell Output** (using shell commands like grep/find instead of search):
+    - If search results have already been used (e.g., target file found and modified)
+    - Summary: Only keep "Ran xxx command, found N matches, located xxx file"
 
-5. **list_files 的结果**：
-   - 如果文件列表已经被使用（如：已经了解项目结构）
-   - 摘要：保留结构概览 + 归档路径
-   - 例：`项目包含 50 个文件，主要模块 core/, utils/ | 归档: .aacode/context/file_list_xxx.txt`
+**Key Principles**:
+- ✅ Must retain: Archive paths (.aacode/context/xxx.txt)
+- ✅ Must retain: Key decisions and discoveries
+- ✅ Can condense: Detailed output content
+- ❌ Cannot delete: Archive path references
+- ❌ Cannot delete: Unresolved error information
+   - Summary: Only keep "Read xxx file, understood yyy", do not retain full content
+   - Exception: If may be needed for reference later, retain key parts
 
-**关键原则**：
-- ✅ 必须保留：归档路径（.aacode/context/xxx.txt）
-- ✅ 必须保留：关键决策和发现
-- ✅ 可以精简：详细的输出内容
-- ❌ 不能删除：归档路径引用
-- ❌ 不能删除：未解决的错误信息
-   - 摘要：只保留"已读取 xxx 文件，了解了 yyy"，不保留完整内容
-   - 例外：如果后续可能还需要参考，保留关键部分
+2. **run_shell Output**:
+- If the command output has already been processed (e.g., packages installed based on version info, bugs fixed based on test results)
+   - Summary: Only keep "Ran xxx command, result was yyy", do not retain full output
+   - Exception: If it's an error message and unresolved, retain detailed information
 
-2. **run_shell 的输出**：
-   - 如果命令输出已经被处理（如：已经根据版本信息安装了包、已经根据测试结果修复了bug）
-   - 摘要：只保留"执行了 xxx 命令，结果是 yyy"，不保留完整输出
-   - 例外：如果是错误信息且未解决，保留详细信息
+ **Criteria for Offloading**:
+- ✅ Can offload: Tool output has achieved its purpose (understanding, verification, locating, etc.)
+- ✅ Can offload: Subsequent steps did not reference this content again
+- ❌ Cannot offload: Content contains unresolved errors
+- ❌ Cannot offload: Content is the core reference material for the current task
+- ❌ Cannot offload: Subsequent steps may need to view it again
 
-3. **search_files 的结果**：
-   - 如果搜索结果已经被使用（如：已经找到了目标文件并进行了修改）
-   - 摘要：只保留"搜索到 N 个匹配，定位到 xxx 文件"
-   - 例外：如果还需要进一步分析，保留关键匹配
+**Summary Examples**:
 
-4. **list_files 的结果**：
-   - 如果文件列表已经被使用（如：已经了解了项目结构）
-   - 摘要：只保留"项目包含 N 个文件，主要有 xxx, yyy"
-   - 例外：如果还需要查找特定文件，保留完整列表
-
-5. **execute_python 的输出**：
-   - 如果代码执行结果已经被验证（如：测试通过、功能正常）
-   - 摘要：只保留"执行了 xxx 代码，测试通过"
-   - 例外：如果有错误需要修复，保留错误信息
-
-**判断是否可以卸载的标准**：
-- ✅ 可以卸载：工具输出已经达成了其目的（理解、验证、定位等）
-- ✅ 可以卸载：后续步骤没有再次引用该内容
-- ❌ 不能卸载：内容包含未解决的错误
-- ❌ 不能卸载：内容是当前任务的核心参考资料
-- ❌ 不能卸载：后续步骤可能需要再次查看
-
-**摘要示例**：
-
-不好的摘要（保留了太多已使用的内容）：
+Bad summary (retained too much already-used content):
 ```
-步骤1: 读取了 config.py 文件
-内容: [完整的500行配置文件内容]
-步骤2: 根据配置文件修改了数据库连接
+Step 1: Read config.py file
+Content: [Complete 500-line config file content]
+Step 2: Modified database connection based on config file
 ```
 
-好的摘要（适当卸载）：
+Good summary (properly offloaded):
 ```
-步骤1: 读取 config.py，了解了数据库配置（host=localhost, port=5432）
-步骤2: 根据配置修改了数据库连接，测试通过
-[config.py 完整内容已归档，如需查看使用 read_file 工具]
+Step 1: Read config.py, understood database config (host=localhost, port=5432)
+Step 2: Modified database connection based on config, tests passed
+[config.py full content archived, use read_file if needed]
 ```
 
-**对话历史**（{len(middle_messages)}条消息）：
+**Conversation History** ({len(middle_messages)} messages):
 """
 
         # 添加中间消息的简要内容
@@ -1643,31 +1624,32 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
             summary_prompt += f"\n[{role}] {content}..."
 
         if len(middle_messages) > 20:
-            summary_prompt += f"\n... 还有 {len(middle_messages) - 20} 条消息"
+            summary_prompt += f"\n... {len(middle_messages) - 20} more messages"
 
-        # 添加执行步骤
-        summary_prompt += f"\n\n**执行步骤**（最近{len(recent_steps)}步）：\n"
+        # 添加execute步骤
+        summary_prompt += f"\n\n**Execution Steps** (last {len(recent_steps)} steps):\n"
         for i, step in enumerate(recent_steps):
-            summary_prompt += f"\n步骤{i + 1}: {step.thought[:150]}..."
+            summary_prompt += f"\nStep {i + 1}: {step.thought[:150]}..."
             if step.actions:
                 summary_prompt += (
-                    f"\n  动作: {', '.join([a.action for a in step.actions])}"
+                    f"\n  Action: {', '.join([a.action for a in step.actions])}"
                 )
 
         summary_prompt += (
-            "\n\n请生成摘要（500-800字符），注意适当卸载已完成目的的工具内容："
+            "\n\nPlease generate a summary (500-800 chars), properly offloading tool content that has completed its purpose:"
         )
 
-        # 调用模型生成摘要
+        # 调 with 模型生成 summarized 
         try:
             summary_messages = [{"role": "user", "content": summary_prompt}]
             summary_response = await asyncio.wait_for(
                 self.model_caller(summary_messages),
-                timeout=30.0,  # 30秒超时
+                timeout=30.0,  # 30秒timeout
             )
 
-            # 清理摘要（移除可能的markdown格式）
-            summary = summary_response.strip()
+            # 清理 summarized （移除可能的markdown格式）
+            summary_text = summary_response.get("text", summary_response) if isinstance(summary_response, dict) else summary_response
+            summary = summary_text.strip()
             if summary.startswith("```"):
                 summary = "\n".join(summary.split("\n")[1:-1])
 
@@ -1677,17 +1659,17 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
 
             return summary
         except asyncio.TimeoutError:
-            return "摘要生成超时，请查看完整历史"
+            return "Summary generation timed out, please check full history"
         except Exception as e:
-            return f"摘要生成失败: {str(e)}"
+            return f"Summary generation failed: {str(e)}"
 
     async def _generate_three_part_summary(
         self, middle_messages: List[Dict], recent_steps: List[ReActStep]
     ) -> Dict[str, str]:
-        """使用模型生成三块分类摘要"""
-        summary_prompt = f"""请分析以下对话历史，生成三块分类摘要。
+        """Use model to generate three-part classified summary"""
+        summary_prompt = f"""Please analyze the following conversation history and generate a three-part classified summary.
 
-**对话历史**（{len(middle_messages)}条消息）：
+**Conversation History** ({len(middle_messages)} messages):
 """
 
         # 添加中间消息的简要内容
@@ -1697,58 +1679,59 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
             summary_prompt += f"\n[{role}] {content}..."
 
         if len(middle_messages) > 30:
-            summary_prompt += f"\n... 还有 {len(middle_messages) - 30} 条消息"
+            summary_prompt += f"\n... {len(middle_messages) - 30} more messages"
 
         summary_prompt += f"""
 
-**要求**：生成三块摘要，返回JSON格式：
+**Requirements**: Generate a three-part summary, return JSON format:
 
 {{
-  "file_content_summary": "文件内容摘要（200-300字）",
-  "tool_execution_summary": "工具执行摘要（200-300字）",
-  "keep_original_summary": "需要保留原样的重要信息（100-200字）"
+  "file_content_summary": "File content summary (200-300 words)",
+  "tool_execution_summary": "Tool execution summary (200-300 words)",
+  "keep_original_summary": "Important information to retain as-is (100-200 words)"
 }}
 
-**各块说明**：
+**Section Descriptions**:
 
-1. **file_content_summary**（文件内容摘要）：
-   - 总结所有 read_file 操作
-   - 格式：`读取了 config.py（数据库配置）、main.py（主程序）| 归档: .aacode/context/xxx.txt`
-   - 必须保留归档路径
-   - 如果没有文件读取，返回空字符串
+1. **file_content_summary**:
+   - Summarize all read_file operations
+   - Format: `Read config.py (database config), main.py (main program) | Archive: .aacode/context/xxx.txt`
+   - Must retain archive paths
+   - If no file reads, return empty string
 
-2. **tool_execution_summary**（工具执行摘要）：
-   - 总结 run_shell、search_files、list_files 等工具执行
-   - 格式：`执行了3次测试（2次通过），搜索到10个匹配文件 | 归档: .aacode/context/xxx.txt`
-   - 保留关键结果和归档路径
-   - 如果没有工具执行，返回空字符串
+2. **tool_execution_summary**:
+   - Summarize run_shell and other tool executions
+   - Format: `Ran 3 tests (2 passed), several file operations | Archive: .aacode/context/xxx.txt`
+   - Retain key results and archive paths
+   - If no tool executions, return empty string
 
-3. **keep_original_summary**（重要信息保留）：
-   - 包含未解决的错误
-   - 包含关键决策和架构选择
-   - 包含重要技术依赖和技术参数
-   - 包含关键工具执行结果
-   - 如果没有需要特别保留的，返回空字符串
+3. **keep_original_summary**:
+   - Include unresolved errors
+   - Include key decisions and architecture choices
+   - Include important technical dependencies and parameters
+   - Include key tool execution results
+   - If nothing special to retain, return empty string
 
-**关键原则**：
-- ✅ 必须保留所有归档路径（.aacode/context/xxx.txt）
-- ✅ 已归档内容只保留摘要+路径，不保留详细内容
-- ✅ 未解决的错误必须在 keep_original_summary 中
-- ❌ 不要重复信息
-- ❌ 不要保留已完成任务的详细输出
+**Key Principles**:
+- ✅ Must retain all archive paths (.aacode/context/xxx.txt)
+- ✅ Archived content only keeps summary + path, not detailed content
+- ✅ Unresolved errors must be in keep_original_summary
+- ❌ Do not duplicate information
+- ❌ Do not retain detailed output of completed tasks
 
-请返回JSON格式的三块摘要："""
+Please return the three-part summary in JSON format:"""
 
-        # 调用模型生成摘要
+        # 调 with 模型生成 summarized 
         try:
             summary_messages = [{"role": "user", "content": summary_prompt}]
             summary_response = await asyncio.wait_for(
                 self.model_caller(summary_messages),
-                timeout=60.0,  # 60秒超时
+                timeout=60.0,  # 60秒timeout
             )
 
             # 解析JSON响应
-            summaries = self._extract_json_from_response(summary_response)
+            summary_text2 = summary_response.get("text", summary_response) if isinstance(summary_response, dict) else summary_response
+            summaries = self._extract_json_from_response(summary_text2)
 
             if summaries and isinstance(summaries, dict):
                 return {
@@ -1768,22 +1751,21 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
         except asyncio.TimeoutError:
             return {
                 "file_content_summary": "",
-                "tool_execution_summary": "摘要生成超时",
-                "keep_original_summary": "",
+                "tool_execution_summary": "Summary generation timed out",
             }
         except Exception as e:
             return {
                 "file_content_summary": "",
-                "tool_execution_summary": f"摘要生成失败: {str(e)}",
+                "tool_execution_summary": f"Summary generation failed: {str(e)}",
                 "keep_original_summary": "",
             }
 
     def _extract_json_from_response(self, response: str) -> Optional[Dict]:
-        """从模型响应中提取JSON（复用健壮的解析逻辑）"""
+        """从模型响应中提取JSON（复 with 健壮的解析逻辑）"""
         import json
         import re
 
-        # 使用与 _parse_response 相同的JSON解析模式
+        # 使 with 与 _parse_response 相同的JSON解析模式
         json_patterns = [
             r"```json\s*\n(.*?)\n```",  # 标准json代码块
             r"```JSON\s*\n(.*?)\n```",  # 大写JSON
@@ -1832,36 +1814,36 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
             # 1. 处理字典格式的observation
             if isinstance(observation, dict):
                 # 特殊处理：run_shell 的返回
-                # run_shell 总是返回 success=True（工具执行成功）
+                # run_shell 总是返回 success=True（工具execute成功）
                 # 需要检查 returncode 来判断命令是否成功
                 if "returncode" in observation:
                     returncode = observation.get("returncode", 0)
                     if returncode == 0:
-                        # 命令执行成功，不是错误
+                        # 命令execute成功，不是错误
                         return
-                    # returncode != 0，继续检查是否需要添加待办事项
-                    # 但不是所有非零退出码都需要添加待办事项
-                    # 例如：grep 没找到匹配（退出码1）是正常的
+                    # returncode != 0，继续检查是否需要添加Todo item
+                    # 但不是所有非零退出码都需要添加Todo item
+                    # 例如：grep 没Found 匹配（退出码1）是正常的
                     stderr = observation.get("stderr", "")
                     if stderr and any(
                         err in stderr.lower()
                         for err in ["error", "exception", "traceback", "failed"]
                     ):
-                        # stderr 中有明确的错误信息，才添加待办事项
+                        # stderr 中有明确的错误信息，才添加Todo item
                         pass
                     else:
-                        # 只是非零退出码，但没有明确错误，不添加待办事项
+                        # 只是非零退出码，但没有明确错误，不添加Todo item
                         return
 
                 # 如果明确标记为成功，直接返回
                 if observation.get("success") is True and "error" not in observation:
                     return
 
-                # 如果有 error 字段但 success=True，可能是超时等情况
+                # 如果有 error 字段但 success=True，可能是timeout等情况
                 if observation.get("success") is True and "error" in observation:
-                    # 检查是否是超时
+                    # 检查是否是timeout
                     if observation.get("timeout"):
-                        # 超时可以添加待办事项
+                        # timeout可以添加Todo item
                         pass
                     else:
                         # 其他情况，提取 error 字段
@@ -1886,7 +1868,6 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
                 "'success': true",
                 '"success": true',
                 "✅",
-                "成功",
                 "successfully",
                 "completed",
                 "passed",
@@ -1915,17 +1896,16 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
                 "exception:",
                 # 明确的错误标记
                 "❌",
-                "执行失败",
                 "execution failed",
                 "command failed",
                 # 参数错误
-                "参数验证失败",
+                "Parameter validation failed",
                 "parameter validation failed",
                 # 权限错误
                 "permission denied",
-                "权限不足",
-                # 工具执行异常
-                "工具执行异常",
+                "insufficient permission",
+                # 工具execute异常
+                "tool execution error",
             ]
 
             has_error = any(indicator in obs_lower for indicator in error_indicators)
@@ -1935,8 +1915,8 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
                 # 检查是否是真正的错误消息格式
                 import re
 
-                # 匹配 "error: xxx" 或 "错误: xxx" 格式
-                if re.search(r"(error|错误)[:\s]+\w+", obs_lower):
+                # 匹配 "error: xxx" 格式
+                if re.search(r"(error)[:\s]+\w+", obs_lower):
                     has_error = True
 
             if not has_error:
@@ -1945,18 +1925,18 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
             # 6. 提取更详细的错误信息
             error_type, error_detail = self._extract_error_info(obs_str)
 
-            # 7. 只有在错误类型明确时才添加待办事项
-            if error_type != "未知错误":
+            # 7. 只有在错误类型明确时才添加Todo item
+            if error_type != "Unknown error":
                 fix_task = f"{error_type}: {error_detail}"
                 await todo_manager.add_todo_item(
-                    item=fix_task, priority="high", category="错误修复"
+                    item=fix_task, priority="high", category="Error Fix"
                 )
 
-                # 不再打印"已自动添加待办事项"，因为 add_todo_item 已经打印了
+                # 不再打印"已自动添加Todo item"，因为 add_todo_item 已经打印了
                 # 只在日志级别记录
                 pass
             else:
-                # 未知错误：不自动添加待办事项，避免噪音
+                # 未知错误：不自动添加Todo item，避免噪音
                 pass
 
         except Exception as e:
@@ -1985,29 +1965,29 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
                 error_detail = match.group(2).strip()[:150]
                 return error_name, error_detail
 
-        # 2. 尝试匹配命令执行失败（改进：更精确的匹配）
-        if "命令执行失败" in observation or "command failed" in observation.lower():
+        # 2. 尝试匹配命令execute失败（改进：更精确的匹配）
+        if "command failed" in observation.lower():
             # 提取退出码
-            exitcode_match = re.search(r"退出码[:\s]+(\d+)", observation)
+            exitcode_match = re.search(r"exit code[:\s]+(\d+)", observation)
             if exitcode_match:
                 exitcode = exitcode_match.group(1)
                 # 提取 stderr 或错误消息
                 stderr_match = re.search(
-                    r"错误输出[:\s]+(.+)", observation, re.IGNORECASE | re.DOTALL
+                    r"error output[:\s]+(.+)", observation, re.IGNORECASE | re.DOTALL
                 )
                 if stderr_match:
                     stderr_text = stderr_match.group(1).strip()[:150]
-                    return "命令执行失败", f"退出码 {exitcode}: {stderr_text}"
-                return "命令执行失败", f"退出码 {exitcode}"
+                    return "Command Execution Failed", f"Exit code {exitcode}: {stderr_text}"
+                return "Command Execution Failed", f"Exit code {exitcode}"
 
             # 没有退出码信息，尝试提取错误输出
             stderr_match = re.search(
-                r"错误输出[:\s]+(.+)", observation, re.IGNORECASE | re.DOTALL
+                r"error output[:\s]+(.+)", observation, re.IGNORECASE | re.DOTALL
             )
             if stderr_match:
-                return "命令执行失败", stderr_match.group(1).strip()[:150]
+                return "Command Execution Failed", stderr_match.group(1).strip()[:150]
 
-            return "命令执行失败", "命令返回非零退出码"
+            return "Command Execution Failed", "Command returned non-zero exit code"
 
         # 3. 检查 returncode 或 exit code
         if "returncode" in observation.lower() or "exit code" in observation.lower():
@@ -2015,45 +1995,45 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
                 r"stderr[:\s]+(.+)", observation, re.IGNORECASE | re.DOTALL
             )
             if stderr_match:
-                return "命令执行失败", stderr_match.group(1).strip()[:150]
-            return "命令执行失败", "命令返回非零退出码"
+                return "Command Execution Failed", stderr_match.group(1).strip()[:150]
+            return "Command Execution Failed", "Command returned non-zero exit code"
 
         # 4. 尝试匹配参数错误
         if (
-            "参数验证失败" in observation
+            "Parameter validation failed" in observation
             or "parameter validation failed" in observation.lower()
         ):
             # 提取参数名
-            param_match = re.search(r"参数[:\s]+(\w+)", observation)
+            param_match = re.search(r"parameter[:\s]+(\w+)", observation)
             if param_match:
-                return "参数错误", f"参数 {param_match.group(1)} 验证失败"
-            return "参数错误", observation[:150]
+                return "Parameter Error", f"Parameter {param_match.group(1)} validation failed"
+            return "Parameter Error", observation[:150]
 
         # 5. 尝试匹配权限错误
-        if "权限" in observation or "permission" in observation.lower():
-            return "权限错误", observation[:150]
+        if "permission" in observation.lower():
+            return "Permission Error", observation[:150]
 
         # 6. 尝试匹配文件不存在
-        if "不存在" in observation or "not found" in observation.lower():
-            return "文件不存在", observation[:150]
+        if "not found" in observation.lower():
+            return "File Not Found", observation[:150]
 
         # 7. 未知错误
-        return "未知错误", observation[:150]
+        return "Unknown Error", observation[:150]
 
     async def _generate_summary(self, recent_steps: List[ReActStep]) -> str:
-        """生成步骤摘要 - 优化：包含更多关键信息"""
+        """生成步骤 summarized  - 优化：包含更多关键信息"""
         summary_parts = []
         for i, step in enumerate(recent_steps):
             # 保留更多思考内容（从100提高到200字符）
             thought_preview = step.thought[:200] + (
                 "..." if len(step.thought) > 200 else ""
             )
-            summary_parts.append(f"\n### 步骤 {i + 1}")
-            summary_parts.append(f"**思考**: {thought_preview}")
+            summary_parts.append(f"\n### Step {i + 1}")
+            summary_parts.append(f"**Thought**: {thought_preview}")
 
             if step.actions:
                 summary_parts.append(
-                    f"**动作**: {', '.join([a.action for a in step.actions])}"
+                    f"**Action**: {', '.join([a.action for a in step.actions])}"
                 )
 
                 # 添加关键观察结果
@@ -2077,15 +2057,15 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
         验证上下文一致性
 
         Args:
-            all_observations: Agent获取的完整观察结果
-            all_observations_for_display: 用户看到的简化观察结果
+            all_observations: AgentGet 的完整观察结果
+            all_observations_for_display:  user看到的简化观察结果
             messages: 当前消息列表
         """
         # 1. 检查观察结果数量一致性
         if len(all_observations) != len(all_observations_for_display):
-            print(f"⚠️  上下文一致性警告：观察结果数量不匹配 | Agent观察数: {len(all_observations)}, 用户观察数: {len(all_observations_for_display)}")
+            print(f"⚠️  Context consistency warning: observation count mismatch | Agent: {len(all_observations)}, User: {len(all_observations_for_display)}")
 
-        # 2. 检查token使用情况
+        # 2. 检查token使 with 情况
         current_tokens = self._estimate_tokens(messages)
         if current_tokens > 5000:  # 警告阈值
             # 显示消息分布
@@ -2098,7 +2078,7 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
             assistant_tokens = self._estimate_tokens(
                 [msg for msg in messages if msg.get("role") == "assistant"]
             )
-            print(f"📊 上下文大小监控：当前约{current_tokens} tokens | 系统: {system_tokens} | 用户: {user_tokens} | Assistant: {assistant_tokens}")
+            print(f"📊 Context monitor: ~{current_tokens} tokens |  System: {system_tokens} |  User: {user_tokens} | Assistant: {assistant_tokens}")
 
         # 3. 检查归档路径是否保留（简化版本中）
         for i, obs_display in enumerate(all_observations_for_display):
@@ -2116,10 +2096,10 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
                     )
                     if archive_match:
                         archive_file = archive_match.group(1)
-                        print(f"✅ 归档路径一致性：动作{i + 1}归档到 {archive_file}")
+                        print(f"✅ Archive path match: action{i + 1}archived to  {archive_file}")
                 else:
                     print(
-                        f"⚠️  归档路径不一致：动作{i + 1}的简化版本包含归档路径，但完整版本可能丢失"
+                        f"⚠️  Archive path inconsistency: Action {i + 1} simplified version has archive path but full version may be missing"
                     )
 
     def _estimate_tokens(self, messages: List[Dict]) -> int:
@@ -2133,7 +2113,7 @@ mark_todo_completed(todo_id="t1") → 精确标记完成
             估算的token数
         """
         if self.encoding:
-            # 使用tiktoken精确计算
+            # 使 with tiktoken精确计算
             total_tokens = 0
             for message in messages:
                 content = message.get("content", "")

@@ -6,6 +6,10 @@ aiofiles>=23.0.0
 pydantic>=2.0.0
 pyyaml>=6.0
 
+# 数据科学（pandas/numpy skills）
+pandas>=2.0.0
+numpy>=1.24.0
+
 # 异步和工具
 asyncio-mqtt>=0.16.0  # 用于异步消息
 python-multipart>=0.0.6  # 文件上传
@@ -28,7 +32,6 @@ tiktoken
 # 可选：向量数据库（用于高级上下文管理）
 # chromadb>=0.4.0
 # sentence-transformers>=2.2.0
-# pandas   # 初始可不必安装，运行时aacode会自动安装
 # openpyxl
 # xlrd
 

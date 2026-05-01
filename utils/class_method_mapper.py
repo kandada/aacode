@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional, Set, Tuple
 import re
 from datetime import datetime
+from aacode.i18n import t
 
 
 class ClassMethodMapper:
@@ -25,7 +26,7 @@ class ClassMethodMapper:
 
     def analyze_project(self) -> Dict[str, Any]:
         """分析整个项目"""
-        print(f"🔍 开始分析项目结构: {self.project_path}")
+        print(f"🔍 Starting project analysis: {self.project_path}")
 
         # 清空之前的分析结果
         self.class_map.clear()
@@ -36,7 +37,7 @@ class ClassMethodMapper:
         # 查找所有Python文件
         python_files = list(self.project_path.rglob("*.py"))
 
-        print(f"📁 找到 {len(python_files)} 个Python文件")
+        print(f"📁 Found {len(python_files)} Python files")
 
         analyzed_count = 0
         for file_path in python_files:
@@ -55,7 +56,7 @@ class ClassMethodMapper:
                     f"⚠️  分析文件 {file_path.relative_to(self.project_path)} 时出错: {e}"
                 )
 
-        print(f"✅ 成功分析 {analyzed_count} 个文件")
+        print(f"✅ Successfully analyzed {analyzed_count} files")
         return self._generate_summary()
 
     def _analyze_file(self, file_path: Path):
@@ -100,7 +101,7 @@ class ClassMethodMapper:
                         )
 
         except SyntaxError as e:
-            print(f"⚠️  文件 {file_path.relative_to(self.project_path)} 语法错误: {e}")
+            print(f"⚠️  File {file_path.relative_to(self.project_path)} syntax error: {e}")
         except UnicodeDecodeError:
             # 尝试其他编码
             try:
@@ -580,21 +581,21 @@ class ClassMethodMapper:
         content = self.generate_class_method_map()
         output_path = self.project_path / output_file
         output_path.write_text(content, encoding="utf-8")
-        print(f"📝 类方法映射已保存到: {output_path}")
+        print(f"📝 Class-method map saved to: {output_path}")
         return output_path
 
     # 兼容性方法
     def save_enhanced_map(self, output_file: str = "enhanced_project_map.md") -> Path:
         """兼容性方法：保存增强版映射（基础版不支持）"""
-        raise AttributeError("基础版类方法映射器不支持增强版映射")
+        raise AttributeError("Basic class-method mapper does not support enhanced mapping")
 
     def get_language_summary(self) -> str:
         """兼容性方法：获取语言摘要（基础版不支持）"""
-        raise AttributeError("基础版类方法映射器不支持语言摘要")
+        raise AttributeError("Basic class-method mapper does not support language summary")
 
     def update_analysis(self, changed_files: Optional[List[Path]] = None) -> bool:
         """兼容性方法：更新分析（基础版不支持）"""
-        raise AttributeError("基础版类方法映射器不支持update_analysis方法")
+        raise AttributeError("Basic class-method mapper does not support update_analysis method")
 
     def update_class_method_map(
         self, changed_files: Optional[List[Path]] = None
@@ -618,7 +619,7 @@ class ClassMethodMapper:
                     # 重新分析该文件
                     self._analyze_file(file_path)
                 except Exception as e:
-                    print(f"⚠️  更新文件 {file_path} 时出错: {e}")
+                    print(f"⚠️  Error updating file {file_path}: {e}")
 
         # 保存更新后的映射
         self.save_class_method_map()
@@ -702,7 +703,7 @@ class MultiLangAnalyzer:
 
     def analyze_project(self) -> Dict[str, Any]:
         """分析整个项目"""
-        print(f"🔍 开始分析多语言项目结构: {self.project_path}")
+        print(f"🔍 Starting multi-language project analysis: {self.project_path}")
 
         # 清空之前的分析结果
         self.language_stats.clear()
@@ -752,7 +753,7 @@ class MultiLangAnalyzer:
                         f"⚠️  分析文件 {file_path.relative_to(self.project_path)} 时出错: {e}"
                     )
 
-        print(f"📁 找到 {total_files} 个文件，成功分析 {analyzed_files} 个代码文件")
+        print(f"📁 Found {total_files} files, successfully analyzed {analyzed_files} code files")
         return self._generate_summary()
 
     def _detect_language(self, file_path: Path) -> Optional[str]:
@@ -797,7 +798,7 @@ class MultiLangAnalyzer:
             self.code_entities[lang].extend(entities)
 
         except Exception as e:
-            print(f"⚠️  分析文件 {file_path} 时出错: {e}")
+            print(f"⚠️  Error analyzing file {file_path}: {e}")
 
     def _count_file_stats(self, content: str) -> Dict[str, int]:
         """统计文件行数"""
@@ -1346,7 +1347,7 @@ class MultiLangAnalyzer:
         content = self.generate_project_map()
         output_path = self.project_path / output_file
         output_path.write_text(content, encoding="utf-8")
-        print(f"📝 项目结构映射已保存到: {output_path}")
+        print(f"📝 Structure map saved to: {output_path}")
         return output_path
 
 
@@ -1365,7 +1366,7 @@ class EnhancedClassMethodMapper:
 
     def analyze_project(self) -> Dict[str, Any]:
         """分析整个项目（多语言）"""
-        print(f"🔍 开始增强版项目结构分析: {self.project_path}")
+        print(f"🔍 Starting enhanced project analysis: {self.project_path}")
 
         # 分析Python代码（详细分析）
         python_summary = self.python_mapper.analyze_project()
@@ -1541,7 +1542,7 @@ class EnhancedClassMethodMapper:
         content = self.generate_enhanced_map()
         output_path = self.project_path / output_file
         output_path.write_text(content, encoding="utf-8")
-        print(f"📝 项目结构映射已保存到: {output_path}")
+        print(f"📝 Structure map saved to: {output_path}")
         return output_path
 
     def get_language_summary(self) -> str:
@@ -1594,7 +1595,7 @@ class EnhancedClassMethodMapper:
 
             return True
         except Exception as e:
-            print(f"⚠️  更新分析失败: {e}")
+            print(f"⚠️  Update analysis failed: {e}")
             return False
 
     # 兼容性方法
@@ -1629,15 +1630,15 @@ if __name__ == "__main__":
     mapper = ClassMethodMapper(Path(project_path))
     mapper.analyze_project()
     output_file = mapper.save_class_method_map()
-    print(f"✅ 基本分析完成，结果保存到: {output_file}")
+    print(f"✅ Basic analysis done, result saved to: {output_file}")
 
     # 测试增强功能
     enhanced_mapper = EnhancedClassMethodMapper(Path(project_path))
     enhanced_mapper.analyze_project()
     enhanced_output = enhanced_mapper.save_enhanced_map()
-    print(f"✅ 增强分析完成，结果保存到: {enhanced_output}")
+    print(f"✅ Enhanced analysis done, result saved to: {enhanced_output}")
 
     # 显示语言摘要
     summary = enhanced_mapper.get_language_summary()
-    print(f"\n📊 语言摘要:")
+    print(f"\n📊 Language summary:")
     print(summary)

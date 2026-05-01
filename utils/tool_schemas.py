@@ -14,223 +14,15 @@ if __package__ in (None, ""):
 else:
     from .tool_registry import ToolSchema, ToolParameter
 
-# ==================== Atomic Tools Schemas ====================
-
-READ_FILE_SCHEMA = ToolSchema(
-    name="read_file",
-    description="读取文件内容。用于查看项目中的文件内容。支持读取整个文件或指定行范围。",
-    parameters=[
-        ToolParameter(
-            name="path",
-            type=str,
-            required=True,
-            description="文件的相对路径（相对于项目根目录）",
-            example="src/main.py",
-            aliases=["file", "filepath", "file_path", "filename"],
-        ),
-        ToolParameter(
-            name="line_start",
-            type=int,
-            required=False,
-            description="起始行号（从1开始，可选）。如果指定，只读取从此行开始的内容",
-            example=10,
-            aliases=["start", "start_line", "from_line"],
-        ),
-        ToolParameter(
-            name="line_end",
-            type=int,
-            required=False,
-            description="结束行号（包含，可选）。如果指定，只读取到此行的内容",
-            example=50,
-            aliases=["end", "end_line", "to_line"],
-        ),
-    ],
-    examples=[
-        {"path": "init.md"},
-        {"path": "src/utils.py"},
-        {"path": "README.md"},
-        {"path": "api/main.py", "line_start": 55, "line_end": 65},
-        {"path": "config.py", "line_start": 1, "line_end": 20},
-    ],
-    returns="返回字典，包含 success, path, content, size, lines 等字段。如果指定了行范围，还包含 line_range 和 total_lines",
-)
-
-WRITE_FILE_SCHEMA = ToolSchema(
-    name="write_file",
-    description="""写入文件内容。用于创建新文件或覆盖现有文件。
-    
-**增强功能**：
-- 支持从上下文引用内容，节省token
-- 两种使用方式：
-  1. 直接提供内容：content="文件内容"
-  2. 从上下文引用：source="引用标识符"
-  
-**source参数支持格式**：
-- content:<直接内容> - 例如：source="content:Hello World"
-- file:<文件路径> - 例如：source="file:existing.txt"
-- 上下文文件名 - 例如：source="web_fetch_result"
-- last_web_fetch - 最近web_fetch结果
-- tool_result:fetch_url - fetch_url工具结果
-
-**源文件过滤参数**（当使用source参数时）：
-- source_start_line: 源文件起始行号（1-based）
-- source_end_line: 源文件结束行号（1-based）
-- source_pattern: 源文件正则表达式模式，只保留匹配的行 
-- source_exclude_pattern: 源文件正则表达式模式，排除匹配的行 
-
-**重要规则**：当使用source参数时，所有源文件过滤参数必须使用source_前缀。
-             使用不带前缀的参数将触发警告。
-
-**使用建议**：
-- 当内容已经在上下文中时，使用source参数节省token
-- 当需要生成新内容时，使用content参数
-- 需要提取部分内容时，使用source参数配合过滤参数""",
-    parameters=[
-        ToolParameter(
-            name="path",
-            type=str,
-            required=True,
-            description="文件的相对路径（相对于项目根目录）",
-            example="src/new_file.py",
-            aliases=["file", "filepath", "file_path", "filename", "target"],
-        ),
-        ToolParameter(
-            name="content",
-            type=str,
-            required=False,
-            description="要写入的文件内容（与source二选一）",
-            example="print('Hello, World!')",
-            aliases=["data", "text", "body", "contents"],
-        ),
-        ToolParameter(
-            name="source",
-            type=str,
-            required=False,
-            description="内容来源标识符（与content二选一）",
-            example="content:print('Hello') 或 last_web_fetch",
-            aliases=["from", "src", "reference"],
-        ),
-        ToolParameter(
-            name="source_start_line",
-            type=int,
-            required=False,
-            description="源文件起始行号（1-based）。当使用source参数时，指定要提取的起始行。",
-            example=1,
-            aliases=[],
-        ),
-        ToolParameter(
-            name="source_end_line",
-            type=int,
-            required=False,
-            description="源文件结束行号（1-based，包含）。当使用source参数时，指定要提取的结束行。",
-            example=10,
-            aliases=[],
-        ),
-        ToolParameter(
-            name="source_pattern",
-            type=str,
-            required=False,
-            description="源文件正则表达式模式。当使用source参数时，只保留匹配此模式的行。",
-            example="^def ",
-            aliases=[],
-        ),
-        ToolParameter(
-            name="source_exclude_pattern",
-            type=str,
-            required=False,
-            description="源文件正则表达式模式。当使用source参数时，排除匹配此模式的行。",
-            example="^#",
-            aliases=[],
-        ),
-    ],
-    examples=[
-        {"path": "test.py", "content": "# Test file\nprint('test')"},
-        {"path": "README.md", "content": "# My Project\n\nDescription here."},
-        {"path": "result.html", "source": "content:<html>Hello</html>"},
-        {"path": "copy.txt", "source": "file:original.txt"},
-        {"path": "web_content.html", "source": "last_web_fetch"},
-        {
-            "path": "functions.txt",
-            "source": "file:source.py",
-            "source_start_line": 1,
-            "source_end_line": 50,
-            "source_pattern": "^def ",
-        },
-        {
-            "path": "clean_code.py",
-            "source": "file:original.py",
-            "source_exclude_pattern": "^#",
-        },
-    ],
-    returns="返回字典，包含 success, path, size, lines, source_used 等字段",
-)
-
 RUN_SHELL_SCHEMA = ToolSchema(
     name="run_shell",
-    description="""执行shell命令 - 万能的系统命令执行工具，你的瑞士军刀！
-
-**核心理念**：
-- 工具总是成功（success=True），除非工具本身异常
-- 命令的成功/失败通过 returncode 判断（0=成功，非0=失败）
-- 完整返回 stdout 和 stderr，让你自行判断如何处理
-- **大胆使用**：在安全范围内，不要害怕使用bash命令解决问题
-
-**强大能力展示**：
-1. **文本处理专家**：
-   - grep/glob/awk/sed/cat：精准搜索、提取、写入、替换
-   - sort/uniq：排序、去重、统计
-   - cut/tr/wc：字段切割、字符转换、行数统计
-   - diff/patch：文件差异比较、补丁应用
-
-2. **文件系统大师**：
-   - find/locate：智能文件搜索
-   - tar/zip/gzip：压缩解压
-   - rsync/scp：同步传输
-   - chmod/chown：权限管理
-
-3. **系统监控能手**：
-   - ps/top/htop：进程监控
-   - df/du：磁盘空间分析
-   - free/vmstat：内存监控
-   - netstat/ss：网络连接查看
-
-4. **开发工作流**：
-   - git：版本控制全套操作
-   - docker/docker-compose：容器管理
-   - make/cmake：构建系统
-   - npm/pip/cargo：包管理
-
-5. **网络工具集**：
-   - curl/wget：HTTP请求、下载
-   - ping/traceroute：网络诊断
-   - ssh/scp：远程连接
-   - netcat：网络调试
-
-6. **数据处理管道**：
-   - command1 | command2 | command3：组合威力
-   - > file.txt：输出重定向
-   - < input.txt：输入重定向
-   - 2>&1：错误输出合并
-
-**重要提示**：
-- returncode=0 表示命令成功
-- returncode≠0 不一定是错误（如 grep 没找到匹配返回1是正常的）
-- 检查 stderr 判断是否有真正的错误
-- 支持管道、重定向等 shell 特性：command1 | command2, command > file.txt
-- 命令在项目目录下执行，使用相对路径即可
-- **大胆尝试**：命令失败很正常，从错误中学习，调整后重试
-
-**安全限制**：
-- 危险命令要谨慎（如 rm -rf /）但可用
-- 绝对路径必须在项目范围内
-- 某些系统命令可能被限制
-- **但请记住**：正常的系统操作、开发命令都可以大胆使用！""",
+    description="Execute a shell command - the universal Swiss Army knife! The tool always returns success=True; check returncode to determine success/failure. Full stdout and stderr are returned for you to process. Common uses: read files (cat/tail), write files (echo/cat), search (grep/ls/find), development (python/pytest/git). Supports pipes and redirection. Filenames with spaces or special characters must be quoted (e.g. cat \"my file.md\").",
     parameters=[
         ToolParameter(
             name="command",
             type=str,
             required=True,
-            description="要执行的shell命令（支持管道、重定向等shell特性）",
+            description="The shell command to execute (supports pipes, redirection, and other shell features)",
             example='python -c "import sys; print(sys.version)"',
             aliases=["cmd", "shell", "script", "exec"],
         ),
@@ -239,7 +31,7 @@ RUN_SHELL_SCHEMA = ToolSchema(
             type=int,
             required=False,
             default=30,
-            description="命令执行超时时间（秒），默认30秒。长时间运行的命令建议增加",
+            description="Command execution timeout in seconds (default 30). Increase for long-running commands.",
             example=60,
             aliases=["time_limit", "max_time", "wait"],
         ),
@@ -247,186 +39,191 @@ RUN_SHELL_SCHEMA = ToolSchema(
             name="stdin_input",
             type=str,
             required=False,
-            description="传给程序的标准输入内容。程序有 input() 等待用户输入时使用，多行输入用 \\n 分隔。不传此参数时，程序的 stdin 为空（input() 会立即 EOFError）。",
+            description="Standard input content to pass to the program. Use when the program calls input() and waits for user input. Separate multiple lines with \\n. If not provided, the program's stdin is empty (input() will raise EOFError immediately).",
             example="5\\n3\\n",
             aliases=["input", "stdin"],
         ),
+        ToolParameter(
+            name="max_output",
+            type=int,
+            required=False,
+            description="Limit the output character count. Default is None (no limit). Pass a number like 200 to restrict.",
+            example=None,
+            aliases=["max_chars", "limit", "output_limit"],
+        ),
     ],
     examples=[
-        {"command": "ls -la", "description": "列出当前目录所有文件（包括隐藏文件）"},
-        {"command": "pwd", "description": "显示当前工作目录"},
-        {"command": "python --version", "description": "检查 Python 版本"},
-        {"command": "python script.py", "description": "运行 Python 脚本"},
+        {"command": "ls -la", "description": "List all files in current directory (including hidden files)"},
+        {"command": "pwd", "description": "Print current working directory"},
+        {"command": "python --version", "description": "Check Python version"},
+        {"command": "python script.py", "description": "Run a Python script"},
         {
             "command": "python3 calculator.py",
             "stdin_input": "5\n3\n",
-            "description": "运行需要用户输入的程序，模拟输入 5 和 3",
+            "description": "Run a program that needs user input, simulating entering 5 and 3",
         },
-        {"command": "python -c \"print('Hello')\"", "description": "执行 Python 代码"},
-        {"command": "pip list", "description": "列出已安装的包"},
+        {"command": "python -c \"print('Hello')\"", "description": "Execute Python code"},
+        {"command": "pip list", "description": "List installed packages"},
         {
             "command": "pip install requests",
             "timeout": 60,
-            "description": "安装 Python 包",
+            "description": "Install a Python package",
         },
-        {"command": "pytest tests/", "description": "运行测试"},
-        {"command": "cat file.txt", "description": "查看文件内容"},
-        {"command": "grep 'pattern' file.txt", "description": "搜索文件内容"},
-        {"command": "find . -name '*.py'", "description": "查找 Python 文件"},
-        {"command": "ls -la | grep '.py'", "description": "列出 Python 文件"},
-        # 新增更多实用命令示例
+        {"command": "pytest tests/", "description": "Run tests"},
+        {"command": "cat \"my notes.txt\"", "description": "View a text file with spaces in filename (filename must be quoted)"},
+        {"command": "grep 'pattern' file.txt", "description": "Search file contents"},
+        {"command": "find . -name '*.py'", "description": "Find Python files"},
+        {"command": "ls -la | grep '.py'", "description": "List Python files"},
         {
             "command": "grep -r 'def main' .",
-            "description": "递归搜索包含'main'函数的文件",
+            "description": "Recursively search for files containing 'main' function",
         },
         {
             "command": "awk '/^def/ {print NR\": \"$0}' file.py",
-            "description": "提取Python文件中的所有函数定义",
+            "description": "Extract all function definitions from a Python file",
         },
         {
             "command": "sed -i '' 's/old/new/g' file.txt",
-            "description": "替换文件中的文本（macOS）",
+            "description": "Replace text in a file (macOS)",
         },
         {
             "command": "sed -i 's/old/new/g' file.txt",
-            "description": "替换文件中的文本（Linux）",
+            "description": "Replace text in a file (Linux)",
         },
         {
             "command": "find . -type f -name '*.py' -exec wc -l {} +",
-            "description": "统计所有Python文件的总行数",
+            "description": "Count total lines across all Python files",
         },
-        {"command": "ps aux | grep python", "description": "查找正在运行的Python进程"},
-        {"command": "df -h", "description": "查看磁盘使用情况（人类可读格式）"},
-        {"command": "du -sh .", "description": "查看当前目录总大小"},
-        {"command": "free -h", "description": "查看内存使用情况"},
+        {"command": "ps aux | grep python", "description": "Find running Python processes"},
+        {"command": "df -h", "description": "View disk usage (human-readable format)"},
+        {"command": "du -sh .", "description": "View total size of current directory"},
+        {"command": "free -h", "description": "View memory usage"},
         {
             "command": "curl -s https://api.github.com/users/octocat",
-            "description": "获取API数据",
+            "description": "Fetch API data",
         },
-        {"command": "git status", "description": "查看git状态"},
-        {"command": "git log --oneline -5", "description": "查看最近5次提交"},
+        {"command": "git status", "description": "Check git status"},
+        {"command": "git log --oneline -5", "description": "View last 5 commits"},
         {
             "command": "sort file.txt | uniq -c | sort -nr",
-            "description": "统计文件中单词出现频率",
+            "description": "Count word frequency in a file",
         },
         {
             "command": "cat access.log | awk '{print $1}' | sort | uniq -c | sort -nr | head -10",
-            "description": "分析日志文件，找出前10个访问IP",
+            "description": "Analyze log file, find top 10 visiting IPs",
         },
         {
             "command": "python -m http.server 8000 &",
-            "description": "启动简单的HTTP服务器（后台运行）",
+            "description": "Start a simple HTTP server (background)",
         },
         {
             "command": "kill $(lsof -ti:8000)",
-            "description": "关闭占用8000端口的进程（需要用户同意）",
+            "description": "Kill the process occupying port 8000 (requires user consent)",
         },
-        {"command": "tar -czf backup.tar.gz directory/", "description": "压缩目录"},
-        {"command": "rsync -av source/ destination/", "description": "同步目录"},
-        {"command": "docker ps", "description": "查看运行中的容器"},
-        {"command": "npm run build", "description": "运行npm构建脚本"},
-        {"command": "make clean", "description": "运行make清理"},
-        {"command": "ssh user@host 'ls -la'", "description": "远程执行命令"},
+        {"command": "tar -czf backup.tar.gz directory/", "description": "Compress a directory"},
+        {"command": "rsync -av source/ destination/", "description": "Sync directories"},
+        {"command": "docker ps", "description": "View running containers"},
+        {"command": "npm run build", "description": "Run npm build script"},
+        {"command": "make clean", "description": "Run make clean"},
+        {"command": "ssh user@host 'ls -la'", "description": "Execute command remotely"},
         {
             "command": "echo 'Hello World' > output.txt",
-            "description": "创建文件并写入内容",
+            "description": "Create a file with content",
         },
-        {"command": "tail -f logfile.log", "description": "实时查看日志文件"},
+        {"command": "tail -f logfile.log", "description": "Watch log file in real time"},
         {
             "command": "watch -n 1 'ps aux | grep python'",
-            "description": "每秒监控Python进程",
+            "description": "Monitor Python processes every second",
         },
     ],
-    returns="""返回字典，包含以下字段：
-- success (bool): 工具是否成功执行（总是True，除非工具本身异常）
-- returncode (int): 命令退出码（0=成功，非0=失败）
-- stdout (str): 标准输出
-- stderr (str): 错误输出
-- command (str): 执行的命令
-- working_directory (str): 工作目录""",
+    returns="""Returns a dictionary with the following fields:
+- success (bool): Whether the tool executed successfully (always True unless the tool itself threw an exception)
+- returncode (int): Command exit code (0=success, non-zero=failure)
+- stdout (str): Standard output
+- stderr (str): Error output
+- command (str): The executed command
+- working_directory (str): Working directory""",
 )
 
-LIST_FILES_SCHEMA = ToolSchema(
-    name="list_files",
-    description="列出项目中的文件。用于查看项目结构和查找文件。默认递归列出所有文件。支持两种模式：1) 仅列出文件（默认） 2) 搜索文件内容（当提供grep参数时）。",
-    parameters=[
-        ToolParameter(
-            name="pattern",
-            type=str,
-            required=False,
-            default="*",
-            description="文件名匹配模式（支持通配符）。注意：不是路径(path)，而是文件名模式。默认'*'表示所有文件",
-            example="*.py",
-            aliases=["path", "file_pattern", "glob", "directory", "dir"],
-        ),
-        ToolParameter(
-            name="max_results",
-            type=int,
-            required=False,
-            default=100,
-            description="返回的最大文件数量。注意：不支持max_depth，默认递归列出所有文件",
-            example=50,
-            aliases=["limit", "max", "count", "max_depth", "depth"],
-        ),
-        ToolParameter(
-            name="grep",
-            type=str,
-            required=False,
-            default=None,
-            description="可选：搜索文件内容的关键词。如果提供，将搜索包含该关键词的文件（类似grep功能）",
-            example="def test",
-            aliases=["search", "query", "text", "keyword"],
-        ),
-    ],
-    examples=[
-        {},
-        {"pattern": "*.py"},
-        {"pattern": "*.md", "max_results": 20},
-        {"pattern": "test_*.py"},
-        {"path": "."},
-        {"grep": "def test"},
-        {"pattern": "*.py", "grep": "import requests"},
-    ],
-    returns="返回字典，包含 success, files (列表), count 等字段。如果提供了grep参数，files中的每个条目会包含匹配的行信息。",
-)
 
-SEARCH_FILES_SCHEMA = ToolSchema(
-    name="search_files",
-    description="在文件中搜索文本内容。用于查找包含特定内容的文件。",
+FINALIZE_TASK_SCHEMA = ToolSchema(
+    name="finalize_task",
+    description="End the current task and output a final summary. Call this when you are certain the task is fully complete. The task ends immediately after invocation.",
     parameters=[
         ToolParameter(
-            name="query",
+            name="summary",
             type=str,
             required=True,
-            description="要搜索的文本内容（必需）",
-            example="def main",
-            aliases=["search", "text", "keyword", "term", "q"],
-        ),
-        ToolParameter(
-            name="file_pattern",
-            type=str,
-            required=False,
-            default="*.py",
-            description="要搜索的文件类型模式",
-            example="*.py",
-            aliases=["pattern", "glob", "file_type"],
-        ),
-        ToolParameter(
-            name="max_results",
-            type=int,
-            required=False,
-            default=20,
-            description="返回的最大结果数量",
-            example=10,
-            aliases=["limit", "max", "count"],
+            description="A brief summary of what was done and the results",
+            example="Successfully created 3 files in src/, all tests passing",
+            aliases=["message", "conclusion", "result"],
         ),
     ],
     examples=[
-        {"query": "def main"},
-        {"query": "import requests", "file_pattern": "*.py"},
-        {"query": "TODO", "file_pattern": "*", "max_results": 50},
+        {"summary": "All file modifications completed, all tests passing"},
+        {"summary": "Optimized 3 files, removed redundant code, lint check passed"},
     ],
-    returns="返回字典，包含 success, query, results (列表), count 等字段",
+    returns="Returns status=completed and summary",
+)
+
+RUN_SKILLS_SCHEMA = ToolSchema(
+    name="run_skills",
+    description="""Execute pre-defined skills. Three modes:
+
+1. List available skills: run_skills("__list__")
+2. View skill details: run_skills("__info__", {"skill_name": "pandas"})
+3. Execute a skill: run_skills("pandas", {"code": "df.describe()"})
+
+For multi-function skills (e.g. playwright), pass "func" in params:
+  run_skills("playwright", {"func": "browser_automation", "url": "https://example.com"})
+
+Use __list__ to see available skills first, then __info__ to get parameter details, then execute.
+""",
+    parameters=[
+        ToolParameter(
+            name="skill_name",
+            type=str,
+            required=False,
+            description="Skill name, or __list__/__info__ for listing/info modes. If omitted, tries params.skill_name as fallback.",
+            example="pandas",
+            aliases=["skill", "name"],
+        ),
+        ToolParameter(
+            name="params",
+            type=dict,
+            required=False,
+            description="Parameters for the skill. For multi-function skills, include 'func' key to select sub-function.",
+            example={"code": "df.describe()"},
+            aliases=["arguments", "args", "kwargs"],
+        ),
+    ],
+    examples=[
+        {
+            "skill_name": "__list__",
+            "description": "List all available skills",
+        },
+        {
+            "skill_name": "__info__",
+            "params": {"skill_name": "playwright"},
+            "description": "View detailed info for playwright skill",
+        },
+        {
+            "skill_name": "pandas",
+            "params": {"code": "pd.read_csv('data.csv').head()"},
+            "description": "Execute pandas data analysis code",
+        },
+        {
+            "skill_name": "playwright",
+            "params": {"func": "browser_automation", "url": "https://example.com"},
+            "description": "Use Playwright to automate browser (multi-function skill)",
+        },
+        {
+            "skill_name": "playwright",
+            "params": {"func": "take_screenshot", "url": "https://example.com", "output_path": "screenshot.png"},
+            "description": "Take a screenshot using Playwright",
+        },
+    ],
+    returns="Returns a string with the execution result or error message",
 )
 
 
@@ -434,13 +231,13 @@ SEARCH_FILES_SCHEMA = ToolSchema(
 
 SEARCH_WEB_SCHEMA = ToolSchema(
     name="search_web",
-    description="在网络上搜索信息。用于查找最新的技术文档、解决方案等。",
+    description="Search for information on the web. Use to find latest technical documentation, solutions, etc.",
     parameters=[
         ToolParameter(
             name="query",
             type=str,
             required=True,
-            description="搜索查询关键词",
+            description="Search query keywords",
             example="Python asyncio tutorial",
             aliases=["search", "keyword", "q", "term"],
         ),
@@ -449,7 +246,7 @@ SEARCH_WEB_SCHEMA = ToolSchema(
             type=int,
             required=False,
             default=5,
-            description="返回的最大结果数量",
+            description="Maximum number of results to return",
             example=10,
             aliases=["limit", "count", "num", "num_results"],
         ),
@@ -458,18 +255,18 @@ SEARCH_WEB_SCHEMA = ToolSchema(
         {"query": "Python asyncio tutorial"},
         {"query": "Flask best practices", "max_results": 10},
     ],
-    returns="返回字典，包含 success, query, results (列表) 等字段",
+    returns="Returns a dictionary with success, query, results (list), and other fields",
 )
 
 FETCH_URL_SCHEMA = ToolSchema(
     name="fetch_url",
-    description="获取URL的内容。用于读取网页内容或API响应。",
+    description="Fetch the content of a URL. Use to read web page content or API responses.",
     parameters=[
         ToolParameter(
             name="url",
             type=str,
             required=True,
-            description="要获取的URL地址",
+            description="The URL address to fetch",
             example="https://example.com/api/data",
             aliases=["link", "uri", "address"],
         ),
@@ -478,7 +275,7 @@ FETCH_URL_SCHEMA = ToolSchema(
             type=int,
             required=False,
             default=10,
-            description="请求超时时间（秒）",
+            description="Request timeout in seconds",
             example=30,
             aliases=["time_limit", "max_time", "wait"],
         ),
@@ -487,70 +284,7 @@ FETCH_URL_SCHEMA = ToolSchema(
         {"url": "https://api.github.com/repos/python/cpython"},
         {"url": "https://example.com/data.json", "timeout": 30},
     ],
-    returns="返回字典，包含 success, url, content, status_code 等字段",
-)
-
-
-# ==================== Code Tools Schemas ====================
-
-EXECUTE_PYTHON_SCHEMA = ToolSchema(
-    name="execute_python",
-    description="执行Python代码。用于测试代码片段或运行Python脚本。",
-    parameters=[
-        ToolParameter(
-            name="code",
-            type=str,
-            required=True,
-            description="要执行的Python代码",
-            example="print('Hello, World!')",
-            aliases=["script", "source", "program"],
-        ),
-        ToolParameter(
-            name="timeout",
-            type=int,
-            required=False,
-            default=30,
-            description="执行超时时间（秒）",
-            example=60,
-            aliases=["time_limit", "max_time", "wait"],
-        ),
-    ],
-    examples=[
-        {"code": "print('Hello, World!')"},
-        {"code": "import math\nprint(math.pi)", "timeout": 10},
-    ],
-    returns="返回字典，包含 success, stdout, stderr, returncode 等字段",
-)
-
-RUN_TESTS_SCHEMA = ToolSchema(
-    name="run_tests",
-    description="运行测试。用于执行项目的测试套件。",
-    parameters=[
-        ToolParameter(
-            name="test_path",
-            type=str,
-            required=False,
-            default="",
-            description="测试文件或目录的路径",
-            example="tests/test_main.py",
-            aliases=["path", "file", "directory", "target"],
-        ),
-        ToolParameter(
-            name="timeout",
-            type=int,
-            required=False,
-            default=60,
-            description="测试执行超时时间（秒）",
-            example=120,
-            aliases=["time_limit", "max_time", "wait"],
-        ),
-    ],
-    examples=[
-        {},
-        {"test_path": "tests/test_main.py"},
-        {"test_path": "tests/", "timeout": 120},
-    ],
-    returns="返回字典，包含 success, passed, failed, output 等字段",
+    returns="Returns a dictionary with success, url, content, status_code, and other fields",
 )
 
 
@@ -558,14 +292,14 @@ RUN_TESTS_SCHEMA = ToolSchema(
 
 ADD_TODO_ITEM_SCHEMA = ToolSchema(
     name="add_todo_item",
-    description="添加待办事项。返回 todo_id（如 t1），后续用 mark_todo_completed(todo_id='t1') 精确标记完成。",
+    description="Add a todo item. Returns a todo_id (e.g. t1), which can later be used with mark_todo_completed(todo_id='t1') for precise completion.",
     parameters=[
         ToolParameter(
             name="description",
             type=str,
             required=False,
-            description="待办事项的描述（推荐使用）",
-            example="实现用户认证功能",
+            description="Description of the todo item (recommended)",
+            example="Implement user authentication",
             aliases=["item", "task", "todo", "title"],
         ),
         ToolParameter(
@@ -573,41 +307,41 @@ ADD_TODO_ITEM_SCHEMA = ToolSchema(
             type=str,
             required=False,
             default="medium",
-            description="优先级：low, medium, high",
+            description="Priority: low, medium, high",
             example="high",
         ),
         ToolParameter(
             name="category",
             type=str,
             required=False,
-            default="任务",
-            description="分类标签",
-            example="开发",
+            default="Task",
+            description="Category label",
+            example="Development",
         ),
         ToolParameter(
             name="task_id",
             type=str,
             required=False,
-            description="关联的任务ID（可选）",
+            description="Associated task ID (optional)",
             example="task_123",
         ),
     ],
     examples=[
-        {"description": "实现用户认证功能"},
-        {"item": "修复登录bug", "priority": "high"},
+        {"description": "Implement user authentication"},
+        {"item": "Fix login bug", "priority": "high"},
     ],
-    returns="返回字典，包含 success, todo_id（重要：用于 mark_todo_completed）, message, item 等字段",
+    returns="Returns a dictionary with success, todo_id (important: for mark_todo_completed), message, item, and other fields",
 )
 
 MARK_TODO_COMPLETED_SCHEMA = ToolSchema(
     name="mark_todo_completed",
-    description="标记待办事项为完成。优先使用 todo_id 精确匹配（由 add_todo_item 返回），也支持文本模糊匹配作为 fallback。",
+    description="Mark a todo item as completed. Prefer using todo_id for precise matching (returned by add_todo_item), also supports fuzzy text matching as fallback.",
     parameters=[
         ToolParameter(
             name="todo_id",
             type=str,
             required=False,
-            description="待办事项ID（如 't1'、't2'），由 add_todo_item 返回。优先使用此参数，精确可靠。",
+            description="Todo item ID (e.g. 't1', 't2'), returned by add_todo_item. Use this parameter first, it is precise and reliable.",
             example="t1",
             aliases=["id"],
         ),
@@ -615,69 +349,69 @@ MARK_TODO_COMPLETED_SCHEMA = ToolSchema(
             name="item_pattern",
             type=str,
             required=False,
-            description="待办事项的匹配关键词（fallback）。当没有 todo_id 时使用。",
+            description="Matching keyword for the todo item (fallback). Use when todo_id is not available.",
             example="helloworld",
             aliases=["title", "item", "task", "description", "name", "text", "content", "pattern", "todo"],
         ),
     ],
     examples=[{"todo_id": "t1"}, {"item_pattern": "helloworld"}],
-    returns="返回字典，包含 success, message, todo_id, item_pattern 等字段",
+    returns="Returns a dictionary with success, message, todo_id, item_pattern, and other fields",
 )
 
 UPDATE_TODO_ITEM_SCHEMA = ToolSchema(
     name="update_todo_item",
-    description="更新待办事项。用于修改任务描述。",
+    description="Update a todo item. Use to modify task descriptions.",
     parameters=[
         ToolParameter(
             name="old_pattern",
             type=str,
             required=True,
-            description="原待办事项的匹配模式",
-            example="用户认证",
+            description="The matching pattern of the original todo item",
+            example="User Authentication",
         ),
         ToolParameter(
             name="new_item",
             type=str,
             required=True,
-            description="新的待办事项描述",
-            example="完善用户认证功能",
+            description="The new todo item description",
+            example="Complete user authentication feature",
         ),
     ],
-    examples=[{"old_pattern": "用户认证", "new_item": "完善用户认证功能"}],
-    returns="返回字典，包含 success, message 等字段",
+    examples=[{"old_pattern": "User Authentication", "new_item": "Complete user authentication feature"}],
+    returns="Returns a dictionary with success, message, and other fields",
 )
 
 GET_TODO_SUMMARY_SCHEMA = ToolSchema(
     name="get_todo_summary",
-    description="获取待办清单摘要。用于查看任务进度。",
+    description="Get a summary of the todo list. Use to check task progress.",
     parameters=[],
     examples=[{}],
-    returns="返回字典，包含 success, project_name, todo_file, total_todos, completed_todos, pending_todos, completion_rate 等字段",
+    returns="Returns a dictionary with success, project_name, todo_file, total_todos, completed_todos, pending_todos, completion_rate, and other fields",
 )
 
 LIST_TODO_FILES_SCHEMA = ToolSchema(
     name="list_todo_files",
-    description="列出所有待办清单文件。用于查看历史待办清单。",
+    description="List all todo list files. Use to view historical todo lists.",
     parameters=[],
     examples=[{}],
-    returns="返回字典，包含 success, files (列表), count 等字段",
+    returns="Returns a dictionary with success, files (list), count, and other fields",
 )
 
 ADD_EXECUTION_RECORD_SCHEMA = ToolSchema(
     name="add_execution_record",
-    description="（已废弃）执行记录已合并到日志系统。调用此工具会静默成功，不再写入待办清单。",
+    description="(Deprecated) Execution records have been merged into the logging system. Calling this tool silently succeeds without writing to the todo list.",
     parameters=[
         ToolParameter(
             name="record",
             type=str,
             required=False,
-            description="执行记录描述（不再写入，保留参数以向后兼容）",
-            example="完成了用户认证API的开发",
+            description="Execution record description (no longer written, kept for backward compatibility)",
+            example="Completed user authentication API development",
             aliases=["description", "details", "message", "summary", "content", "text", "task", "action", "result", "note"],
         )
     ],
-    examples=[{"record": "完成了用户认证API的开发"}],
-    returns="返回字典，包含 success, message 字段",
+    examples=[{"record": "Completed user authentication API development"}],
+    returns="Returns a dictionary with success, message fields",
 )
 
 ADD_TODO_SCHEMA = ADD_TODO_ITEM_SCHEMA
@@ -689,21 +423,21 @@ LIST_TODOS_SCHEMA = GET_TODO_SUMMARY_SCHEMA
 
 LIST_MCP_TOOLS_SCHEMA = ToolSchema(
     name="list_mcp_tools",
-    description="列出所有可用的MCP（模型上下文协议）工具。MCP工具来自外部服务器，提供文件系统、数据库、网络搜索等功能。",
+    description="List all available MCP (Model Context Protocol) tools. MCP tools come from external servers and provide file system, database, web search, and other capabilities.",
     parameters=[],
     examples=[{}, {"server_filter": "filesystem"}],
-    returns="返回字典，包含 success, tools（工具字典）, count（工具数量）, connected_servers（已连接的服务器列表）等字段",
+    returns="Returns a dictionary with success, tools (tool dictionary), count (number of tools), connected_servers (list of connected servers), and other fields",
 )
 
 CALL_MCP_TOOL_SCHEMA = ToolSchema(
     name="call_mcp_tool",
-    description="调用MCP（模型上下文协议）工具。MCP工具来自外部服务器，可以执行文件操作、数据库查询、网络搜索等任务。",
+    description="Call an MCP (Model Context Protocol) tool. MCP tools come from external servers and can perform file operations, database queries, web searches, and other tasks.",
     parameters=[
         ToolParameter(
             name="tool_name",
             type=str,
             required=True,
-            description="MCP工具名称，格式为 'server_name.tool_name' 或直接使用工具名",
+            description="MCP tool name, in the format 'server_name.tool_name' or just the tool name directly",
             example="filesystem.read_file",
             aliases=["tool", "name", "function"],
         ),
@@ -711,7 +445,7 @@ CALL_MCP_TOOL_SCHEMA = ToolSchema(
             name="arguments",
             type=dict,
             required=False,
-            description="传递给MCP工具的参数",
+            description="Arguments to pass to the MCP tool",
             example={"path": "/tmp/test.txt"},
             aliases=["args", "params", "input"],
         ),
@@ -724,71 +458,31 @@ CALL_MCP_TOOL_SCHEMA = ToolSchema(
             "arguments": {"query": "Python programming"},
         },
     ],
-    returns="返回字典，包含 success, result（工具执行结果）, error（错误信息，如果有）等字段",
+    returns="Returns a dictionary with success, result (tool execution result), error (error message if any), and other fields",
 )
 
 GET_MCP_STATUS_SCHEMA = ToolSchema(
     name="get_mcp_status",
-    description="获取MCP（模型上下文协议）服务器状态。显示已配置的服务器、连接状态和可用工具。",
+    description="Get MCP (Model Context Protocol) server status. Displays configured servers, connection status, and available tools.",
     parameters=[],
     examples=[{}, {"detailed": True}],
-    returns="返回字典，包含 success, servers（服务器状态列表）, connected_count（已连接服务器数量）, total_count（总服务器数量）等字段",
+    returns="Returns a dictionary with success, servers (server status list), connected_count (number of connected servers), total_count (total number of servers), and other fields",
 )
 
 
 # ==================== Skills Schemas ====================
-
-LIST_SKILLS_SCHEMA = ToolSchema(
-    name="list_skills",
-    description="""列出所有可用的Skills。用于发现项目中已安装的技能，了解可用的功能模块。使用具体skill前，请使用get_skill_info工具获取skill的详细信息及其工具调用方法。
-一般来说，skill的工具调用方法如下：
-调用示例1（scrape_dynamic_page是playwright skill的一个工具）：
-Action: scrape_dynamic_page
-Action Input: {"url": "http://example.com"}
-
-调用示例2（scrape_web是scrape_web skill的一个工具）
-Action: scrape_web
-Action Input: {"url": "https://example.com", "operations": ["extract_text", "extract_links"]}
-
-
-""",
-    parameters=[],
-    examples=[{}],
-    returns="返回字典，包含 success, skills (技能列表), count (技能数量) 等字段",
-)
-
-GET_SKILL_INFO_SCHEMA = ToolSchema(
-    name="get_skill_info",
-    description="获取特定Skill的详细信息。用于了解技能的功能、参数和使用方法。",
-    parameters=[
-        ToolParameter(
-            name="skill_name",
-            type=str,
-            required=True,
-            description="要查询的Skill名称",
-            example="data_cleaning",
-            aliases=["skill", "name"],
-        )
-    ],
-    examples=[{"skill_name": "data_cleaning"}, {"skill_name": "api_client"}],
-    returns="返回字典，包含 success, name, description, parameters, examples 等字段",
-)
+# run_skills is the single entry point for all skills (three modes: __list__, __info__, execute)
 
 
 # ==================== 所有工具schema的字典 ====================
 ALL_SCHEMAS = {
     # Atomic Tools
-    "read_file": READ_FILE_SCHEMA,
-    "write_file": WRITE_FILE_SCHEMA,
     "run_shell": RUN_SHELL_SCHEMA,
-    "list_files": LIST_FILES_SCHEMA,
-    "search_files": SEARCH_FILES_SCHEMA,
+    "finalize_task": FINALIZE_TASK_SCHEMA,
+    "run_skills": RUN_SKILLS_SCHEMA,
     # Web Tools
     "search_web": SEARCH_WEB_SCHEMA,
     "fetch_url": FETCH_URL_SCHEMA,
-    # Code Tools
-    "execute_python": EXECUTE_PYTHON_SCHEMA,
-    "run_tests": RUN_TESTS_SCHEMA,
     # Todo Tools (新名称)
     "add_todo_item": ADD_TODO_ITEM_SCHEMA,
     "mark_todo_completed": MARK_TODO_COMPLETED_SCHEMA,
@@ -796,64 +490,18 @@ ALL_SCHEMAS = {
     "get_todo_summary": GET_TODO_SUMMARY_SCHEMA,
     "list_todo_files": LIST_TODO_FILES_SCHEMA,
     "add_execution_record": ADD_EXECUTION_RECORD_SCHEMA,
-    # Todo Tools (兼容旧名称)
-    # "add_todo": ADD_TODO_SCHEMA,
-    # "complete_todo": COMPLETE_TODO_SCHEMA,
-    # "list_todos": LIST_TODOS_SCHEMA,
     # MCP Tools
     "list_mcp_tools": LIST_MCP_TOOLS_SCHEMA,
     "call_mcp_tool": CALL_MCP_TOOL_SCHEMA,
     "get_mcp_status": GET_MCP_STATUS_SCHEMA,
-    # Skills查询工具
-    "list_skills": LIST_SKILLS_SCHEMA,
-    "get_skill_info": GET_SKILL_INFO_SCHEMA,
-    # Skills执行工具（动态加载，不在此硬编码）
-    # 注意：skills的schema会从skills目录动态加载，通过get_all_schemas()函数合并
 }
 
 
-def get_all_schemas(skills_manager=None):
-    """
-    获取所有工具schema，包括动态加载的skills
-
-    Args:
-        skills_manager: SkillsManager实例，用于获取动态skills的schema
-
-    Returns:
-        包含所有schema的字典
-    """
-    schemas = ALL_SCHEMAS.copy()
-
-    # 如果提供了skills_manager，添加动态skills的schema
-    if skills_manager:
-        discovered_skills = skills_manager.discover_skills()
-        for skill_name in discovered_skills:
-            skill_schema = skills_manager.get_skill_schema(skill_name)
-            if skill_schema:
-                schemas[skill_name] = skill_schema
-
-    return schemas
+def get_all_schemas():
+    """获取所有工具schema"""
+    return {**ALL_SCHEMAS}
 
 
-def get_schema(tool_name: str, skills_manager=None):
-    """
-    获取特定工具的schema
-
-    Args:
-        tool_name: 工具名称
-        skills_manager: SkillsManager实例，用于获取动态skills的schema
-
-    Returns:
-        工具的schema，如果不存在则返回None
-    """
-    # 首先检查静态schema
-    if tool_name in ALL_SCHEMAS:
-        return ALL_SCHEMAS[tool_name]
-
-    # 如果提供了skills_manager，检查动态skills
-    if skills_manager:
-        skill_schema = skills_manager.get_skill_schema(tool_name)
-        if skill_schema:
-            return skill_schema
-
-    return None
+def get_schema(tool_name: str):
+    """获取特定工具的schema"""
+    return ALL_SCHEMAS.get(tool_name)

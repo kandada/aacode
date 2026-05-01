@@ -1,3 +1,6 @@
+# aacode configuration
+language: en    # en / zh
+
 context:
   compact_threshold: 32000
   history_compression: true
@@ -88,11 +91,25 @@ limits:
   prioritize_file_types: true   # 是否优先显示重要文件类型
 
 model:
-  api_key: ""   # 从环境变量 LLM_API_KEY 或 OPENAI_API_KEY 读取
-  base_url: https://api.deepseek.com/v1   # https://api.openai.com/v1
+  temperature: 0.7
   max_tokens: 8000   # 单次输出tokens长度
-  name: deepseek-chat        # gpt-4-turbo-preview
-  temperature: 0.1
+  default_model: deepseek_chat   # 默认使用的模型 key
+  models:
+    deepseek_chat:
+      name: deepseek-chat
+      gateway: openai
+      base_url: https://api.deepseek.com/v1
+      api_key: ""   # 从环境变量 LLM_API_KEY 或 OPENAI_API_KEY 读取
+    moonshot_kimi_k2.5:
+      name: kimi-k2.5
+      gateway: openai
+      base_url: https://api.moonshot.cn/v1
+      api_key: ""
+    minimax_m2.5:
+      name: MiniMax-M2.5
+      gateway: anthropic
+      base_url: https://api.minimax.chat/anthropic
+      api_key: ""
 
 # 多模态模型配置（支持扩展多个多模态模型）
 multimodal:
@@ -153,7 +170,7 @@ multimodal:
     #   vision: true
     #   video: false
 agent:
-  max_react_iterations: 100
+  max_react_iterations: 300
   max_sub_agent_iterations: 100
   enable_auto_planning: true
   enable_todo_tracking: true
@@ -165,7 +182,6 @@ safety:
   restrict_to_project: true
 tools:
   enable_code_execution: true
-  enable_file_ops: true
   enable_sandbox: true
   enable_search: true
   enable_shell: true

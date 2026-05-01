@@ -9,6 +9,7 @@ import functools
 from typing import Any, Callable, TypeVar, Coroutine
 from concurrent.futures import ThreadPoolExecutor
 import inspect
+from aacode.i18n import t
 
 T = TypeVar("T")
 
@@ -159,7 +160,7 @@ class AsyncHelpers:
 
                 await asyncio.sleep(wait_time)
 
-        raise last_exception or Exception("重试失败")
+        raise last_exception or Exception("Retry failed")
 
     @staticmethod
     def create_async_queue(maxsize: int = 100):
@@ -201,7 +202,7 @@ class AsyncHelpers:
                     try:
                         await processor(item)
                     except Exception as e:
-                        print(f"❌ 处理项目失败: {e}")
+                        print(f"❌ Process project failed: {e}")
 
                     queue.task_done()
 
@@ -242,7 +243,7 @@ class AsyncHelpers:
             try:
                 await func()
             except Exception as e:
-                print(f"❌ 定期任务失败: {e}")
+                print(f"❌ Periodic task failed: {e}")
 
             # 等待间隔时间或停止事件
             try:

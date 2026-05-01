@@ -8,6 +8,7 @@ import asyncio
 import json
 import random
 from typing import List, Dict, Any
+from aacode.i18n import t
 
 
 class MockModel:
@@ -17,10 +18,10 @@ class MockModel:
         self.responses = {
             "default": [
                 '我需要分析这个任务并制定计划。\n\nAction: list_files\nAction Input: {"pattern": "*"}',
-                '让我先查看项目结构，然后创建相应的文件。\n\nAction: write_file\nAction Input: {"path": "hello.py", "content": "print(\'Hello, World!\')"}',
-                "任务已完成。\n\n",
+                'Let me first check the project structure, then create the appropriate files.\n\nAction: write_file\nAction Input: {"path": "hello.py", "content": "print(\'Hello, World!\')"}',
+                "Task completed.\n\n",
                 '我需要运行这个程序来验证。\n\nAction: run_shell\nAction Input: {"command": "python3 hello.py"}',
-                "程序运行成功，任务完成。\n\n",
+                "Program ran successfully, task completed.\n\n",
             ],
             "create_file": [
                 '我将创建一个hello world程序。\n\nAction: write_file\nAction Input: {"path": "hello.py", "content": "#!/usr/bin/env python3\\nprint(\'Hello, World!\')"}'
@@ -47,9 +48,9 @@ class MockModel:
                 break
 
         # 根据消息内容选择响应
-        if "创建" in last_message or "create" in last_message.lower():
+        if "create" in last_message.lower():
             response_text = random.choice(self.responses["create_file"])
-        elif "运行" in last_message or "run" in last_message.lower():
+        elif "run" in last_message.lower():
             response_text = random.choice(self.responses["run_file"])
         else:
             response_text = random.choice(self.responses["default"])
@@ -96,7 +97,7 @@ async def create_mock_model_caller(model_config: Dict):
                     content = response.choices[0].message.content
                     return content if content is not None else ""
                 except Exception as e:
-                    print(f"🔄 真实模型调用失败，使用模拟模型: {e}")
+                    print(f"🔄 Real model call failed, using mock model: {e}")
 
             # 使用模拟模型
             response = await mock_model.chat_completions_create(
@@ -109,7 +110,7 @@ async def create_mock_model_caller(model_config: Dict):
             return response.choices[0].message.content
 
         except Exception as e:
-            return f"模型调用失败: {str(e)}"
+            return f"Model call failed: {str(e)}"
 
     return model_caller
 
@@ -123,6 +124,6 @@ if __name__ == "__main__":
             {"role": "user", "content": "创建一个hello world程序"},
         ]
         response = await caller(messages)
-        print(f"响应: {response}")
+        print(f"Response: {response}")
 
     asyncio.run(test())

@@ -12,6 +12,7 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime
 import aiofiles
 import os
+from aacode.i18n import t
 
 
 class AgentLogger:
@@ -56,7 +57,7 @@ class AgentLogger:
 
         await self._write_log_entry(header)
 
-        print(f"📝 开始记录任务日志: {self.current_log_file.name}")
+        print(f"📝 Start logging: {self.current_log_file.name}")
 
         return task_id
 
@@ -204,7 +205,7 @@ class AgentLogger:
         self.file_handle = None
 
         if self.current_log_file:
-            print(f"📋 任务日志已保存: {self.current_log_file.name}")
+            print(f"📋 Task log saved: {self.current_log_file.name}")
 
         # 创建简洁的日志摘要文件
         await self._create_log_summary(log_entry, summary)
@@ -224,7 +225,7 @@ class AgentLogger:
                 await file_handle.write(log_line)
                 await file_handle.flush()
         except Exception as e:
-            print(f"⚠️ 日志写入失败: {e}")
+            print(f"⚠️  Log write failed: {e}")
 
     async def _create_log_summary(
         self, completion_entry: Dict, summary: Optional[Dict]
@@ -249,7 +250,7 @@ class AgentLogger:
             async with aiofiles.open(summary_file, "w", encoding="utf-8") as f:
                 await f.write(json.dumps(summary_data, ensure_ascii=False, indent=2))
         except Exception as e:
-            print(f"⚠️ 摘要文件创建失败: {e}")
+            print(f"⚠️  Summary file creation failed: {e}")
 
     async def get_recent_logs(self, limit: int = 10) -> List[Dict]:
         """获取最近的日志文件列表"""
@@ -288,7 +289,7 @@ class AgentLogger:
 
             return recent_logs
         except Exception as e:
-            print(f"⚠️ 获取日志列表失败: {e}")
+            print(f"⚠️  Get log list failed: {e}")
             return []
 
     async def cleanup_old_logs(self, keep_days: int = 7) -> None:
@@ -302,11 +303,11 @@ class AgentLogger:
                 if log_file.stat().st_mtime < cutoff_time:
                     try:
                         log_file.unlink()
-                        print(f"🗑️  清理旧日志: {log_file.name}")
+                        print(f"🗑️  Clean old log: {log_file.name}")
                     except Exception as e:
-                        print(f"⚠️ 清理日志失败 {log_file.name}: {e}")
+                        print(f"⚠️  Clean log failed {log_file.name}: {e}")
         except Exception as e:
-            print(f"⚠️ 日志清理失败: {e}")
+            print(f"⚠️  Log cleanup failed: {e}")
 
     async def log_planning_point(
         self,

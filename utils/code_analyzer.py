@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 import difflib
+from aacode.i18n import t
 
 
 @dataclass
@@ -62,7 +63,7 @@ class CodeAnalyzer:
 
             return self.analyze_code(content, file_path.suffix)
         except Exception as e:
-            print(f"分析文件失败 {file_path}: {e}")
+            print(f"File analysis failed {file_path}: {e}")
             return AnalysisResult([], [], [], 0, [], 0)
 
     def analyze_code(self, code: str, file_extension: str = ".py") -> AnalysisResult:
@@ -136,7 +137,7 @@ class CodeAnalyzer:
                 0,
                 [
                     CodeIssue(
-                        "syntax", "critical", e.lineno or 0, 0, str(e), "修复语法错误"
+                        "syntax", "critical", e.lineno or 0, 0, str(e), "Fix syntax error"
                     )
                 ],
                 0,
@@ -155,7 +156,7 @@ class CodeAnalyzer:
             if len(line) > 120:
                 issues.append(
                     CodeIssue(
-                        "style", "low", i + 1, 0, "行过长", "考虑将长行拆分为多行"
+                        "style", "low", i + 1, 0, "Line too long", "Consider splitting long lines"
                     )
                 )
 
@@ -192,8 +193,8 @@ class CodeAnalyzer:
                         "low",
                         i + 1,
                         0,
-                        "包含未完成的TODO/FIXME",
-                        "完成或移除TODO标记",
+                        "Contains unfinished TODO/FIXME",
+                        "Complete or remove TODO marker",
                     )
                 )
 
@@ -205,8 +206,8 @@ class CodeAnalyzer:
                         "medium",
                         i + 1,
                         0,
-                        "包含调试打印语句",
-                        "使用日志系统替代print",
+                        "Contains debug print statements",
+                        "Replace with logging system",
                     )
                 )
 
@@ -218,8 +219,8 @@ class CodeAnalyzer:
                         "high",
                         i + 1,
                         0,
-                        "使用裸except子句",
-                        "指定具体的异常类型",
+                        "Bare except clause used",
+                        "Specify concrete exception types",
                     )
                 )
 
@@ -236,8 +237,8 @@ class CodeAnalyzer:
                                 "medium",
                                 node.lineno,
                                 0,
-                                f"函数过长 ({func_lines}行)",
-                                "考虑拆分为更小的函数",
+                                f"Function too long ({func_lines} lines)",
+                                "Consider splitting into smaller functions",
                             )
                         )
 
@@ -249,8 +250,8 @@ class CodeAnalyzer:
                             "medium",
                             node.lineno,
                             0,
-                            f"参数过多 ({len(node.args.args)}个)",
-                            "考虑使用配置对象或减少参数",
+                            f"Too many parameters ({len(node.args.args)})",
+                            "Consider using a config object or reducing parameters",
                         )
                     )
 

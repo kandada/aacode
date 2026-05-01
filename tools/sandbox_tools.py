@@ -1,7 +1,7 @@
-# 沙箱执行工具
+# sandbox执行工具
 # tools/sandbox_tools.py
 """
-沙箱工具集
+sandbox工具集
 用于在隔离环境中运行工具
 """
 
@@ -9,6 +9,7 @@ import asyncio
 import sys
 from typing import Dict, List, Any, Optional
 from pathlib import Path
+from aacode.i18n import t
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -20,16 +21,16 @@ else:
 
 
 class SandboxTools:
-    """沙箱工具集"""
+    """sandbox工具集"""
 
     def __init__(self, project_path: Path, safety_guard):
         self.project_path = project_path
         self.safety_guard = safety_guard
 
-        # 沙箱管理器
+        # sandbox管理器
         import os
 
-        sandbox_type = os.getenv("SANDBOX_TYPE", "docker")  # 默认使用Docker沙箱
+        sandbox_type = os.getenv("SANDBOX_TYPE", "docker")  # 默认使用Dockersandbox
         self.sandbox_manager = SandboxManager(
             sandbox_type=sandbox_type, base_dir=project_path / ".aacode" / "sandboxes"
         )
@@ -39,18 +40,18 @@ class SandboxTools:
             LocalMCPClient()
         )  # 默认使用本地客户端
 
-        # 默认沙箱
+        # 默认sandbox
         self.default_sandbox_id = None
 
     async def run_in_sandbox(
         self, command: str, sandbox_id: str | None = None, timeout: int = 60
     ) -> Dict[str, Any]:
         """
-        在沙箱中运行命令
+        在sandbox中运行命令
 
         Args:
             command: 要执行的命令
-            sandbox_id: 沙箱ID(为空则使用默认沙箱)
+            sandbox_id: sandboxID(为空则使用默认sandbox)
             timeout: 超时时间
 
         Returns:
@@ -60,11 +61,11 @@ class SandboxTools:
         safety_check = self.safety_guard.check_command(command)
         if not safety_check["allowed"] and self.sandbox_manager.sandbox_type == "local":
             return {
-                "error": f"命令被安全护栏拒绝: {safety_check['reason']}",
-                "suggestion": "请使用Docker沙箱运行潜在危险命令",
+                "error": f"Command rejected by safety guard: {safety_check['reason']}",
+                "suggestion": "Please use Docker sandbox to run potentially dangerous commands",
             }
 
-        # 获取或创建沙箱
+        # 获取或创建sandbox
         if not sandbox_id:
             if not self.default_sandbox_id:
                 result = await self.sandbox_manager.create_sandbox(
@@ -77,9 +78,9 @@ class SandboxTools:
 
             sandbox_id = self.default_sandbox_id or "default_sandbox"
 
-        print(f"🛡️  在沙箱 {sandbox_id} 中执行: {command[:50]}...")
+        print(f"🛡️  Execute in sandbox {sandbox_id}: {command[:50]}...")
 
-        # 在沙箱中执行命令
+        # 在sandbox中执行命令
         return await self.sandbox_manager.execute_in_sandbox(
             sandbox_id or "default_sandbox", command, timeout
         )
@@ -88,12 +89,12 @@ class SandboxTools:
         self, package: str, package_manager: str = "pip", sandbox_id: str | None = None
     ) -> Dict[str, Any]:
         """
-        在沙箱中安装软件包
+        在sandbox中安装软件包
 
         Args:
             package: 包名
             package_manager: 包管理器 (pip, apt, npm, etc.)
-            sandbox_id: 沙箱ID
+            sandbox_id: sandboxID
 
         Returns:
             安装结果
@@ -108,7 +109,7 @@ class SandboxTools:
         elif package_manager == "yarn":
             command = f"yarn global add {package}"
         else:
-            return {"error": f"不支持的包管理器: {package_manager}"}
+            return {"error": f"Unsupported package manager: {package_manager}"}
 
         return await self.run_in_sandbox(command, sandbox_id, timeout=120)
 
@@ -129,7 +130,7 @@ class SandboxTools:
         Returns:
             调用结果
         """
-        print(f"🔌 调用MCP工具: {tool_name}")
+        print(f"🔌 Call MCP tool: {tool_name}")
 
         # 连接到MCP服务器(如果需要)
         if mcp_server and isinstance(self.mcp_client, LocalMCPClient):
@@ -141,7 +142,7 @@ class SandboxTools:
             if not self.mcp_client.session_id:
                 connected = await self.mcp_client.connect()
                 if not connected:
-                    return {"error": "无法连接到MCP服务器"}
+                    return {"error": "Cannot connect to MCP server"}
         else:
             # LocalMCPClient always connects successfully
             await self.mcp_client.connect()
@@ -158,7 +159,7 @@ class SandboxTools:
         Args:
             script: 脚本代码
             language: 脚本语言
-            sandbox_id: 沙箱ID
+            sandbox_id: sandboxID
 
         Returns:
             执行结果
@@ -195,9 +196,9 @@ class SandboxTools:
             elif language == "javascript" or language == "node":
                 command = f"node {script_path}"
             else:
-                return {"error": f"不支持的语言: {language}"}
+                return {"error": f"Unsupported language: {language}"}
 
-            # 在沙箱中执行
+            # 在sandbox中执行
             result = await self.run_in_sandbox(command, sandbox_id)
 
             # 添加脚本信息
@@ -217,7 +218,7 @@ class SandboxTools:
         创建隔离的Python环境
 
         Args:
-            sandbox_id: 沙箱ID
+            sandbox_id: sandboxID
             packages: 要安装的Python包列表
 
         Returns:
@@ -225,7 +226,7 @@ class SandboxTools:
         """
         sandbox_id = sandbox_id or f"venv_{asyncio.get_event_loop().time():.0f}"
 
-        # 创建沙箱
+        # 创建sandbox
         result = await self.sandbox_manager.create_sandbox(sandbox_id=sandbox_id)
 
         if not result["success"]:
@@ -246,7 +247,7 @@ class SandboxTools:
             )
             if not cmd_result.get("success"):
                 return {
-                    "error": f"创建环境失败: {cmd_result.get('error', '未知错误')}",
+                    "error": f"Create env failed: {cmd_result.get('error', 'unknown')}",
                     "command": cmd,
                     "sandbox_id": sandbox_id,
                 }
@@ -256,11 +257,11 @@ class SandboxTools:
             "sandbox_id": sandbox_id,
             "environment": "venv",
             "packages": packages or [],
-            "message": f"隔离环境创建成功,ID: {sandbox_id}",
+            "message": f"Isolated environment created successfully, ID: {sandbox_id}",
         }
 
     async def cleanup_all_sandboxes(self) -> Dict[str, Any]:
-        """清理所有沙箱"""
+        """清理所有sandbox"""
         sandboxes = await self.sandbox_manager.list_sandboxes()
 
         results = []
@@ -268,7 +269,7 @@ class SandboxTools:
             result = await self.sandbox_manager.cleanup_sandbox(sandbox_id)
             results.append({"sandbox_id": sandbox_id, "result": result})
 
-        # 重置默认沙箱
+        # 重置默认sandbox
         self.default_sandbox_id = None
 
         return {"success": True, "cleaned_sandboxes": results, "count": len(results)}

@@ -63,7 +63,7 @@ class CodeTools:
 
             # 安全检查
             if not self.safety_guard.is_safe_python_code(code):
-                return {"error": "代码安全检查失败"}
+                return {"error": "Code safety check failed"}
 
             # 创建临时文件
             with tempfile.NamedTemporaryFile(
@@ -109,7 +109,7 @@ class CodeTools:
                 except asyncio.TimeoutError:
                     process.terminate()
                     return {
-                        "error": f"代码执行超时 ({timeout_float}秒)",
+                        "error": f"Code execution timeout ({timeout_float}s)",
                         "file": str(temp_file.relative_to(self.project_path)),
                     }
 
@@ -139,7 +139,7 @@ class CodeTools:
             if test_path:
                 test_target = self.project_path / test_path
                 if not test_target.exists():
-                    return {"error": f"测试路径不存在: {test_path}"}
+                    return {"error": f"Test path not found: {test_path}"}
             else:
                 # 运行项目中的所有测试
                 test_target = self.project_path
@@ -190,7 +190,7 @@ class CodeTools:
 
             except asyncio.TimeoutError:
                 process.terminate()
-                return {"error": "测试执行超时", "success": False}
+                return {"error": "Test execution timeout", "success": False}
 
         except Exception as e:
             return {"error": str(e)}

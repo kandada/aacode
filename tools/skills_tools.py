@@ -1,5 +1,5 @@
 """
-Skills工具层 - Skills加载和执行
+Skills工具层 - Skills加载和execute
 tools/skills_tools.py
 """
 
@@ -7,6 +7,7 @@ import asyncio
 import importlib.util
 import inspect
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Dict, Any, Optional, List
@@ -30,10 +31,10 @@ class SkillInfo:
     parameters: Dict[str, Any]
     examples: List[Dict[str, Any]]
     skill_dir: str
-    # 新增：元数据字段，用于渐进式披露
+    # 新增：元数据字段， with 于渐进式披露
     display_name: str = ""
     trigger_keywords: List[str] = field(default_factory=list)
-    # 新增：skill使用指南
+    # 新增：skill使 with 指南
     usage_guide: str = ""
     # 新增：加载状态标记
     metadata_loaded: bool = False
@@ -52,7 +53,7 @@ class SkillsManager:
     ):
         self.project_path = project_path
         # skills目录相对于项目根目录，而不是当前工作目录
-        # 首先尝试从配置获取，默认为项目根目录下的skills
+        # 首先尝试从配置Get ，默认为项目根目录下的skills
         skills_dir_name = "skills"
         if skills_config and "skills_dir" in skills_config:
             skills_dir_name = skills_config["skills_dir"]
@@ -60,7 +61,7 @@ class SkillsManager:
         # 如果skills_dir是相对路径，假设相对于项目根目录
         skills_dir_path = Path(skills_dir_name)
         if not skills_dir_path.is_absolute():
-            # 获取项目根目录（aacode_local目录）
+            # Get 项目根目录（aacode_local目录）
             project_root = Path(__file__).parent.parent.absolute()
             self.skills_dir = project_root / skills_dir_name
         else:
@@ -72,53 +73,33 @@ class SkillsManager:
         self.skills_metadata: Dict[str, Dict[str, Any]] = {}
         if skills_config:
             self.skills_metadata = skills_config.get("skills_metadata", {})
-            # 从配置加载启用的skills
+            # 从配置加载启 with 的skills
             self.enabled_skills = skills_config.get("enabled_skills", [])
 
     def discover_skills(
         self, load_full_instructions: bool = False
     ) -> Dict[str, SkillInfo]:
-        """发现并加载所有skills
-
-        Args:
-            load_full_instructions: 是否加载完整指令（默认只加载元数据）
-        """
+        """发现并加载所有skills（从 SKILL.md 提取元数据，不依赖 yaml）"""
         if not self.skills_dir.exists():
             return {}
 
         for skill_dir in self.skills_dir.iterdir():
-            if skill_dir.is_dir():
-                skill_name = skill_dir.name
+            if not skill_dir.is_dir():
+                continue
+            skill_name = skill_dir.name
+            if skill_name.startswith(".") or skill_name.startswith("_"):
+                continue
 
-                # 先检查是否有配置的元数据
-                if skill_name in self.skills_metadata:
-                    metadata = self.skills_metadata[skill_name]
-                    # 创建基础SkillInfo（只包含元数据）
-                    skill_info = SkillInfo(
-                        name=skill_name,
-                        description=metadata.get("description", ""),
-                        module_path="",
-                        function_name="",
-                        parameters={},
-                        examples=[],
-                        skill_dir=str(skill_dir),
-                        display_name=metadata.get("name", skill_name),
-                        trigger_keywords=metadata.get("trigger_keywords", []),
-                        usage_guide=metadata.get("usage_guide", ""),
-                        metadata_loaded=True,
-                        full_instruction_loaded=False,
-                    )
-                    self.loaded_skills[skill_name] = skill_info
+            # 所有 skill 统一从 SKILL.md 提取元数据
+            skill_info = self._load_skill(skill_dir)
+            if skill_info is None:
+                continue
 
-                    # 如果需要加载完整指令
-                    if load_full_instructions:
-                        self._load_full_instruction(skill_name)
-                else:
-                    # 回退到原来的完整加载（兼容性）
-                    loaded_skill_info = self._load_skill(skill_dir)
-                    if loaded_skill_info is not None:
-                        # loaded_skill_info在if块中不是None
-                        self.loaded_skills[loaded_skill_info.name] = loaded_skill_info
+            skill_info.metadata_loaded = True
+            if not load_full_instructions:
+                # 渐进式：先不加载完整指令
+                skill_info.full_instruction_loaded = False
+            self.loaded_skills[skill_name] = skill_info
 
         return self.loaded_skills
 
@@ -161,14 +142,14 @@ class SkillsManager:
         return False
 
     def _load_skill(self, skill_dir: Path) -> Optional[SkillInfo]:
-        """加载单个skill"""
+        """加载单个skill（从 SKILL.md + .py 提取所有信息）"""
         skill_name = skill_dir.name
 
         skill_md = skill_dir / "SKILL.md"
         if not skill_md.exists():
             return None
 
-        description = self._read_skill_description(skill_md)
+        md_info = self._parse_skill_md(skill_md)
 
         impl_files = [
             f
@@ -181,111 +162,47 @@ class SkillsManager:
 
         main_impl = impl_files[0]
 
-        # 发现所有公开函数
         func_names = self._find_all_functions(main_impl)
         if not func_names:
             return None
 
-        # 使用第一个函数作为主函数（保持兼容）
         main_func_name = func_names[0]
 
-        # 提取所有函数的参数信息
         all_functions = {}
         for func_name in func_names:
             params, examples = self._extract_function_info(main_impl, func_name)
             all_functions[func_name] = {"parameters": params, "examples": examples}
 
+        #  with  SKILL.md 的 Parameters 段落补全函数参数描述
+        params_desc = md_info.get("parameters_desc", {})
+        if params_desc:
+            for func_name in func_names:
+                func_params = all_functions[func_name]["parameters"]
+                for pname, pdesc in params_desc.items():
+                    if pname in func_params:
+                        func_params[pname]["description"] = pdesc
+
+        #  with  SKILL.md 的 Example 段落补全示例
+        examples_text = md_info.get("examples_text", "")
+        if examples_text:
+            for func_name in func_names:
+                if examples_text not in all_functions[func_name]["examples"]:
+                    all_functions[func_name]["examples"].append(examples_text)
+
         return SkillInfo(
             name=skill_name,
-            description=description,
+            description=md_info.get("description", ""),
             module_path=str(main_impl),
             function_name=main_func_name,
             parameters=all_functions[main_func_name]["parameters"],
             examples=all_functions[main_func_name]["examples"],
             skill_dir=str(skill_dir),
             functions=all_functions,
+            display_name=skill_name.replace("_", " ").title(),
+            trigger_keywords=[],
+            usage_guide=md_info.get("full_content", ""),
+            full_md_content=md_info.get("full_content", ""),
         )
-
-    def _find_main_function(self, impl_file: Path) -> Optional[str]:
-        """查找主函数（完全自由命名，无前缀限制）"""
-        try:
-            # 读取源代码文件
-            source = impl_file.read_text(encoding="utf-8")
-
-            # 使用正则表达式查找函数定义，保持顺序
-            import re
-
-            # 查找所有函数定义
-            function_pattern = r"^(async\s+)?def\s+(\w+)\s*\("
-            lines = source.split("\n")
-
-            functions = []
-            for i, line in enumerate(lines):
-                line = line.strip()
-                match = re.match(function_pattern, line)
-                if match:
-                    is_async = bool(match.group(1))
-                    func_name = match.group(2)
-                    functions.append((func_name, is_async, i))
-
-            if not functions:
-                return None
-
-            # 策略：优先选择第一个async函数
-            async_funcs = [
-                name
-                for name, is_async, line_no in functions
-                if is_async and not name.startswith("_")
-            ]
-            if async_funcs:
-                return async_funcs[0]
-
-            # 如果没有async函数，选择第一个公共函数
-            public_funcs = [
-                name
-                for name, is_async, line_no in functions
-                if not name.startswith("_") and name != "main"
-            ]
-            if public_funcs:
-                return public_funcs[0]
-
-            # 最后选择第一个函数
-            return functions[0][0]
-
-        except:
-            # 回退方案：使用模块加载
-            try:
-                spec = importlib.util.spec_from_file_location("skill", impl_file)
-                if spec is None or spec.loader is None:
-                    return None
-
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-
-                # 获取所有函数
-                all_funcs = inspect.getmembers(module, inspect.isfunction)
-
-                # 查找async函数
-                async_funcs = []
-                for name, func in all_funcs:
-                    if asyncio.iscoroutinefunction(func) and not name.startswith("_"):
-                        async_funcs.append(name)
-
-                if async_funcs:
-                    return async_funcs[0]
-
-                # 查找公共函数
-                public_funcs = []
-                for name, func in all_funcs:
-                    if not name.startswith("_") and name != "main":
-                        public_funcs.append(name)
-
-                if public_funcs:
-                    return public_funcs[0]
-
-                return None
-            except:
-                return None
 
     def _find_all_functions(self, impl_file: Path) -> List[str]:
         """查找所有公开函数（过滤私有函数，优先返回async函数）"""
@@ -293,16 +210,16 @@ class SkillsManager:
             source = impl_file.read_text(encoding="utf-8")
             import re
 
-            # 改进的正则表达式：只匹配顶级函数（行首没有空格）
+            # 改进的正则表达式：只匹配顶级函数（ lines首没有空格）
             function_pattern = r"^(async\s+)?def\s+(\w+)\s*\("
             lines = source.split("\n")
 
             async_functions = []
             sync_functions = []
             for line in lines:
-                # 检查是否是顶级函数（行首没有空格或制表符）
+                # 检查是否是顶级函数（ lines首没有空格或制表符）
                 if line and line[0] in (" ", "\t"):
-                    continue  # 跳过有缩进的行（嵌套函数）
+                    continue  # 跳过有缩进的 lines（嵌套函数）
 
                 match = re.match(function_pattern, line.strip())
                 if match:
@@ -325,15 +242,52 @@ class SkillsManager:
         except:
             return []
 
-    def _read_skill_description(self, skill_md: Path) -> str:
-        """读取skill描述"""
+    def _parse_skill_md(self, skill_md: Path) -> Dict:
+        """从 SKILL.md 解析结构化字段（fastclaw 格式）"""
         try:
             content = skill_md.read_text(encoding="utf-8")
-            lines = content.strip().split("\n")
-            description = lines[0] if lines else ""
-            return description
-        except:
-            return ""
+        except Exception:
+            return {}
+        lines = content.strip().split("\n")
+        result = {
+            "full_content": content,
+            "description": "",
+            "parameters_desc": {},
+            "examples_text": "",
+        }
+
+        current_section = None
+        section_lines: list[str] = []
+
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("## "):
+                if current_section and section_lines:
+                    self._store_section(result, current_section, section_lines)
+                current_section = stripped[3:].strip().lower()
+                section_lines = []
+            elif current_section:
+                section_lines.append(line)
+
+        if current_section and section_lines:
+            self._store_section(result, current_section, section_lines)
+
+        if not result["description"]:
+            result["description"] = lines[0] if lines else ""
+
+        return result
+
+    def _store_section(self, result: dict, section: str, lines: list):
+        text = "\n".join(lines).strip()
+        if "description" in section:
+            result["description"] = text
+        elif "parameter" in section:
+            for line in lines:
+                match = re.match(r"-\s*(\w+)\s*:\s*(.+)", line.strip())
+                if match:
+                    result["parameters_desc"][match.group(1)] = match.group(2).strip()
+        elif "example" in section:
+            result["examples_text"] = text
 
     def _read_full_skill_md(self, skill_md: Path) -> str:
         """读取完整的SKILL.md内容"""
@@ -448,16 +402,16 @@ class SkillsManager:
     async def execute_skill(
         self, skill_name: str, func_name: str | None = None, **kwargs
     ) -> Dict[str, Any]:
-        """执行skill（按需加载完整指令）
+        """executeskill（按需加载完整指令）
         Args:
             skill_name: skill名称
-            func_name: 要执行的函数名，如果为None则使用主函数
+            func_name: 要execute的函数名，如果为None则使 with 主函数
         """
         if skill_name not in self.loaded_skills:
-            return {"success": False, "error": f"Skill不存在: {skill_name}"}
+            return {"success": False, "error": f"Skill not found: {skill_name}"}
 
         if skill_name not in self.enabled_skills:
-            return {"success": False, "error": f"Skill未启用: {skill_name}"}
+            return {"success": False, "error": f"Skill not enabled: {skill_name}"}
 
         skill_info = self.loaded_skills[skill_name]
 
@@ -466,7 +420,7 @@ class SkillsManager:
             self._load_full_instruction(skill_name)
             skill_info = self.loaded_skills[skill_name]
 
-        # 确定要执行的函数
+        # 确定要execute的函数
         target_func_name = func_name if func_name else skill_info.function_name
 
         # 验证函数是否存在
@@ -474,7 +428,7 @@ class SkillsManager:
             available_funcs = list(skill_info.functions.keys())
             return {
                 "success": False,
-                "error": f"函数 '{target_func_name}' 不存在，可用函数: {available_funcs}",
+                "error": f"Function '{target_func_name}' not found, available functions: {available_funcs}",
             }
 
         try:
@@ -484,7 +438,7 @@ class SkillsManager:
             if spec is None or spec.loader is None:
                 return {
                     "success": False,
-                    "error": f"无法加载skill模块: {skill_info.module_path}",
+                    "error": f"Unable to load skill module: {skill_info.module_path}",
                 }
 
             module = importlib.util.module_from_spec(spec)
@@ -505,55 +459,24 @@ class SkillsManager:
             return {"success": False, "error": str(e)}
 
     def enable_skills(self, skill_names: List[str]):
-        """启用skills"""
+        """启 with skills"""
         for name in skill_names:
             if name in self.loaded_skills:
                 self.enabled_skills.append(name)
 
     def list_enabled_skills(self) -> List[str]:
-        """列出启用的skills"""
+        """列出启 with 的skills"""
         return self.enabled_skills
 
-    def get_skill_schema(self, skill_name: str) -> Optional[ToolSchema]:
-        """获取skill的schema"""
-        if skill_name not in self.loaded_skills:
-            return None
+    def get_skills_list_for_prompt(self) -> str:
+        """生成用于 system prompt 的技能列表字符串（仅名称+描述）"""
+        if not self.enabled_skills:
+            return "(暂无可用 Skills)"
+        lines = []
+        for name in self.enabled_skills:
+            info = self.loaded_skills.get(name)
+            desc = info.description if info else ""
+            lines.append(f"- {name}: {desc}")
+        return "\n".join(lines)
 
-        skill_info = self.loaded_skills[skill_name]
 
-        params = []
-        for name, info in skill_info.parameters.items():
-            param = ToolParameter(
-                name=name,
-                type=str,
-                required=info.get("required", False),
-                default=info.get("default"),
-                description=info.get("description", ""),
-            )
-            params.append(param)
-
-        return ToolSchema(
-            name=skill_name,
-            description=skill_info.description,
-            parameters=params,
-            examples=skill_info.examples,
-        )
-
-    def get_all_skills_doc(self) -> str:
-        """获取所有skills文档"""
-        if not self.loaded_skills:
-            return "# 可用Skills\n\n暂无可用的Skills"
-
-        doc = "# 可用Skills\n\n"
-        for name, skill in self.loaded_skills.items():
-            status = "✅" if name in self.enabled_skills else "❌"
-            doc += f"## {status} {name}\n\n"
-            doc += f"{skill.description}\n\n"
-            if skill.parameters:
-                doc += "### 参数\n\n"
-                for param_name, param_info in skill.parameters.items():
-                    required = "必需" if param_info.get("required") else "可选"
-                    doc += f"- `{param_name}` ({param_info.get('type', 'Any')}, {required})\n"
-            doc += "\n---\n\n"
-
-        return doc

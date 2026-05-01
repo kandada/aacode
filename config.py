@@ -10,6 +10,7 @@ from typing import Dict, Any, Optional
 from dataclasses import dataclass, asdict, field
 from typing import Dict, Any, Optional, List
 import yaml
+from aacode.i18n import t
 
 
 @dataclass
@@ -22,7 +23,7 @@ class ModelConfig:
     temperature: float = 0.1
     max_tokens: int = 8000
     gateway: str = "openai"  # openai, anthropic
-    multimodal: bool = False  # 是否支持多模态
+    multimodal: bool = False  # 是否supports multimodal
 
     def __post_init__(self):
         # 环境变量优先，yaml配置作为后备
@@ -49,14 +50,14 @@ class ModelConfig:
         """根据模型名称自动检测配置"""
         model_lower = self.name.lower()
 
-        # 检查用户是否通过环境变量显式设置了网关
+        # 检查 user是否通过环境变量显式设置了网关
         user_explicit_gateway = os.getenv("LLM_GATEWAY")
 
-        # 多模态模型检测（只有明确支持多模态的模型）
+        # Multimodal model检测（只有明确supports multimodal的模型）
         # 重置为默认值，然后根据模型名称检测
         self.multimodal = False  # 默认不是多模态
 
-        # 更灵活的多模态模型检测，支持多种名称格式
+        # 更灵活的Multimodal model检测，支持多种名称格式
         model_lower_clean = model_lower.replace("-", "_").replace(" ", "_")
 
         # 检测Kimi模型（支持多种格式）
@@ -72,11 +73,11 @@ class ModelConfig:
 
         if is_kimi or is_minimax:
             self.multimodal = True
-            print(f"🔍 检测到多模态模型: {self.name} (格式: {model_lower_clean})")
+            print(f"🔍 Multimodal model detected: {self.name} (format: {model_lower_clean})")
 
-        # 根据用户是否显式设置网关来决定行为
+        # 根据 user是否显式设置网关来决定 lines为
         if user_explicit_gateway:
-            # 用户显式设置了网关，只根据网关类型选择URL，不覆盖网关本身
+            #  user显式设置了网关，只根据网关类型选择URL，不覆盖网关本身
             gateway = user_explicit_gateway.lower()
             if is_minimax:
                 if gateway == "anthropic":
@@ -106,11 +107,11 @@ class ModelConfig:
                     if not self.base_url or "anthropic" in self.base_url:
                         self.base_url = "https://api.deepseek.com/v1"
             elif "gpt" in model_lower and gateway == "anthropic":
-                # GPT模型使用Anthropic网关时，指向Anthropic官方API
+                # GPT模型使 with Anthropic网关时，指向Anthropic官方API
                 if not self.base_url or "openai" in self.base_url:
                     self.base_url = "https://api.anthropic.com"
             elif "claude" in model_lower:
-                # Claude模型默认使用Anthropic网关
+                # Claude模型默认使 with Anthropic网关
                 if gateway == "anthropic":
                     if not self.base_url or "openai" in self.base_url:
                         self.base_url = "https://api.anthropic.com"
@@ -118,7 +119,7 @@ class ModelConfig:
                     if not self.base_url or "anthropic" in self.base_url:
                         self.base_url = "https://api.openai.com/v1"
         else:
-            # 用户没有显式设置网关，使用默认行为
+            #  user没有显式设置网关，使 with 默认 lines为
             if is_minimax:
                 self.gateway = "anthropic"
                 if not self.base_url or "openai" in self.base_url:
@@ -134,7 +135,7 @@ class ModelConfig:
                 if not self.base_url or "anthropic" in self.base_url:
                     self.base_url = "https://api.deepseek.com/v1"
             elif "claude" in model_lower:
-                # Claude模型默认使用Anthropic网关
+                # Claude模型默认使 with Anthropic网关
                 self.gateway = "anthropic"
                 if not self.base_url or "openai" in self.base_url:
                     self.base_url = "https://api.anthropic.com"
@@ -163,7 +164,6 @@ class ToolConfig:
     """工具配置"""
 
     # 原子工具
-    enable_file_ops: bool = True
     enable_shell: bool = True
     enable_search: bool = True
 
@@ -222,16 +222,16 @@ class AgentConfig:
 
 @dataclass
 class MCPConfig:
-    """MCP服务器配置"""
+    """MCP server配置"""
 
     enabled: bool = True
-    # STD类型MCP服务器配置
+    # STD类型MCP server配置
     # 注意：具体配置从aacode_config.yaml文件加载，这里只保留空列表
     std_servers: List[Dict[str, Any]] = field(default_factory=list)
-    # SSE类型MCP服务器配置
+    # SSE类型MCP server配置
     # 注意：具体配置从aacode_config.yaml文件加载，这里只保留空列表
     sse_servers: List[Dict[str, Any]] = field(default_factory=list)
-    # 通用配置
+    # 通 with 配置
     auto_connect: bool = True
     connection_timeout: int = 30
     max_retries: int = 3
@@ -252,21 +252,21 @@ class OutputConfig:
     normal_output_preview: int = 3000  # 普通输出预览长度（从2000增加）
 
     # 测试摘要
-    test_summary_enabled: bool = True  # 是否启用测试摘要
-    test_summary_max_lines: int = 20  # 摘要最大行数
+    test_summary_enabled: bool = True  # 是否启 with 测试摘要
+    test_summary_max_lines: int = 20  # 摘要最大 lines数
 
 
 @dataclass
 class TimeoutConfig:
-    """超时配置"""
+    """timeout配置"""
 
-    shell_command: int = 30  # Shell命令执行超时（秒）
-    tool_execution: int = 60  # 工具执行超时（秒）
-    model_summary: int = 30  # 模型摘要生成超时（秒）
-    file_search: int = 5  # 文件搜索超时（秒）
-    code_execution: int = 60  # 代码执行超时（秒）
-    sandbox_command: int = 120  # 沙箱命令超时（秒）
-    web_request: int = 30  # 网络请求超时（秒）
+    shell_command: int = 30  # Shell命令executetimeout（秒）
+    tool_execution: int = 60  # 工具executetimeout（秒）
+    model_summary: int = 30  # 模型摘要生成timeout（秒）
+    file_search: int = 5  # 文件搜索timeout（秒）
+    code_execution: int = 60  # 代码executetimeout（秒）
+    sandbox_command: int = 120  # 沙箱命令timeout（秒）
+    web_request: int = 30  # 网络请求timeout（秒）
 
 
 @dataclass
@@ -277,8 +277,8 @@ class LimitsConfig:
     max_search_results: int = 20  # 搜索最大结果数
     max_retries: int = 3  # 最大重试次数
     shell_output_preview: int = 200  # Shell输出预览长度（字符）
-    max_auto_read_lines: int = 200  # 超过此行数时提供分段建议
-    structure_preview_lines: int = 50  # 结构预览显示的行数
+    max_auto_read_lines: int = 200  # 超过此 lines数时提供分段建议
+    structure_preview_lines: int = 50  # 结构预览显示的 lines数
     max_context_files: int = 50  # 上下文中显示的最大文件数
     prioritize_file_types: bool = True  # 是否优先显示重要文件类型
 
@@ -287,21 +287,14 @@ class LimitsConfig:
 class SkillsConfig:
     """Skills配置"""
 
-    enabled: bool = True  # 是否启用skills功能
-    skills_dir: str = "skills"  # Skills目录（相对于项目根目录）
-    auto_discover: bool = True  # 是否自动发现skills
-    enabled_skills: List[str] = field(
-        default_factory=list
-    )  # 默认启用的skills列表（空列表，从文件加载）
-    # Skills元数据配置 - 用于渐进式披露，提高token效率
-    # 格式：skill_name: {name: 显示名称, description: 简短描述, trigger_keywords: [关键词列表]}
-    # 注意：具体配置从skills/skills_metadata.yaml文件加载，这里只保留空字典
-    skills_metadata: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    enabled: bool = True
+    skills_dir: str = "skills"
+    auto_discover: bool = True
 
 
 @dataclass
 class MultimodalModelConfig:
-    """单个多模态模型配置"""
+    """单个Multimodal model配置"""
 
     name: str = ""
     provider: str = ""
@@ -321,10 +314,10 @@ class MultimodalModelConfig:
 
 @dataclass
 class MultimodalConfig:
-    """多模态模型配置"""
+    """Multimodal model配置"""
 
-    enabled: bool = True  # 是否启用多模态功能
-    default_model: str = "moonshot_kimi_k2.5"  # 默认使用的多模态模型
+    enabled: bool = True  # 是否启 with 多模态功能
+    default_model: str = "moonshot_kimi_k2.5"  # 默认使 with 的Multimodal model
     models: Dict[str, Any] = field(
         default_factory=lambda: {
             "moonshot_kimi_k2.5": {
@@ -379,7 +372,7 @@ class Settings:
                 return path, "explicit"
             return None, "none"
 
-        # 环境变量指定配置文件（客户端开发模式用）
+        # 环境变量指定配置文件（客户端开发模式 with ）
         env_config = os.getenv("AACODE_CONFIG_FILE")
         if env_config:
             path = Path(env_config)
@@ -409,16 +402,21 @@ class Settings:
         self.agent = AgentConfig()
         self.mcp = MCPConfig()  # MCP配置
         self.output = OutputConfig()  # 输出配置
-        self.timeouts = TimeoutConfig()  # 超时配置
+        self.timeouts = TimeoutConfig()  # timeout配置
         self.limits = LimitsConfig()  # 限制配置
         self.skills = SkillsConfig()  # Skills配置
         self.multimodal = MultimodalConfig()  # 多模态配置
+        self.language: str = "en"    # 语言 en / zh
 
         # 从文件加载配置
         self.load_config()
 
         # 从环境变量更新配置（环境变量优先）
         self._load_from_env()
+
+        # initialized i18n
+        from aacode.i18n import init as i18n_init
+        i18n_init(self.language)
 
     def load_config(self):
         """从文件加载配置"""
@@ -431,7 +429,7 @@ class Settings:
                 if config_data:
                     self._update_from_dict(config_data)
             except Exception as e:
-                print(f"⚠️ 配置文件加载失败: {e}")
+                print(t("config.load_error", e=str(e)))
 
     def save_config(self):
         """保存配置到文件"""
@@ -448,7 +446,7 @@ class Settings:
             with open(self.config_path, "w", encoding="utf-8") as f:
                 yaml.dump(config_data, f, default_flow_style=False, allow_unicode=True)
         except Exception as e:
-            print(f"⚠️ 配置文件保存失败: {e}")
+            print(t("config.save_error", e=str(e)))
 
     def _load_from_env(self):
         """从环境变量加载配置（环境变量优先）"""
@@ -474,7 +472,7 @@ class Settings:
             # 触发ModelConfig的__post_init__重新加载
             self.model.multimodal = llm_multimodal.lower() in ["true", "1", "yes", "on"]
 
-        # 多模态模型选择
+        # Multimodal model选择
         multimodal_model = os.getenv("MULTIMODAL_MODEL")
         if multimodal_model and multimodal_model in self.multimodal.models:
             self.multimodal.default_model = multimodal_model
@@ -489,6 +487,11 @@ class Settings:
         if search_api_url:
             self.tools.search_api_url = search_api_url
             self.tools.enable_web_search = True
+
+        # 语言配置
+        lang = os.getenv("AACODE_LANG")
+        if lang and lang in ("en", "zh"):
+            self.language = lang
 
     def _update_from_dict(self, config_dict: Dict[str, Any]):
         """从字典更新配置"""
@@ -558,9 +561,6 @@ class Settings:
                         if hasattr(self.skills, key):
                             setattr(self.skills, key, value)
 
-            # 加载skills/skills_metadata.yaml作为元数据源（优先级高于aacode_config.yaml中的配置）
-            self._load_skills_metadata_from_file()
-
             if section == "multimodal":
                 # 处理多模态配置
                 if isinstance(values, dict):
@@ -568,11 +568,25 @@ class Settings:
                         if hasattr(self.multimodal, key):
                             setattr(self.multimodal, key, value)
             elif section == "model":
-                # 处理model配置
+                # 处理model配置（支持列表+扁平两种结构）
                 if isinstance(values, dict):
+                    # 优先从列表结构读取（models + default_model）
+                    if "models" in values and "default_model" in values:
+                        default_key = values["default_model"]
+                        models = values.get("models", {})
+                        if isinstance(models, dict) and default_key in models:
+                            model_entry = models[default_key]
+                            for k, v in model_entry.items():
+                                if hasattr(self.model, k):
+                                    setattr(self.model, k, v)
+                    # 扁平字段（temperature / max_tokens / 向后兼容）
                     for key, value in values.items():
+                        if key in ("models", "default_model"):
+                            continue
                         if hasattr(self.model, key):
                             setattr(self.model, key, value)
+            elif section == "language":
+                self.language = str(values) if values else "en"
             elif hasattr(self, section):
                 section_obj = getattr(self, section)
                 if hasattr(section_obj, "__dataclass_fields__"):
@@ -582,7 +596,7 @@ class Settings:
 
     @property
     def DEFAULT_MODEL(self):
-        """获取默认模型配置"""
+        """Get 默认模型配置"""
         # 环境变量优先，yaml配置作为后备
         return {
             "name": os.getenv("LLM_MODEL_NAME") or self.model.name or "deepseek-chat",
@@ -596,36 +610,13 @@ class Settings:
 
     @property
     def MAX_REACT_ITERATIONS(self):
-        """获取最大React迭代次数"""
+        """Get 最大React迭代次数"""
         return self.agent.max_react_iterations
 
     @property
     def MAX_SUB_AGENT_ITERATIONS(self):
-        """获取子Agent最大迭代次数"""
+        """Get SubAgent最大迭代次数"""
         return self.agent.max_sub_agent_iterations
-
-    def _load_skills_metadata_from_file(self):
-        """从skills/skills_metadata.yaml加载配置（优先级最高）"""
-        project_root = Path(__file__).parent
-        skills_metadata_file = project_root / "skills" / "skills_metadata.yaml"
-
-        if skills_metadata_file.exists():
-            try:
-                with open(skills_metadata_file, "r", encoding="utf-8") as f:
-                    file_config = yaml.safe_load(f)
-
-                if file_config and isinstance(file_config, dict):
-                    # 读取enabled列表（文件优先）
-                    file_enabled = file_config.get("enabled", [])
-                    if file_enabled:
-                        self.skills.enabled_skills = file_enabled
-
-                    # 读取metadata（文件优先）
-                    file_metadata = file_config.get("metadata", {})
-                    if file_metadata:
-                        self.skills.skills_metadata = file_metadata
-            except Exception as e:
-                print(f"⚠️ Skills配置文件加载失败: {e}")
 
     def validate(self) -> List[str]:
         """验证配置，返回错误消息列表"""
@@ -638,11 +629,11 @@ class Settings:
             and not os.getenv("OPENAI_API_KEY")
         ):
             errors.append(
-                "未配置LLM API密钥。请设置环境变量 LLM_API_KEY 或 OPENAI_API_KEY，或在配置文件中设置 model.api_key"
+                "LLM API key not configured. Please set the environment variable LLM_API_KEY or OPENAI_API_KEY, or set model.api_key in the config file"
             )
 
-        # 检查多模态配置（如果启用且当前模型是多模态的）
-        # 只有当多模态功能启用且当前模型是多模态模型时才检查多模态API密钥
+        # 检查多模态配置（如果启 with 且当前模型是多模态的）
+        # 只有当多模态功能启 with 且当前模型是Multimodal model时才检查多模态API密钥
         if self.multimodal.enabled and self.model.multimodal:
             for model_name, model_config in self.multimodal.models.items():
                 # 只检查与当前模型相关的多模态配置
@@ -655,27 +646,27 @@ class Settings:
                         f"{model_config.get('provider', '').upper()}_API_KEY"
                     ):
                         errors.append(
-                            f"多模态模型 {model_name} 缺少API密钥。请设置环境变量 {model_config.get('provider', '').upper()}_API_KEY 或在配置文件中设置"
+                            f"Multimodal model {model_name} is missing an API key. Please set the environment variable {model_config.get('provider', '').upper()}_API_KEY or set it in the config file"
                         )
 
-        # 检查搜索配置（如果启用）
+        # 检查搜索配置（如果启 with ）
         if (
             self.tools.enable_web_search
             and not self.tools.search_api_url
             and not os.getenv("SEARCHXNG_URL")
         ):
             errors.append(
-                "Web搜索已启用但未配置搜索API URL。请设置环境变量 SEARCHXNG_URL 或在配置文件中设置 tools.search_api_url"
+                "Web search is enabled but the search API URL is not configured. Please set the SEARCHXNG_URL environment variable or set tools.search_api_url in the config file"
             )
 
         return errors
 
     def get_validated_config(self) -> Dict[str, Any]:
-        """获取验证后的配置（如果验证失败则抛出异常）"""
+        """Get 验证后的配置（如果验证失败则抛出异常）"""
         errors = self.validate()
         if errors:
             raise ValueError(
-                f"配置验证失败:\n" + "\n".join(f"  - {error}" for error in errors)
+                f"Configuration validation failed:\n" + "\n".join(f"  - {error}" for error in errors)
             )
 
         return {
