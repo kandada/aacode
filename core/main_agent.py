@@ -117,7 +117,7 @@ class MainAgent(BaseAgent):
         **kwargs,
     ):
 
-        # initialized模型调 with 器
+        # initialized模型
         model_caller = self._create_model_caller(model_config)
 
         # 先initializedskills_manager，因为_create_tools需要它
@@ -145,6 +145,9 @@ class MainAgent(BaseAgent):
         system_prompt = SYSTEM_PROMPT_FOR_MAIN_AGENT.replace(
             "{skills_list}", skills_list
         )
+
+        # 注入项目目录信息到系统提示词
+        system_prompt += f"\n\n## Working Directory\nYour current working directory is: {project_path.absolute()}\nAll file operations should use paths relative to this directory."
 
         # 更新系统提示词
         self.system_prompt = system_prompt
@@ -1227,6 +1230,10 @@ class MainAgent(BaseAgent):
             system_prompt = """You are a general-purpose sub-agent.
             Focus on completing the assigned task efficiently.
             Use the provided tools to complete your task."""
+
+        # 注入项目目录信息到子代理系统提示词
+        project_path_str = f"\n\nYour current working directory is: {self.project_path.absolute()}\nAll file operations should use paths relative to this directory."
+        system_prompt += project_path_str
 
         # 创建SubAgent
         sub_agent = SubAgent(
