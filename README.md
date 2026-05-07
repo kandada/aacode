@@ -73,8 +73,8 @@ If you prefer a graphical interface, try AACode Desktop:
 
 | Platform | Download                                                                                                |
 |----------|---------------------------------------------------------------------------------------------------------|
-| macOS (Apple Silicon) | [AACode_1.7.0_aarch64.dmg](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.7.0_aarch64.dmg) |
-| Windows | [aacode-desktop-1.7.0.exe](https://github.com/kandada/aacode/raw/main/desktop/aacode-desktop-1.7.0.exe) |
+| macOS (Apple Silicon) | [AACode_1.7.1_aarch64.dmg](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.7.1_aarch64.dmg) |
+| Windows | [AACode_1.7.1_x64-setup.exe](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.7.1_x64-setup.exe) |
 
 > The desktop client still requires Python and dependencies. See 👉 [DESKTOP.md](DESKTOP.md) for full setup instructions.
 

@@ -2,7 +2,7 @@
 aacode - AI Coding Assistant based on ReAct architecture
 """
 
-__version__ = "1.6.1"
+__version__ = "1.7.1"
 __author__ = "xiefujin"
 
 # 修复：无论 __package__ 是否为空，都要确保包可以被导入

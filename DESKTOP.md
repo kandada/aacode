@@ -6,8 +6,8 @@ AACode Desktop 是 AACode 的桌面图形界面版本，提供更友好的交互
 
 | 平台 | 下载链接 | 文件名 |
 |------|----------|--------|
-| macOS (Apple Silicon) | [下载](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.6.1_aarch64.dmg) | AACode_1.6.1_aarch64.dmg |
-| Windows | [下载](https://github.com/kandada/aacode/raw/main/desktop/aacode-desktop-1.6.1.exe) | aacode-desktop-1.6.1.exe |
+| macOS (Apple Silicon) | [下载](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.7.1_aarch64.dmg) | AACode_1.7.1_aarch64.dmg |
+| Windows | [下载](https://github.com/kandada/aacode/raw/main/desktop/aacode-desktop-1.7.1.exe) | aacode-desktop-1.7.1.exe |
 
 ## 🛠️ 安装步骤
 
@@ -81,13 +81,13 @@ pip install -r requirements.txt
 
 #### macOS
 
-1. 双击下载的 `AACode_1.6.1_aarch64.dmg`
+1. 双击下载的 `AACode_1.7.1_aarch64.dmg`
 2. 将 AACode 拖入 Applications 文件夹
 3. 首次打开时，如果提示"无法验证开发者"，前往 **系统设置 → 隐私与安全性**，点击"仍要打开"
 
 #### Windows
 
-1. 双击运行 `aacode-desktop-1.6.1.exe`
+1. 双击运行 `aacode-desktop-1.7.1.exe`
 2. 按安装向导完成安装
 3. 安装完成后从开始菜单或桌面快捷方式启动
 
