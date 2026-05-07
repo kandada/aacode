@@ -117,7 +117,7 @@ class MainAgent(BaseAgent):
         **kwargs,
     ):
 
-        # initialized模型
+        # initialized模型调用器
         model_caller = self._create_model_caller(model_config)
 
         # 先initializedskills_manager，因为_create_tools需要它
