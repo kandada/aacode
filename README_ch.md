@@ -309,6 +309,7 @@ python3 main.py -p examples/app "为所有功能编写测试"
 
 ## 📞 联系方式
 
+- 官方网站: [https://aacode-ai.com](https://aacode-ai.com)
 - 项目主页: [xiefujin](https://github.com/kandada/aacode)
 - 问题反馈: [Issues](https://github.com/kandada/aacode/issues)
 - 功能建议: [Discussions](https://github.com/kandada/aacode/discussions)
