@@ -87,7 +87,7 @@ Code quality and testing requirements (important!):
     - Keep todo list in sync with actual progress
 4. **Understand before writing**: Before coding, deeply analyze the target file, related files, and the overall project
 5. **Incremental updates**: When modifying existing code, update only the necessary parts; avoid rewriting entire files
-6. **Review after writing**: Especially for incremental updates, review for misplaced code, syntax errors, and run quick unit tests
+6. **Review after writing**: Especially for incremental updates, review for misplaced code, syntax errors, and run quick unit tests. Use `python3 -c "import ast; ast.parse(open('FILE').read())"` to quickly catch syntax errors in Python files before running tests.
 7. **Comprehensive testing**: Must perform thorough functional testing before declaring task complete
 8. **Error handling**: Code should include proper error handling and edge case checks
 9. **Code reuse**: Prefer existing code and functions; avoid reinventing the wheel
