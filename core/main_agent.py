@@ -524,7 +524,7 @@ class MainAgent(BaseAgent):
             "model": model_name,
             "messages": formatted_messages,
             "temperature": temperature,
-            "max_tokens": model_config.get("max_tokens", 8000),
+            "max_tokens": model_config.get("max_tokens", 96000),
             "stream": True,
         }
         if tools:
@@ -536,7 +536,10 @@ class MainAgent(BaseAgent):
         # ─── 流式响应处理 ───
         thinking_printed = False
         thinking_content = ""
+        last_finish_reason = None
         async for chunk in stream:
+            if chunk.choices and chunk.choices[0].finish_reason:
+                last_finish_reason = chunk.choices[0].finish_reason
             delta = chunk.choices[0].delta
             # 处理 reasoning_content
             reasoning = getattr(delta, 'reasoning_content', None)
@@ -601,6 +604,23 @@ class MainAgent(BaseAgent):
                     "name": tc["function_name"],
                     "arguments": tc["function_arguments"],
                 })
+
+        # ─── 检测 API 截断 ───
+        if last_finish_reason == "length":
+            warning = "\n\n[⚠️ WARNING: API response was truncated (max_tokens limit reached). "
+            if tool_calls_list:
+                invalid_tool_names = []
+                for tc in tool_calls_list:
+                    args = tc.get("arguments", "")
+                    if isinstance(args, str):
+                        try:
+                            json.loads(args)
+                        except json.JSONDecodeError:
+                            invalid_tool_names.append(tc.get("name", "unknown"))
+                if invalid_tool_names:
+                    warning += f"Tool call arguments incomplete ({', '.join(invalid_tool_names)}). "
+            warning += "Reduce content per request or increase max_tokens in config.]"
+            full_response += warning
 
         # ─── thinking 内容拼接到返回值 ───
         if thinking_content:
@@ -726,7 +746,7 @@ class MainAgent(BaseAgent):
             nonlocal response, thinking_content, tool_calls_list
             stream_kwargs = {
                 "model": model_name,
-                "max_tokens": model_config.get("max_tokens", 8000),
+                "max_tokens": model_config.get("max_tokens", 96000),
                 "temperature": model_config.get("temperature", 0.1),
                 "messages": formatted_messages,
             }
@@ -763,6 +783,12 @@ class MainAgent(BaseAgent):
 
                 #  with  get_final_message Get 完整的 tool_use（非流式解析，可靠）
                 final = await stream.get_final_message()
+                # Check for max_tokens truncation
+                if getattr(final, 'stop_reason', None) == "max_tokens":
+                    warning_text = "\n\n[⚠️ WARNING: API response was truncated (max_tokens limit reached). Reduce content per request or increase max_tokens in config.]"
+                    response += warning_text
+                    if response and _is_tty:
+                        print(warning_text, flush=True)
                 for block in final.content:
                     if getattr(block, 'type', '') == 'tool_use':
                         tool_calls_list.append({
@@ -779,7 +805,7 @@ class MainAgent(BaseAgent):
                 response = ""; thinking_content = ""; tool_calls_list = []
                 create_kwargs = {
                     "model": model_name,
-                    "max_tokens": model_config.get("max_tokens", 8000),
+                    "max_tokens": model_config.get("max_tokens", 96000),
                     "temperature": model_config.get("temperature", 0.1),
                     "messages": formatted_messages,
                 }
@@ -788,6 +814,9 @@ class MainAgent(BaseAgent):
                 if tools:
                     create_kwargs["tools"] = tools
                 message = await client.messages.create(**create_kwargs)
+                # Check for max_tokens truncation (non-streaming fallback)
+                if getattr(message, 'stop_reason', None) == "max_tokens":
+                    response += "\n\n[⚠️ WARNING: API response was truncated (max_tokens limit reached). Reduce content per request or increase max_tokens in config.]"
                 for block in message.content:
                     bt = getattr(block, 'type', '')
                     if bt == 'thinking':
