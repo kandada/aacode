@@ -8,7 +8,7 @@ context:
   strategy: file_based
   use_vector_store: false
   # 上下文缩减（卸载）配置
-  compact_trigger_tokens: 80000      # 触发缩减的token数阈值
+  compact_trigger_tokens: 256000      # 触发缩减的token数阈值
   compact_keep_messages: 50          # 缩减后保留的消息数
   compact_keep_rounds: 10            # 缩减后保留的对话轮数（最近N轮）
   compact_summary_steps: 10         # 摘要包含的步骤数
