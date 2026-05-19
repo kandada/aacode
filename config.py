@@ -21,7 +21,7 @@ class ModelConfig:
     api_key: Optional[str] = None
     base_url: Optional[str] = None
     temperature: float = 0.1
-    max_tokens: int = 8000
+    max_tokens: int = 96000
     gateway: str = "openai"  # openai, anthropic
     multimodal: bool = False  # 是否supports multimodal
 
@@ -198,14 +198,14 @@ class ContextConfig:
     """上下文配置"""
 
     strategy: str = "file_based"  # file_based, memory, hybrid
-    max_context_length: int = 16000
+    max_context_length: int = 131072
     compact_threshold: int = 12000
     history_compression: bool = True
     use_vector_store: bool = False
     # 新增：上下文缩减配置
-    compact_trigger_tokens: int = 8000  # 触发缩减的token数阈值
-    compact_keep_messages: int = 20  # 缩减后保留的消息数
-    compact_keep_rounds: int = 8  # 缩减后保留的对话轮数（最近N轮）
+    compact_trigger_tokens: int = 256000  # 触发缩减的token数阈值
+    compact_keep_messages: int = 50  # 缩减后保留的消息数
+    compact_keep_rounds: int = 10  # 缩减后保留的对话轮数（最近N轮）
     compact_summary_steps: int = 10  # 摘要包含的步骤数
     compact_protect_first_rounds: int = 3  # 保护前N轮（任务规划、初始理解）
 
@@ -239,21 +239,11 @@ class MCPConfig:
 
 @dataclass
 class OutputConfig:
-    """输出处理配置"""
+    """输出处理配置（自适应截断 — 基于剩余上下文预算）"""
 
-    # 截断阈值（放宽限制，减少过度截断）
-    test_output_threshold: int = 15000  # 测试输出阈值（从10000放宽）
-    code_content_threshold: int = 30000  # 代码内容阈值（从20000放宽）
-    normal_output_threshold: int = 15000  # 普通输出阈值（放宽以支持长HTML内容）
-
-    # 预览长度（增加预览内容）
-    test_output_preview: int = 5000  # 测试输出预览长度（从3000增加）
-    code_content_preview: int = 8000  # 代码内容预览长度（从5000增加）
-    normal_output_preview: int = 3000  # 普通输出预览长度（从2000增加）
-
-    # 测试摘要
-    test_summary_enabled: bool = True  # 是否启 with 测试摘要
-    test_summary_max_lines: int = 20  # 摘要最大 lines数
+    budget_ratio: float = 0.6  # 工具输出最多占用剩余预算的比例
+    max_preview_tokens: int = 2000  # 预览最多 token 数
+    display_preview_chars: int = 3000  # 用户终端显示预览字符数
 
 
 @dataclass
@@ -261,7 +251,6 @@ class TimeoutConfig:
     """timeout配置"""
 
     shell_command: int = 30  # Shell命令executetimeout（秒）
-    tool_execution: int = 60  # 工具executetimeout（秒）
     model_summary: int = 30  # 模型摘要生成timeout（秒）
     file_search: int = 5  # 文件搜索timeout（秒）
     code_execution: int = 60  # 代码executetimeout（秒）
@@ -496,47 +485,7 @@ class Settings:
     def _update_from_dict(self, config_dict: Dict[str, Any]):
         """从字典更新配置"""
         for section, values in config_dict.items():
-            if section == "output":
-                # 特殊处理output配置（嵌套结构）
-                if isinstance(values, dict):
-                    # 处理truncate_thresholds
-                    if "truncate_thresholds" in values:
-                        thresholds = values["truncate_thresholds"]
-                        if "test_output" in thresholds:
-                            self.output.test_output_threshold = thresholds[
-                                "test_output"
-                            ]
-                        if "code_content" in thresholds:
-                            self.output.code_content_threshold = thresholds[
-                                "code_content"
-                            ]
-                        if "normal_output" in thresholds:
-                            self.output.normal_output_threshold = thresholds[
-                                "normal_output"
-                            ]
-
-                    # 处理preview_lengths
-                    if "preview_lengths" in values:
-                        previews = values["preview_lengths"]
-                        if "test_output" in previews:
-                            self.output.test_output_preview = previews["test_output"]
-                        if "code_content" in previews:
-                            self.output.code_content_preview = previews["code_content"]
-                        if "normal_output" in previews:
-                            self.output.normal_output_preview = previews[
-                                "normal_output"
-                            ]
-
-                    # 处理test_summary
-                    if "test_summary" in values:
-                        summary = values["test_summary"]
-                        if "enabled" in summary:
-                            self.output.test_summary_enabled = summary["enabled"]
-                        if "max_summary_lines" in summary:
-                            self.output.test_summary_max_lines = summary[
-                                "max_summary_lines"
-                            ]
-            elif section == "timeouts":
+            if section == "timeouts":
                 # 处理timeouts配置
                 if isinstance(values, dict):
                     for key, value in values.items():

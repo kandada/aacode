@@ -185,7 +185,7 @@ During each thought, naturally plan:
         messages.append(
             {
                 "role": "user",
-                "content": f"Task: {task_description}\n\nCurrent context:\n{self.current_context}\n\nPlease follow the Thought->Action format to execute (do not output Observation; the system will automatically execute tools and return results)",
+                "content": f"Task: {task_description}\n\nCurrent context:\n{self.current_context}\n\nUse native function calls (tool_calls) to execute tools. Do NOT output JSON/text-formatted tool call information in your response — the system handles tool execution automatically via the API's tool_calls mechanism and returns results as tool role messages.",
             },
         )
 
@@ -285,6 +285,18 @@ During each thought, naturally plan:
             # execute所有Action（增强错误处理和重试机制）
             all_observations = []
             all_observations_for_display = []  #   for显示的简化版本
+
+            # 基于剩余上下文预算计算自适应截断阈值
+            current_tokens = self._estimate_tokens(messages)
+            total_budget = (
+                self.context_config.max_context_length
+                if self.context_config
+                else 16000
+            )
+            remaining_budget = max(0, total_budget - current_tokens)
+            self._adaptive_threshold_chars = int(
+                remaining_budget * settings.output.budget_ratio * 4
+            )
 
             for i, action_item in enumerate(actions):
                 print(f"🛠️  Action {i + 1}/{len(actions)}: {action_item.action}")
@@ -820,73 +832,12 @@ During each thought, naturally plan:
             else:
                 return f"📄 {path} ({lines} lines, {size} chars)\n```\n{preview}\n```"
 
-        # 其他Action返回完整结果（可能被截断）
+        # 其他Action：统一预览截断（仅影响终端显示，不影响 Agent 看到的内容）
         result_str = str(result)
-
-        # 判断内容类型
-        is_code_content = any(
-            indicator in result_str[:200]
-            for indicator in [
-                "def ",
-                "class ",
-                "import ",
-                "from ",
-                "#!/",  # Python
-                "function ",
-                "const ",
-                "let ",
-                "var ",  # JavaScript
-                "public ",
-                "private ",
-                "protected ",  # Java/C++
-                "<?php",
-                "namespace ",  # PHP
-            ]
-        )
-
-        is_test_output = any(
-            indicator in result_str[:500]
-            for indicator in [
-                "test session starts",
-                "PASSED",
-                "FAILED",
-                "pytest",
-                "unittest",
-                "Test",
-                "Traceback",
-                "AssertionError",
-                "===",
-                "---",
-                "collected",
-                "passed",
-                "failed",
-            ]
-        )
-
-        # 根据内容类型设置不同的阈值
-        if is_test_output:
-            truncate_threshold = settings.output.test_output_threshold
-            preview_length = settings.output.test_output_preview
-        elif is_code_content:
-            truncate_threshold = settings.output.code_content_threshold
-            preview_length = settings.output.code_content_preview
-        else:
-            truncate_threshold = settings.output.normal_output_threshold
-            preview_length = settings.output.normal_output_preview
-
-        # 如果超过阈值，只显示预览
-        if len(result_str) > truncate_threshold:
-            preview = result_str[:preview_length]
-            return f"{preview}...\n\n(Output too long, truncated. {len(result_str)} chars total. Agent received full content)"
-
-        # 中等长度的输出
-        medium_threshold = truncate_threshold // 2
-        if len(result_str) > medium_threshold:
-            return (
-                result_str[:medium_threshold]
-                + f"...\n\n(Truncated, {len(result_str)} chars total)"
-            )
-
+        display_max = settings.output.display_preview_chars
+        if len(result_str) > display_max:
+            preview = result_str[:display_max]
+            return f"{preview}...\n\n(Display truncated, {len(result_str)} chars total. Agent received full content)"
         return result_str
 
     async def _execute_action_internal(self, action: str, action_input: Dict) -> str:
@@ -939,20 +890,15 @@ During each thought, naturally plan:
             action_start = time.time()
             if action != "finalize_task":
                 hb_task = asyncio.create_task(_heartbeat(action, action_start))
+            # Tools manage their own timeout internally (fastclaw style);
+            # the framework trusts each tool's timeout mechanism
             try:
                 if asyncio.iscoroutinefunction(self.tools[action]):
-                    result = await asyncio.wait_for(
-                        self.tools[action](**action_input), timeout=60.0
-                    )
+                    result = await self.tools[action](**action_input)
                 else:
-                    result = await asyncio.wait_for(
-                        asyncio.get_event_loop().run_in_executor(
-                            None, lambda: self.tools[action](**action_input)
-                        ),
-                        timeout=60.0,
+                    result = await asyncio.get_event_loop().run_in_executor(
+                        None, lambda: self.tools[action](**action_input)
                     )
-            except asyncio.TimeoutError:
-                return f"⏱️ Execution timeout\n\nAction '{action}' timed out after 60s\n\n💡 Tip: Task may be too complex, consider breaking into smaller steps"
             except asyncio.CancelledError:
                 raise
             finally:
@@ -984,113 +930,40 @@ During each thought, naturally plan:
                     reason = result.get("message") or result.get("reason") or "Unknown reason"
                     return f"❌ Execution failed: {reason}"
 
-            # 优化：根据内容类型动态调整截断阈值（从配置读取）
+            # 自适应截断：基于剩余上下文预算
             result_str = str(result)
 
-            # 不再在这里做特殊处理，返回完整结果
-            # 显示格式化由_format_observation_for_display处理
-
-            # 判断内容类型
-            is_code_content = any(
-                indicator in result_str[:200]
-                for indicator in [
-                    "def ",
-                    "class ",
-                    "import ",
-                    "from ",
-                    "#!/",  # Python
-                    "function ",
-                    "const ",
-                    "let ",
-                    "var ",  # JavaScript
-                    "public ",
-                    "private ",
-                    "protected ",  # Java/C++
-                    "<?php",
-                    "namespace ",  # PHP
-                ]
-            )
-
-            is_test_output = any(
-                indicator in result_str[:500]
-                for indicator in [
-                    "test session starts",
-                    "PASSED",
-                    "FAILED",
-                    "pytest",
-                    "unittest",
-                    "Test",
-                    "Traceback",
-                    "AssertionError",
-                    "===",
-                    "---",
-                    "collected",
-                    "passed",
-                    "failed",
-                ]
-            )
-
-            # 根据内容类型设置不同的阈值（从配置读取）
-            if is_test_output:
-                truncate_threshold = settings.output.test_output_threshold
-                preview_length = settings.output.test_output_preview
-            elif is_code_content:
-                truncate_threshold = settings.output.code_content_threshold
-                preview_length = settings.output.code_content_preview
-            else:
-                truncate_threshold = settings.output.normal_output_threshold
-                preview_length = settings.output.normal_output_preview
-
-            # 尊重 run_shell 的 max_output 设置，不做第二层截断
-            max_output_setting = None
+            # run_shell 不经过框架截断（工具自己管 max_output）
             if action == "run_shell" and isinstance(result, dict):
-                # run_shell 默认不截断，完全信任 atomic_tools 的处理
-                truncate_threshold = 999999999
+                return result_str
 
-            # 如果超过阈值，Save 到文件
-            if len(result_str) > truncate_threshold:
+            threshold_chars = getattr(self, "_adaptive_threshold_chars", None)
+            if threshold_chars is None:
+                return result_str
+
+            preview_chars = max(
+                500,
+                min(threshold_chars, int(settings.output.max_preview_tokens * 4)),
+            )
+
+            if len(result_str) > threshold_chars:
                 try:
                     output_file = await self.context_manager.save_large_output(
                         result_str, f"{action}_output.txt"
                     )
-                    # 返回预览内容
-                    preview = result_str[:preview_length]
-                    # 如果是测试输出且启 with 了 summarized ，尝试提取 summarized 
-                    if is_test_output and settings.output.test_summary_enabled:
-                        summary_lines = []
-                        for line in result_str.split("\n"):
-                            if any(
-                                keyword in line
-                                for keyword in [
-                                    "passed",
-                                    "failed",
-                                    "error",
-                                    "PASSED",
-                                    "FAILED",
-                                    "ERROR",
-                                    "===",
-                                    "collected",
-                                ]
-                            ):
-                                summary_lines.append(line)
-                        if summary_lines:
-                            # 使 with 配置的最大 lines数
-                            max_lines = settings.output.test_summary_max_lines
-                            summary = "\n".join(summary_lines[-max_lines:])
-                            return f"📄 Output too long ({len(result_str)} chars), saved to file: {output_file}\n\n📊 Test summary:\n{summary}\n\n💡 Use read_file tool to view full content"
-
-                    return f"📄 Output too long ({len(result_str)} chars), saved to file: {output_file}\n\n💡 Use read_file tool to view full content\n\nFirst {preview_length} chars preview:\n{preview}..."
+                    preview = result_str[:preview_chars]
+                    return (
+                        f"📄 Output too long ({len(result_str)} chars, "
+                        f"~{len(result_str) // 4} tokens), "
+                        f"saved to file: {output_file}\n\n"
+                        f"💡 Use read_file tool to view full content\n\n"
+                        f"First {preview_chars} chars preview:\n{preview}..."
+                    )
                 except Exception as e:
-                    # 如果Save 失败，返回更多内容
-                    return f"{result_str[:preview_length]}...\n\n⚠️ (Output too long, truncated. Save failed: {str(e)})"
-
-            # 对于中等长度的输出，返回更多内容
-            medium_threshold = truncate_threshold // 2
-            if len(result_str) > medium_threshold:
-                return (
-                    result_str[:medium_threshold]
-                + f"...\n\n(Truncated, {len(result_str)} chars total)"
-                )
+                    return (
+                        f"{result_str[:preview_chars]}...\n\n"
+                        f"⚠️ (Output too long, truncated. Save failed: {str(e)})"
+                    )
 
             return result_str
 
@@ -1166,10 +1039,10 @@ During each thought, naturally plan:
 
         # 从配置Get 参数
         keep_messages = (
-            self.context_config.compact_keep_messages if self.context_config else 20
+            self.context_config.compact_keep_messages if self.context_config else 50
         )
         keep_rounds = (
-            self.context_config.compact_keep_rounds if self.context_config else 8
+            self.context_config.compact_keep_rounds if self.context_config else 10
         )
         summary_steps = (
             self.context_config.compact_summary_steps if self.context_config else 10

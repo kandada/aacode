@@ -112,8 +112,8 @@ class AtomicTools:
                     )
                     await asyncio.wait_for(process.wait(), timeout=timeout)
                     await asyncio.gather(stdout_reader, stderr_reader)
-                stdout_text = "\n".join(stdout_buf)
-                stderr_text = "\n".join(stderr_buf)
+                    stdout_text = "\n".join(stdout_buf)
+                    stderr_text = "\n".join(stderr_buf)
 
                 # 统一返回格式：工具总是成功，返回完整的命令执行信息
                 # 兼容各种"不限制"的表达：None/null/none/0/""都不限制
@@ -144,6 +144,22 @@ class AtomicTools:
                 }
             except asyncio.TimeoutError:
                 process.terminate()
+                # Cancel background reader tasks to prevent orphaned task leak
+                if not stdin_input:
+                    stdout_reader.cancel()
+                    stderr_reader.cancel()
+                    await asyncio.gather(
+                        stdout_reader, stderr_reader, return_exceptions=True
+                    )
+                # Reap the process (avoid zombies)
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=5.0)
+                except Exception:
+                    try:
+                        process.kill()
+                        await asyncio.wait_for(process.wait(), timeout=2.0)
+                    except Exception:
+                        pass
                 return {
                     "success": True,  # 工具执行成功
                     "error": f"Command execution timeout ({timeout}s)",
