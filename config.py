@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 # 配置管理
 # config.py
 """

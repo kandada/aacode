@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """
 类方法映射工具
 用于分析项目目录中的类和函数结构，生成class_method_map.md

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 工具 Schema → API 原生 Tool Calling 格式转换适配器
 

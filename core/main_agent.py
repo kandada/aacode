@@ -320,7 +320,7 @@ class MainAgent(BaseAgent):
         for skill_name in enabled_list:
             self.skills_manager._load_full_instruction(skill_name)
 
-        print(t("skills.registered_tools", count=0))
+        print(t("skills.registered_tools", count=len(enabled_list)))
 
     def _create_model_caller(self, model_config: Dict):
         """创建模型调 with 器（支持流式输出、多网关、原生 Function Calling）"""
@@ -1060,6 +1060,8 @@ class MainAgent(BaseAgent):
         # 历史消息是之前轮次保存的，当前任务的消息在 execute 结束后才保存
 
         # 运 linesReAct循环
+        _task_error = None
+        result = None
         try:
             result = await self.react_loop.run(
                 initial_prompt=full_system_prompt,
@@ -1068,12 +1070,19 @@ class MainAgent(BaseAgent):
                 history_messages=history_messages if history_messages else None,
             )
         except asyncio.CancelledError:
-            raise
+            _task_error = asyncio.CancelledError()
+            # CancelledError 不保存，直接清理后传播
+            try:
+                if hasattr(self, "web_tools"):
+                    await self.web_tools.cleanup()
+            except Exception as e:
+                print(t("agent.clean_web_tools", e=str(e)))
+            raise _task_error
         except Exception as e:
+            _task_error = e
             print(t("agent.react_loop_failed", e=str(e)))
             import traceback
             traceback.print_exc()
-            raise
         finally:
             try:
                 if hasattr(self, "web_tools"):
@@ -1081,19 +1090,9 @@ class MainAgent(BaseAgent):
             except Exception as e:
                 print(t("agent.clean_web_tools", e=str(e)))
 
-        # 把 react_loop 的对话历史保存到 session_manager
-        # ─── 保存会话历史 ───────────────────────────────────────────
-        # step.thought 的内容来自 _call_openai_api 的 full_response，格式为：
-        #   有 thinking 时: "💭 思考过程:\n{thinking内容}\n\nThought: {正式回复}"
-        #   无 thinking 时: "{正式回复}"（纯文本，可能有 Thought: 前缀也可能没有）
-        #
-        # ⚠️ 必须保留完整的 thinking 内容，不要清理掉：
-        #   1. 历史记录需要显示 thinking（前端 parseAssistantMessage 能正确解析）
-        #   2. thinking 内容在 react_loop 运 lines时上下文中也是完整的
-        #      （messages.append  with 的是原始 response，包含 thinking）
-        #   3. 去掉 thinking 会导致历史记录不完整， user看不到模型的推理过程
-        #
-        # ✅ 任务完成标记只存纯标记，不带内容（内容已在最后一个 step 中保存）
+        # ─── 保存会话历史（无论是否异常，都执行） ─────────────────────
+        # step.raw_response 含完整 thinking，必须保留以便前端解析
+        # 异常时也保存已执行的部分，避免整轮数据丢失
         # ─────────────────────────────────────────────────────────────
         try:
             # 先保存 user任务消息（如果还没有）
@@ -1106,11 +1105,7 @@ class MainAgent(BaseAgent):
 
             steps = self.react_loop.steps
             for step in steps:
-                #  with  raw_response（完整模型响应，含 thinking）保存，而非 step.thought（只有 thought 部分）
-                # raw_response 格式：有 thinking 时 "💭 思考过程:\n{thinking}\n\nThought: {content}"
-                #                   无 thinking 时 "{content}"
                 thought_content = step.raw_response or step.thought
-                # 确保有可识别的前缀（前端 parseAssistantMessage 依赖前缀识别类型）
                 if not thought_content.startswith("Thought:") and not thought_content.startswith("💭 Thinking process"):
                     thought_content = f"Thought: {thought_content}"
                 if step.actions:
@@ -1126,23 +1121,36 @@ class MainAgent(BaseAgent):
                     thought_content = f"{thought_content}\n\n" + "\n\n".join(actions_parts)
                 await self.session_manager.add_message("assistant", thought_content)
 
-            # ⚠️ 只存纯标记，不要带 summary 内容，否则和最后一个 step 重复
-            await self.session_manager.add_message("assistant", "✅ Task completed")
+            # 正常完成才加标记，异常时不加
+            if not _task_error:
+                await self.session_manager.add_message("assistant", "✅ Task completed")
+
             await self.session_manager._save_session()
-            # 追加保存结构化消息（含 tool_calls / reasoning_content），  for多轮 API 上下文
             if hasattr(self.react_loop, 'last_messages') and self.react_loop.last_messages:
                 await self.session_manager._save_structured_messages(self.react_loop.last_messages)
             self.session_manager._save_sessions_index()
         except Exception as e:
             print(t("error.save_session", e=str(e)))
 
-        # 更新统计
+        # 更新统计（即使异常也有部分 steps）
         self.iterations = len(self.react_loop.steps)
 
         execution_time = 0.0
         if self.start_time is not None:
             execution_time = asyncio.get_event_loop().time() - self.start_time
 
+        # 非 CancelledError 的异常，保存后返回部分结果
+        if _task_error:
+            return {
+                "status": "error",
+                "error": str(_task_error),
+                "iterations": self.iterations,
+                "session_id": session_id,
+                "agent_stats": self.get_stats(),
+                "execution_time": execution_time,
+            }
+
+        # 正常返回
         return {
             **result,
             "session_id": session_id,
