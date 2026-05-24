@@ -827,8 +827,9 @@ During each thought, naturally plan:
             preview_lines = content.split("\n")[:20]
             preview = "\n".join(preview_lines)
 
-            if len(content.split("\n")) > 20:
-                return f"📄 {path} ({lines} lines, {size} chars)\n```\n{preview}\n...\n```\n📋 Showing first 20 lines, full content saved ({len(content.split('\n'))} lines total)"
+            total_lines = len(content.split("\n"))
+            if total_lines > 20:
+                return f"📄 {path} ({lines} lines, {size} chars)\n```\n{preview}\n...\n```\n📋 Showing first 20 lines, full content saved ({total_lines} lines total)"
             else:
                 return f"📄 {path} ({lines} lines, {size} chars)\n```\n{preview}\n```"
 
