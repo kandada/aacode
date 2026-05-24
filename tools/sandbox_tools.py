@@ -5,6 +5,8 @@ sandbox工具集
 用于在隔离环境中运行工具
 """
 
+from __future__ import annotations
+
 import asyncio
 import sys
 from typing import Dict, List, Any, Optional

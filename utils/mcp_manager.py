@@ -5,6 +5,8 @@ MCP（模型上下文协议）工具管理器
 支持多种MCP服务器配置和动态加载
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import os

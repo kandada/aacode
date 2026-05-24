@@ -3,6 +3,8 @@ Skills工具层 - Skills加载和execute
 tools/skills_tools.py
 """
 
+from __future__ import annotations
+
 import asyncio
 import importlib.util
 import inspect

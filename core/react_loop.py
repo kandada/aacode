@@ -5,6 +5,8 @@
 支持异步工具调 with 和上下文管理
 """
 
+from __future__ import annotations
+
 import asyncio
 import time
 import json
@@ -827,8 +829,8 @@ During each thought, naturally plan:
             preview_lines = content.split("\n")[:20]
             preview = "\n".join(preview_lines)
 
-            total_lines = len(content.split("\n"))
-            if total_lines > 20:
+            if len(content.split("\n")) > 20:
+                total_lines = len(content.split('\n'))
                 return f"📄 {path} ({lines} lines, {size} chars)\n```\n{preview}\n...\n```\n📋 Showing first 20 lines, full content saved ({total_lines} lines total)"
             else:
                 return f"📄 {path} ({lines} lines, {size} chars)\n```\n{preview}\n```"

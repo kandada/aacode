@@ -4,6 +4,8 @@
 MCP（模型上下文协议）客户端简化实现
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 from typing import Dict, List, Any, Optional
