@@ -4,6 +4,8 @@
 虚拟机/容器管理器简化实现
 用于隔离和运行潜在不安全的工具
 """
+from __future__ import annotations
+
 import asyncio
 import tempfile
 from typing import Dict, List, Any, Optional

@@ -4,6 +4,8 @@
 异步辅助工具集
 """
 
+from __future__ import annotations
+
 import asyncio
 import functools
 from typing import Any, Callable, TypeVar, Coroutine
