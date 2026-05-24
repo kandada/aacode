@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 # 代码智能分析工具
 # utils/code_analyzer.py
 """

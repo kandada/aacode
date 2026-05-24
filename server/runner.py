@@ -63,12 +63,14 @@ class AICoderRunner:
 
             self.running_task = asyncio.current_task()
 
-            result = await agent.run(task)
+            result = await agent.execute(task)
 
-            if result.get("success"):
+            if result.get("status") == "completed":
                 yield {"type": "done", "session_id": session_id, "result": result}
+            elif result.get("status") == "error":
+                yield {"type": "error", "message": result.get("error", result.get("final_thought", "Unknown error"))}
             else:
-                yield {"type": "error", "message": result.get("error", "Unknown error")}
+                yield {"type": "done", "session_id": session_id, "result": result}
 
         except Exception as e:
             yield {"type": "error", "message": str(e)}

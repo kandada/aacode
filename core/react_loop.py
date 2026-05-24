@@ -171,16 +171,28 @@ During each thought, naturally plan:
 
         # ─── 多轮任务上下文衔接 ───────────────────────────────────
         # 同一会话中，第二轮及后续任务需要看到之前的对话历史
-        # history_messages 来自 session_manager，包含之前所有轮次的 user/assistant 消息
+        # history_messages 来自 session_manager，包含之前所有轮次的 user/assistant/tool 消息
         # 插入到 system prompt 之后、当前任务之前，让模型了解之前做了什么
-        # ⚠️ 不要去掉这段逻辑，否则多轮任务间上下文会脱节
+        # ⚠️ 保留 tool 消息，否则前序任务的工具执行结果在多轮后会逐步丢失
         # ⚠️ token 超限时会由 _compact_context 自动压缩，不需要在这里截断
         if history_messages:
             for msg in history_messages:
                 role = msg.get("role", "")
                 content = msg.get("content", "")
-                if role in ("user", "assistant") and content:
-                    messages.append({"role": role, "content": content})
+                if role in ("user", "assistant", "tool") and content:
+                    if role == "tool":
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": msg.get("tool_call_id", ""),
+                            "content": content,
+                        })
+                    else:
+                        messages.append({
+                            "role": role,
+                            "content": content,
+                            **({"tool_calls": msg["tool_calls"]} if msg.get("tool_calls") else {}),
+                            **({"reasoning_content": msg["reasoning_content"]} if msg.get("reasoning_content") else {}),
+                        })
             if len(history_messages) > 0:
                 print(f"📜 Loaded {len(history_messages)}  history messages into context")
 
@@ -1944,7 +1956,7 @@ Please return the three-part summary in JSON format:"""
         # 2. 检查token使 with 情况
         current_tokens = self._estimate_tokens(messages)
         if current_tokens > 5000:  # 警告阈值
-            # 显示消息分布
+            # 显示消息分布（含 tool 角色）
             system_tokens = self._estimate_tokens(
                 [msg for msg in messages if msg.get("role") == "system"]
             )
@@ -1954,7 +1966,10 @@ Please return the three-part summary in JSON format:"""
             assistant_tokens = self._estimate_tokens(
                 [msg for msg in messages if msg.get("role") == "assistant"]
             )
-            print(f"📊 Context monitor: ~{current_tokens} tokens |  System: {system_tokens} |  User: {user_tokens} | Assistant: {assistant_tokens}")
+            tool_tokens = self._estimate_tokens(
+                [msg for msg in messages if msg.get("role") == "tool"]
+            )
+            print(f"📊 Context monitor: ~{current_tokens} tokens |  System: {system_tokens} |  User: {user_tokens} | Assistant: {assistant_tokens} | Tool: {tool_tokens}")
 
         # 3. 检查归档路径是否保留（简化版本中）
         for i, obs_display in enumerate(all_observations_for_display):

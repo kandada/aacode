@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 # tools/web_tools.py
 """
 网络搜索工具实现

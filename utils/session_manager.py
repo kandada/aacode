@@ -333,6 +333,19 @@ class SessionManager:
 
         self.current_messages.append(message)
 
+        # 如果 _structured_messages 已存在，同步追加（保持双源一致）
+        if self._structured_messages is not None:
+            entry = {
+                "role": role,
+                "content": content,
+                "tool_calls": tool_calls,
+                "tool_call_id": tool_call_id,
+                "reasoning_content": reasoning_content,
+            }
+            # 移除 None 值，保持 JSON 整洁
+            entry = {k: v for k, v in entry.items() if v is not None}
+            self._structured_messages.append(entry)
+
         # 更新会话摘要
         if self.current_session_id in self.sessions_index:
             session_summary = self.sessions_index[self.current_session_id]
@@ -365,6 +378,7 @@ class SessionManager:
             session_data["structured_messages"] = messages
             with open(session_file, "w", encoding="utf-8") as f:
                 json.dump(session_data, f, indent=2, ensure_ascii=False)
+            self._structured_messages = messages
         except Exception as e:
             print(f"⚠️ Failed to save structured message: {e}")
 
@@ -449,11 +463,20 @@ class SessionManager:
             self.current_messages = system_msgs + recent_msgs
 
     async def _save_session(self):
-        """保存当前会话"""
+        """保存当前会话（保留文件中已有的 structured_messages 等字段）"""
         if not self.current_session_id:
             return
 
         session_file = self.sessions_dir / f"{self.current_session_id}.json"
+
+        # 先读取已有文件，保留 structured_messages 等非冲突字段
+        existing = {}
+        if session_file.exists():
+            try:
+                with open(session_file, "r", encoding="utf-8") as f:
+                    existing = json.load(f)
+            except Exception:
+                existing = {}
 
         session_data = {
             "session_id": self.current_session_id,
@@ -474,6 +497,12 @@ class SessionManager:
                 for msg in self.current_messages
             ],
         }
+
+        # 优先用内存中的 _structured_messages（更实时），否则保留文件中已有的
+        if self._structured_messages is not None:
+            session_data["structured_messages"] = self._structured_messages
+        elif "structured_messages" in existing:
+            session_data["structured_messages"] = existing["structured_messages"]
 
         try:
             with open(session_file, "w", encoding="utf-8") as f:
