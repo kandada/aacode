@@ -7,13 +7,150 @@ import logging
 import os
 import sys
 import platform
-import functools
 import subprocess
 import shutil
+import time
+import json
+import contextlib
+import atexit
 from typing import Dict, Any, Optional, List, Tuple, Union
 from urllib.parse import urlparse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
+
+# ---- Session 管理（跨调用复用浏览器） ----
+
+_SESSION_IDLE_TIMEOUT = 600
+
+
+@dataclass
+class _Session:
+    playwright: Any
+    browser: Any
+    context: Any
+    page: Any
+    last_used: float = 0
+
+
+_sessions: Dict[str, _Session] = {}
+_browser_cache: Optional[List] = None  # List[BrowserInfo], defined later
+_session_cleanup_task: Optional[asyncio.Task] = None  # 后台清理定时任务
+
+
+def _get_cached_browsers():  # -> List[BrowserInfo], defined later
+    global _browser_cache
+    if _browser_cache is None:
+        _browser_cache = _detect_installed_browsers()
+    return _browser_cache
+
+
+async def _get_session(session_id: str, headless=False, browser_type="chromium", timeout=30000):
+    _ensure_cleanup_task()
+    await _cleanup_idle_sessions()
+
+    if session_id in _sessions:
+        sess = _sessions[session_id]
+        try:
+            await sess.page.evaluate("1")
+            sess.last_used = time.time()
+            return sess
+        except Exception:
+            logger.info(f"Session {session_id} dead, recreating")
+            await _close_session(session_id)
+
+    from playwright.async_api import async_playwright
+    p = await async_playwright().__aenter__()
+    try:
+        bt = BrowserType(browser_type.lower()) if isinstance(browser_type, str) else browser_type
+        browser, context, page = await _launch_browser_with_fallback(p, bt, headless, detected_browsers=_browser_cache)
+        page.set_default_timeout(timeout)
+        page.set_default_navigation_timeout(timeout)
+        await page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+            Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh'] });
+        """)
+        sess = _Session(p, browser, context, page, time.time())
+        _sessions[session_id] = sess
+        return sess
+    except Exception:
+        await p.__aexit__(None, None, None)
+        raise
+
+
+async def _close_session(session_id: str):
+    sess = _sessions.pop(session_id, None)
+    if sess:
+        close_ok = True
+        try:
+            await sess.context.close()
+        except Exception as e:
+            logger.warning(f"Session {session_id} context.close failed: {e}")
+            close_ok = False
+        try:
+            await sess.browser.close()
+        except Exception as e:
+            logger.warning(f"Session {session_id} browser.close failed: {e}")
+            close_ok = False
+        try:
+            await sess.playwright.__aexit__(None, None, None)
+        except Exception as e:
+            logger.warning(f"Session {session_id} playwright.__aexit__ failed: {e}")
+            close_ok = False
+        if not close_ok:
+            logger.error(f"Session {session_id} browser may still be running (orphan process)")
+
+
+async def _cleanup_idle_sessions():
+    now = time.time()
+    for sid in list(_sessions.keys()):
+        if now - _sessions[sid].last_used > _SESSION_IDLE_TIMEOUT:
+            await _close_session(sid)
+
+
+async def _session_cleanup_loop():
+    """后台定时清理空闲session，每 60 秒检查一次"""
+    while True:
+        try:
+            await asyncio.sleep(60)
+            await _cleanup_idle_sessions()
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.warning(f"Session cleanup loop error: {e}")
+
+
+def _ensure_cleanup_task():
+    global _session_cleanup_task
+    if _session_cleanup_task is None or _session_cleanup_task.done():
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                _session_cleanup_task = loop.create_task(_session_cleanup_loop())
+        except RuntimeError:
+            pass
+
+
+async def _close_all_sessions():
+    for sid in list(_sessions.keys()):
+        await _close_session(sid)
+
+
+def _cleanup_sessions_sync():
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            loop.create_task(_close_all_sessions())
+        else:
+            loop.run_until_complete(_close_all_sessions())
+    except RuntimeError:
+        pass  # 无 event loop（测试环境），忽略
+    except Exception as e:
+        logger.warning(f"Session cleanup failed: {e}")
+
+
+atexit.register(_cleanup_sessions_sync)
+
 
 # 配置日志
 logging.basicConfig(
@@ -50,25 +187,73 @@ class BrowserInfo:
     is_playwright_managed: bool = False
 
 
-def _with_retry(max_retries: int = 3, delay: float = 1.0):
-    """重试装饰器"""
-    def decorator(func):
-        @functools.wraps(func)
-        async def _wrapper(*args, **kwargs):
-            last_error = None
-            for attempt in range(max_retries):
+def _resolve_skill_path(path: str, project_path: str = "") -> str:
+    """将相对路径解析到项目目录"""
+    if os.path.isabs(path):
+        return path
+    base = project_path or os.environ.get("AACODE_WORK_DIR") or os.getcwd()
+    return os.path.join(base, path)
+
+
+def _default_screenshot_path() -> str:
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    return os.path.join("screenshots", f"screenshot_{ts}.png")
+
+
+def _default_pdf_path() -> str:
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    return os.path.join("pdfs", f"output_{ts}.pdf")
+
+
+@dataclass
+class ExecutionState:
+    """运行时状态，在 run 执行过程中传递"""
+    pages: List[Any]
+    active_index: int = 0
+    monitored_console: List[Dict] = field(default_factory=list)
+    monitored_requests: List[Dict] = field(default_factory=list)
+    routes: List[Dict] = field(default_factory=list)
+    step_results: List[Dict] = field(default_factory=list)
+    storage_snapshot: Optional[Dict] = None
+    project_path: str = ""
+
+    @property
+    def page(self):
+        return self.pages[self.active_index]
+
+
+@contextlib.asynccontextmanager
+async def _browser_context(
+    headless: bool = False,
+    browser_type: str = "chromium",
+    timeout: int = 30000,
+    context_config: Optional[Dict] = None,
+):
+    """统一的浏览器生命周期管理上下文管理器"""
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        raise ImportError("Playwright not installed. Run: pip install playwright")
+
+    async with async_playwright() as p:
+        browser = None
+        try:
+            bt = BrowserType(browser_type.lower()) if isinstance(browser_type, str) else browser_type
+            browser, context, page = await _launch_browser_with_fallback(p, bt, headless, context_config, _get_cached_browsers())
+            page.set_default_timeout(timeout)
+            page.set_default_navigation_timeout(timeout)
+            await page.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+                Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh'] });
+            """)
+            yield browser, context, page
+        finally:
+            if browser:
                 try:
-                    return await func(*args, **kwargs)
-                except Exception as e:
-                    last_error = e
-                    if attempt < max_retries - 1:
-                        logger.warning(f"{func.__name__} attempt {attempt + 1} failed, retrying in {delay}s: {str(e)}")
-                        await asyncio.sleep(delay)
-                    else:
-                        logger.error(f"{func.__name__} failed after {max_retries} retries: {str(e)}")
-            return {"success": False, "error": str(last_error)}
-        return _wrapper
-    return decorator
+                    await browser.close()
+                except Exception:
+                    pass
 
 
 def _get_platform() -> PlatformType:
@@ -315,27 +500,18 @@ def _format_error_result(error: Exception, context: str = "") -> Dict[str, Any]:
 
 
 async def _wait_for_page_ready(page, wait_for: Optional[Dict] = None):
-    """现代的页面等待方式"""
-    # 基础等待：DOM 加载完成
-    await page.wait_for_load_state("domcontentloaded")
-    
-    # 如果没有特殊等待条件，等待少量静态资源
     if not wait_for:
-        await page.wait_for_timeout(500)
         return
-    
-    # 处理等待条件
+
     if "selector" in wait_for:
         await page.wait_for_selector(wait_for["selector"], timeout=wait_for.get("timeout", 30000))
     elif "network" in wait_for:
         network_type = wait_for["network"]
         if network_type == "idle":
-            # 使 with  fetchidle 代替已废弃的 networkidle
             await page.wait_for_load_state("networkidle")
         elif network_type == "load":
             await page.wait_for_load_state("load")
     elif "function" in wait_for:
-        # 等待 JS 条件满足
         await page.wait_for_function(wait_for["function"], timeout=wait_for.get("timeout", 30000))
 
 
@@ -362,41 +538,27 @@ def _get_browser_config(platform_type: Optional[PlatformType] = None) -> Dict[st
 
 
 async def _launch_browser_with_fallback(p, browser_type: BrowserType = BrowserType.CHROMIUM, 
-                                        headless: bool = True, 
-                                        context_config: Optional[Dict] = None) -> Tuple[Any, Any, Any]:
+                                        headless: bool = False, 
+                                        context_config: Optional[Dict] = None,
+                                        detected_browsers=None) -> Tuple[Any, Any, Any]:
     """
     统一的浏览器启动函数，支持多种浏览器和回退机制
-    
-    Args:
-        p: Playwright实例
-        browser_type: 首选浏览器类型
-        headless: 是否无头模式
-        context_config: 上下文配置
-    
-    Returns:
-        (browser, context, page) 三元组
-    
-    Raises:
-        RuntimeError: 所有浏览器启动尝试都失败
     """
-    detected_browsers = _detect_installed_browsers()
-    logger.info(f"Detected {len(detected_browsers)} available browsers")
+    if detected_browsers is None:
+        detected_browsers = _get_cached_browsers()
+    logger.debug(f"Detected {len(detected_browsers)} available browsers")
     
-    # 按优先级排序：首选类型 > Playwright管理 > 系统安装
-    browser_priority = [
-        (browser_type, True, True),   # 首选类型，Playwright管理
-        (browser_type, False, True),  # 首选类型，系统安装
-        (BrowserType.CHROMIUM, True, True),  # Chromium，Playwright管理
-        (BrowserType.CHROME, True, True),    # Chrome，Playwright管理
-        (BrowserType.CHROMIUM, False, True), # Chromium，系统安装
-        (BrowserType.CHROME, False, True),   # Chrome，系统安装
-        (BrowserType.FIREFOX, True, True),   # Firefox，Playwright管理
-        (BrowserType.WEBKIT, True, True),    # WebKit，Playwright管理
-    ]
-    
+    # 按优先级：首选类型(Playwright) > 首选类型(系统) > Chromium兜底
     launch_errors = []
-    
-    for target_type, prefer_playwright, _ in browser_priority:
+
+    browser_priority = [
+        (browser_type, True),
+        (browser_type, False),
+    ]
+    if browser_type not in (BrowserType.CHROMIUM, BrowserType.CHROME):
+        browser_priority += [(BrowserType.CHROMIUM, True), (BrowserType.CHROME, True)]
+
+    for target_type, prefer_playwright in browser_priority:
         # 筛选匹配的浏览器
         matching_browsers = [
             b for b in detected_browsers 
@@ -405,29 +567,28 @@ async def _launch_browser_with_fallback(p, browser_type: BrowserType = BrowserTy
         
         for browser_info in matching_browsers:
             try:
-                logger.info(f"Attempting to launch {target_type.value} browser (Playwright managed: {prefer_playwright})")
+                logger.debug(f"Attempting to launch {target_type.value} browser (Playwright managed: {prefer_playwright})")
                 
                 # 根据浏览器类型选择启动方法
+                launch_args = [
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-dev-shm-usage",
+                ]
+                if _get_platform() == PlatformType.LINUX:
+                    launch_args.append("--no-sandbox")
+
                 if target_type == BrowserType.CHROMIUM:
                     browser = await p.chromium.launch(
                         headless=headless,
                         executable_path=browser_info.executable_path if not prefer_playwright else None,
-                        args=[
-                            "--disable-blink-features=AutomationControlled",
-                            "--disable-dev-shm-usage",
-                            "--no-sandbox" if _get_platform() == PlatformType.LINUX else ""
-                        ]
+                        args=launch_args,
                     )
                 elif target_type == BrowserType.CHROME:
                     browser = await p.chromium.launch(
                         headless=headless,
                         channel="chrome",
                         executable_path=browser_info.executable_path if not prefer_playwright else None,
-                        args=[
-                            "--disable-blink-features=AutomationControlled",
-                            "--disable-dev-shm-usage",
-                            "--no-sandbox" if _get_platform() == PlatformType.LINUX else ""
-                        ]
+                        args=launch_args,
                     )
                 elif target_type == BrowserType.FIREFOX:
                     browser = await p.firefox.launch(
@@ -447,9 +608,9 @@ async def _launch_browser_with_fallback(p, browser_type: BrowserType = BrowserTy
                 context = await browser.new_context(**config)
                 page = await context.new_page()
                 
-                logger.info(f"Successfully launched {target_type.value} browser")
+                logger.debug(f"Successfully launched {target_type.value} browser")
                 return browser, context, page
-                
+
             except Exception as e:
                 error_msg = f"Failed to launch {target_type.value}: {str(e)}"
                 launch_errors.append(error_msg)
@@ -458,12 +619,12 @@ async def _launch_browser_with_fallback(p, browser_type: BrowserType = BrowserTy
     
     # 如果所有尝试都失败，尝试使 with Playwright的默认安装
     try:
-        logger.info("Attempting to use Playwright default installation")
+        logger.debug("Attempting to use Playwright default installation")
         browser = await p.chromium.launch(headless=headless)
         config = context_config or _get_browser_config()
         context = await browser.new_context(**config)
         page = await context.new_page()
-        logger.info("Successfully launched browser with Playwright default installation")
+        logger.debug("Successfully launched browser with Playwright default installation")
         return browser, context, page
     except Exception as e:
         launch_errors.append(f"Playwright default installation failed: {str(e)}")
@@ -485,14 +646,754 @@ async def _launch_browser_with_fallback(p, browser_type: BrowserType = BrowserTy
     )
 
 
-async def _launch_browser(p, headless: bool = True, context_config: Optional[Dict] = None):
+async def _launch_browser(p, headless: bool = False, context_config: Optional[Dict] = None):
     """向后兼容的浏览器启动函数"""
     return await _launch_browser_with_fallback(p, BrowserType.CHROMIUM, headless, context_config)
 
 
+_MONITOR_BUFFER_MAX = 5000
+_CAPTCHA_KEYWORDS = ["验证", "captcha", "security check", "verify", "安全验证", "访问异常"]
+
+
+def _is_captcha_page(title: str = "", text: str = "") -> bool:
+    """检测页面是否为验证码/反爬页面"""
+    combined = (title + " " + text).lower()
+    for kw in _CAPTCHA_KEYWORDS:
+        if kw.lower() in combined:
+            return True
+    return False
+
+
+# ============================================================
+# Step handlers for run
+# ============================================================
+
+_STEP_HANDLERS: Dict[str, Any] = {}
+
+
+def _register_step(type_name: str):
+    def decorator(func):
+        _STEP_HANDLERS[type_name] = func
+        return func
+    return decorator
+
+
+async def _execute_step(page, context, browser, state: ExecutionState, step: Dict) -> Dict:
+    step_type = step.get("type", "")
+    handler = _STEP_HANDLERS.get(step_type)
+    if handler is None:
+        return {"success": False, "type": step_type, "error": f"Unknown step type: {step_type}"}
+    try:
+        return await handler(page, context, browser, state, step)
+    except Exception as e:
+        return {"success": False, "type": step_type, "error": str(e)}
+
+
+@_register_step("goto")
+async def _step_goto(page, context, browser, state, step):
+    url = step.get("value") or step.get("url") or ""
+    wait_until = step.get("wait_until", "domcontentloaded")
+    await page.goto(url, wait_until=wait_until)
+    return {"success": True, "type": "goto", "url": page.url, "title": await page.title()}
+
+
+@_register_step("click")
+async def _step_click(page, context, browser, state, step):
+    selector = step["selector"]
+    opts = step.get("options", {})
+    await page.click(selector, **opts)
+    return {"success": True, "type": "click", "selector": selector}
+
+
+@_register_step("input")
+async def _step_input(page, context, browser, state, step):
+    selector = step["selector"]
+    value = str(step.get("value", ""))
+    opts = step.get("options", {})
+    await page.fill(selector, value, **opts)
+    return {"success": True, "type": "input", "selector": selector, "value": value}
+
+
+@_register_step("type")
+async def _step_type(page, context, browser, state, step):
+    selector = step["selector"]
+    value = str(step.get("value", ""))
+    opts = step.get("options", {})
+    await page.type(selector, value, **opts)
+    return {"success": True, "type": "type", "selector": selector, "value": value}
+
+
+@_register_step("select")
+async def _step_select(page, context, browser, state, step):
+    selector = step["selector"]
+    value = step.get("value", "")
+    opts = step.get("options", {})
+    await page.select_option(selector, value, **opts)
+    return {"success": True, "type": "select", "selector": selector, "value": value}
+
+
+@_register_step("hover")
+async def _step_hover(page, context, browser, state, step):
+    selector = step["selector"]
+    opts = step.get("options", {})
+    await page.hover(selector, **opts)
+    return {"success": True, "type": "hover", "selector": selector}
+
+
+@_register_step("scroll")
+async def _step_scroll(page, context, browser, state, step):
+    selector = step.get("selector")
+    value = step.get("value", 500)
+    opts = step.get("options", {})
+    if selector:
+        await page.locator(selector).scroll_into_view_if_needed(**opts)
+    else:
+        await page.evaluate(f"window.scrollBy(0, {int(value)})")
+    return {"success": True, "type": "scroll", "selector": selector}
+
+
+@_register_step("wait")
+async def _step_wait(page, context, browser, state, step):
+    ms = int(step.get("value") or step.get("timeout") or 1000)
+    await page.wait_for_timeout(ms)
+    return {"success": True, "type": "wait", "duration_ms": ms}
+
+
+@_register_step("wait_for_selector")
+async def _step_wait_for_selector(page, context, browser, state, step):
+    selector = step["selector"]
+    timeout = step.get("timeout", 30000)
+    state_ = step.get("state", "visible")
+    await page.wait_for_selector(selector, timeout=timeout, state=state_)
+    return {"success": True, "type": "wait_for_selector", "selector": selector}
+
+
+@_register_step("wait_for_load")
+async def _step_wait_for_load(page, context, browser, state, step):
+    load_state = step.get("value", step.get("state", "load"))
+    await page.wait_for_load_state(load_state)
+    return {"success": True, "type": "wait_for_load", "state": load_state}
+
+
+@_register_step("wait_for_function")
+async def _step_wait_for_function(page, context, browser, state, step):
+    expr = step.get("value") or step.get("expression") or step.get("js") or ""
+    timeout = step.get("timeout", 30000)
+    if not expr:
+        return {"success": False, "type": "wait_for_function", "error": "No expression provided"}
+    await page.wait_for_function(expr, timeout=timeout)
+    return {"success": True, "type": "wait_for_function", "expression": expr}
+
+
+@_register_step("evaluate")
+async def _step_evaluate(page, context, browser, state, step):
+    expression = step.get("value") or step.get("expression") or step.get("js") or step.get("code") or step.get("script") or ""
+    args = step.get("args", [])
+    if not expression:
+        return {"success": False, "type": "evaluate", "error": "No expression provided (try: value/expression/js/code)"}
+    result = await page.evaluate(expression, *args)
+    serializable = isinstance(result, (str, int, float, bool, list, dict, type(None)))
+    return {
+        "success": True,
+        "type": "evaluate",
+        "result": result if serializable else str(result),
+    }
+
+
+@_register_step("back")
+async def _step_back(page, context, browser, state, step):
+    await page.go_back()
+    return {"success": True, "type": "back", "url": page.url}
+
+
+@_register_step("forward")
+async def _step_forward(page, context, browser, state, step):
+    await page.go_forward()
+    return {"success": True, "type": "forward", "url": page.url}
+
+
+@_register_step("screenshot")
+async def _step_screenshot(page, context, browser, state, step):
+    path = _resolve_skill_path(step.get("path") or _default_screenshot_path(), state.project_path)
+    full_page = step.get("full_page", False)
+    selector = step.get("selector")
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    if selector:
+        element = await page.query_selector(selector)
+        if element:
+            await element.screenshot(path=path)
+        else:
+            await page.screenshot(path=path, full_page=full_page)
+    else:
+        await page.screenshot(path=path, full_page=full_page)
+    file_size = os.path.getsize(path) if os.path.exists(path) else 0
+    return {
+        "success": os.path.exists(path),
+        "type": "screenshot",
+        "path": path,
+        "full_page": full_page,
+        "selector": selector,
+        "file_size": file_size,
+    }
+
+
+@_register_step("pdf")
+async def _step_pdf(page, context, browser, state, step):
+    path = _resolve_skill_path(step.get("path") or _default_pdf_path(), state.project_path)
+    opts = step.get("options", {})
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    await page.pdf(path=path, **opts)
+    file_size = os.path.getsize(path) if os.path.exists(path) else 0
+    return {"success": True, "type": "pdf", "path": path, "file_size": file_size}
+
+
+@_register_step("extract")
+async def _step_extract(page, context, browser, state, step):
+    what = step.get("what", "text")
+    data = None
+
+    if what == "text":
+        data = await page.evaluate("() => document.body?.innerText?.trim() || ''")
+    elif what == "html":
+        data = await page.content()
+    elif what == "links":
+        data = await page.evaluate("""
+            () => Array.from(document.querySelectorAll('a[href]'))
+                .map(a => ({text: a.innerText.trim(), href: a.href}))
+                .filter(l => l.href)
+        """)
+    elif what == "images":
+        data = await page.evaluate("""
+            () => Array.from(document.querySelectorAll('img[src]'))
+                .map(img => ({src: img.src, alt: img.alt || ''}))
+                .filter(i => i.src)
+        """)
+    elif what == "table":
+        data = await page.evaluate("""
+            () => Array.from(document.querySelectorAll('table')).map(table =>
+                Array.from(table.querySelectorAll('tr')).map(row =>
+                    Array.from(row.querySelectorAll('th, td')).map(c => c.innerText.trim())
+                )
+            )
+        """)
+    elif what == "title":
+        data = await page.title()
+    elif what == "metadata":
+        data = await page.evaluate("""
+            () => {
+                const meta = {};
+                document.querySelectorAll('meta').forEach(m => {
+                    if (m.name) meta[m.name] = m.content;
+                    if (m.getAttribute('property')) meta[m.getAttribute('property')] = m.content;
+                });
+                return meta;
+            }
+        """)
+    elif what == "markdown":
+        data = await page.evaluate("() => document.body?.innerText?.trim() || ''")
+    elif what == "all":
+        title = await page.title()
+        text = await page.evaluate("() => document.body?.innerText?.trim() || ''")
+        links = await page.evaluate("""
+            () => Array.from(document.querySelectorAll('a[href]'))
+                .map(a => ({text: a.innerText.trim(), href: a.href}))
+                .filter(l => l.href)
+        """)
+        metadata = await page.evaluate("""
+            () => {
+                const meta = {};
+                document.querySelectorAll('meta').forEach(m => {
+                    if (m.name) meta[m.name] = m.content;
+                    if (m.getAttribute('property')) meta[m.getAttribute('property')] = m.content;
+                });
+                return meta;
+            }
+        """)
+        data = {"title": title, "text": text, "links": links, "metadata": metadata}
+
+    return {"success": True, "type": "extract", "what": what, "data": data}
+
+
+@_register_step("set_viewport")
+async def _step_set_viewport(page, context, browser, state, step):
+    width = step.get("width", 1280)
+    height = step.get("height", 720)
+    await page.set_viewport_size({"width": width, "height": height})
+    return {"success": True, "type": "set_viewport", "width": width, "height": height}
+
+
+@_register_step("keyboard")
+async def _step_keyboard(page, context, browser, state, step):
+    action = step.get("action", "press")
+    key = step.get("key", step.get("value", ""))
+    if action == "press":
+        await page.keyboard.press(key)
+    elif action == "type":
+        await page.keyboard.type(key)
+    elif action == "down":
+        await page.keyboard.down(key)
+    elif action == "up":
+        await page.keyboard.up(key)
+    return {"success": True, "type": "keyboard", "action": action, "key": key}
+
+
+@_register_step("mouse")
+async def _step_mouse(page, context, browser, state, step):
+    action = step.get("action", "click")
+    x = step.get("x", 0)
+    y = step.get("y", 0)
+    opts = step.get("options", {})
+    if action == "click":
+        if step.get("selector"):
+            await page.click(step["selector"], **opts)
+        else:
+            await page.mouse.click(x, y, **opts)
+    elif action == "move":
+        await page.mouse.move(x, y, **opts)
+    elif action == "down":
+        await page.mouse.down(**opts)
+    elif action == "up":
+        await page.mouse.up(**opts)
+    elif action == "dblclick":
+        await page.mouse.dblclick(x, y, **opts)
+    return {"success": True, "type": "mouse", "action": action, "x": x, "y": y}
+
+
+@_register_step("add_script")
+async def _step_add_script(page, context, browser, state, step):
+    content = step.get("content", "")
+    script_url = step.get("url")
+    if script_url:
+        await page.add_init_script(path=script_url)
+    else:
+        await page.add_init_script(content)
+    return {"success": True, "type": "add_script"}
+
+
+@_register_step("inject_cookie")
+async def _step_inject_cookie(page, context, browser, state, step):
+    cookies = step.get("cookies", [])
+    if not cookies and step.get("name"):
+        cookies = [{"name": step["name"], "value": step.get("value", ""), "url": step.get("url", page.url)}]
+    await context.add_cookies(cookies)
+    return {"success": True, "type": "inject_cookie", "count": len(cookies)}
+
+
+@_register_step("route")
+async def _step_route(page, context, browser, state, step):
+    pattern = step.get("pattern", "**/*")
+    handler_type = step.get("handler", "abort")
+    if handler_type == "abort":
+        await page.route(pattern, lambda route: route.abort())
+    elif handler_type == "continue":
+        await page.route(pattern, lambda route: route.continue_())
+    elif handler_type == "fulfill" and step.get("body"):
+        await page.route(pattern, lambda route: route.fulfill(
+            body=step.get("body", ""),
+            content_type=step.get("content_type", "text/plain"),
+            status=step.get("status", 200),
+        ))
+    return {"success": True, "type": "route", "pattern": pattern, "handler": handler_type}
+
+
+@_register_step("console_monitor")
+async def _step_console_monitor(page, context, browser, state, step):
+    events = set(step.get("events", ["log", "error"]))
+
+    if not hasattr(page, "_console_buffer"):
+        page._console_buffer = []
+
+        async def _on_console(msg):
+            if len(page._console_buffer) >= _MONITOR_BUFFER_MAX:
+                page._console_buffer.pop(0)
+            page._console_buffer.append({
+                "type": msg.type,
+                "text": msg.text,
+                "location": str(msg.location) if hasattr(msg, 'location') else "",
+            })
+
+        page.on("console", _on_console)
+
+    state.monitored_console = [m for m in page._console_buffer if m["type"] in events]
+    return {"success": True, "type": "console_monitor", "monitoring": list(events)}
+
+
+@_register_step("request_monitor")
+async def _step_request_monitor(page, context, browser, state, step):
+    patterns = step.get("patterns", ["**/*"])
+
+    if not hasattr(page, "_request_buffer"):
+        page._request_buffer = []
+
+        async def _on_request(request):
+            if len(page._request_buffer) >= _MONITOR_BUFFER_MAX:
+                page._request_buffer.pop(0)
+            page._request_buffer.append({
+                "url": request.url,
+                "method": request.method,
+                "resource_type": request.resource_type,
+                "headers": dict(request.headers),
+            })
+
+        page.on("request", _on_request)
+
+    import fnmatch
+    state.monitored_requests = [r for r in page._request_buffer if any(fnmatch.fnmatch(r["url"], p) for p in patterns)]
+    return {"success": True, "type": "request_monitor", "patterns": patterns}
+
+
+@_register_step("new_page")
+async def _step_new_page(page, context, browser, state, step):
+    new_page = await context.new_page()
+    new_page.set_default_timeout(step.get("timeout", 30000))
+    await new_page.add_init_script("""
+        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+        Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+        Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh'] });
+    """)
+    url = step.get("url", step.get("value"))
+    if url:
+        await new_page.goto(url, wait_until="domcontentloaded")
+    state.pages.append(new_page)
+    state.active_index = len(state.pages) - 1
+    return {"success": True, "type": "new_page", "url": url or "about:blank", "page_index": state.active_index}
+
+
+@_register_step("switch_page")
+async def _step_switch_page(page, context, browser, state, step):
+    index = step.get("value", step.get("index", 0))
+    if index < 0 or index >= len(state.pages):
+        return {"success": False, "type": "switch_page", "error": f"Page index {index} out of range (0-{len(state.pages) - 1})"}
+    state.active_index = index
+    return {"success": True, "type": "switch_page", "page_index": index, "url": state.page.url}
+
+
+@_register_step("close_page")
+async def _step_close_page(page, context, browser, state, step):
+    if len(state.pages) <= 1:
+        return {"success": False, "type": "close_page", "error": "Cannot close the last page"}
+    closed_index = state.active_index
+    await state.page.close()
+    state.pages.pop(closed_index)
+    state.active_index = max(0, closed_index - 1)
+    return {"success": True, "type": "close_page", "closed_index": closed_index}
+
+
+# --- Extra step types ---
+
+@_register_step("reload")
+async def _step_reload(page, context, browser, state, step):
+    cache_bypass = step.get("cache", step.get("hard", False))
+    if cache_bypass:
+        await context.add_cookies([{"name": "_cache_buster", "value": str(time.time()), "url": page.url}])
+    await page.reload(wait_until=step.get("wait_until", "domcontentloaded"))
+    return {"success": True, "type": "reload", "url": page.url, "cache_bypass": cache_bypass}
+
+
+@_register_step("file_upload")
+async def _step_file_upload(page, context, browser, state, step):
+    selector = step["selector"]
+    files = step.get("files", step.get("value"))
+    if isinstance(files, str):
+        files = [files]
+    await page.set_input_files(selector, files)
+    return {"success": True, "type": "file_upload", "selector": selector, "files": files}
+
+
+@_register_step("dialog")
+async def _step_dialog(page, context, browser, state, step):
+    action = step.get("action", "accept")
+    text = step.get("value", step.get("text"))
+
+    if not hasattr(page, "_dialog_handler_set"):
+        async def handler(dialog):
+            s = getattr(page, "_current_dialog_state", None)
+            if s is not None:
+                s.monitored_console.append({"type": "dialog", "message": dialog.message, "default_value": dialog.default_value})
+            act = getattr(page, "_dialog_action", "accept")
+            txt = getattr(page, "_dialog_text", None)
+            if act == "accept" and txt:
+                await dialog.accept(txt)
+            elif act == "accept":
+                await dialog.accept()
+            else:
+                await dialog.dismiss()
+
+        page._dialog_handler_set = True
+        page.on("dialog", handler)
+
+    page._current_dialog_state = state
+    page._dialog_action = action
+    page._dialog_text = text
+    return {"success": True, "type": "dialog", "action": action}
+
+
+@_register_step("check")
+async def _step_check(page, context, browser, state, step):
+    selector = step["selector"]
+    opts = step.get("options", {})
+    await page.check(selector, **opts)
+    return {"success": True, "type": "check", "selector": selector}
+
+
+@_register_step("uncheck")
+async def _step_uncheck(page, context, browser, state, step):
+    selector = step["selector"]
+    opts = step.get("options", {})
+    await page.uncheck(selector, **opts)
+    return {"success": True, "type": "uncheck", "selector": selector}
+
+
+@_register_step("drag_and_drop")
+async def _step_drag_and_drop(page, context, browser, state, step):
+    source = step["source"]
+    target = step.get("target")
+    x = step.get("x")
+    y = step.get("y")
+    if target:
+        await page.drag_and_drop(source, target)
+    elif x is not None and y is not None:
+        source_el = page.locator(source)
+        await source_el.drag_to(page.locator("body"), target_position={"x": x, "y": y})
+    return {"success": True, "type": "drag_and_drop", "source": source}
+
+
+@_register_step("storage_state")
+async def _step_storage_state(page, context, browser, state, step):
+    action = step.get("action", "save")
+    if action == "save":
+        storage = await context.storage_state()
+        state.storage_snapshot = storage
+        return {"success": True, "type": "storage_state", "action": "save", "cookies_count": len(storage.get("cookies", [])), "origins_count": len(storage.get("origins", []))}
+    elif action == "load":
+        data = step.get("data") or state.storage_snapshot
+        if data and data.get("cookies"):
+            await context.add_cookies(data["cookies"])
+            return {"success": True, "type": "storage_state", "action": "load", "cookies_restored": len(data["cookies"])}
+    return {"success": False, "type": "storage_state", "error": "No storage data available"}
+
+
+@_register_step("frame")
+async def _step_frame(page, context, browser, state, step):
+    selector = step["selector"]
+    sub_steps = step.get("steps", [])
+    frame = page.frame_locator(selector)
+    results = []
+    for sub in sub_steps:
+        sub_type = sub.get("type", "")
+        r = {"type": sub_type, "success": True}
+        if sub_type == "click":
+            await frame.locator(sub["selector"]).click(**sub.get("options", {}))
+        elif sub_type == "input":
+            await frame.locator(sub["selector"]).fill(str(sub.get("value", "")), **sub.get("options", {}))
+        elif sub_type == "type":
+            await frame.locator(sub["selector"]).type(str(sub.get("value", "")), **sub.get("options", {}))
+        elif sub_type == "select":
+            await frame.locator(sub["selector"]).select_option(sub.get("value", ""), **sub.get("options", {}))
+        elif sub_type == "wait":
+            await page.wait_for_timeout(int(sub.get("value", 1000)))
+        elif sub_type == "evaluate":
+            r["result"] = await frame.owner().evaluate(sub.get("value", ""))
+        else:
+            r["success"] = False
+            r["error"] = f"Unknown frame sub-step: {sub_type}"
+        results.append(r)
+    return {"success": True, "type": "frame", "selector": selector, "sub_results": results}
+
+
+@_register_step("performance")
+async def _step_performance(page, context, browser, state, step):
+    metrics = await page.metrics()
+    timing = await page.evaluate("() => JSON.stringify(window.performance.timing)")
+    return {"success": True, "type": "performance", "metrics": metrics, "timing": timing}
+
+
+@_register_step("close_session")
+async def _step_close_session(page, context, browser, state, step):
+    session_id = step.get("session_id", step.get("value", ""))
+    if session_id:
+        await _close_session(session_id)
+        return {"success": True, "type": "close_session", "session_id": session_id}
+    return {"success": False, "type": "close_session", "error": "No session_id provided"}
+
+
+# ============================================================
+# run - Unified Playwright script execution engine (primary entry)
+# ============================================================
+
+
+async def _get_page_title(state: ExecutionState) -> str:
+    try:
+        return await state.page.title() if state.pages else ""
+    except Exception:
+        return ""
+
+
+def _get_extracted_text(state: ExecutionState) -> str:
+    """从步骤结果中提取页面文本，用于 CAPTCHA 检测"""
+    for s in state.step_results:
+        if s.get("type") != "extract":
+            continue
+        d = s.get("data")
+        if isinstance(d, str):
+            return d
+        if isinstance(d, dict):
+            text = d.get("text") or d.get("preview") or ""
+            if text:
+                return text
+    return ""
+
+
+def _build_result(success: bool, **kw) -> Dict:
+    return {
+        "success": success,
+        "url": kw.get("url", ""),
+        "title": kw.get("title", ""),
+        "steps": kw.get("steps", []),
+        "browser_info": {"type": kw.get("browser_type"), "headless": kw.get("headless"), "platform": _get_platform().value},
+        "platform": _get_platform().value,
+        "duration_ms": (time.time() - kw.get("start_time", time.time())) * 1000,
+        "error": kw.get("error"),
+        "error_type": kw.get("error_type"),
+        "captcha_detected": kw.get("captcha_detected", False),
+        "monitored_console": kw.get("monitored_console", []),
+        "monitored_requests": kw.get("monitored_requests", []),
+        **({"session_id": kw["session_id"]} if "session_id" in kw else {}),
+    }
+
+
+async def run(
+    script: Optional[List[Dict[str, Any]]] = None,
+    url: Optional[str] = None,
+    action: Optional[str] = None,
+    headless: bool = True,
+    browser_type: str = "chromium",
+    timeout: int = 30000,
+    retry_count: int = 2,
+    retry_delay: float = 1.0,
+    context_config: Optional[Dict] = None,
+    session_id: Optional[str] = None,
+    **kwargs: Any,
+) -> Dict[str, Any]:
+    """
+    统一的 Playwright 脚本执行引擎。
+
+    Args:
+        script: 步骤列表，每个步骤是一个 dict，必须包含 "type" 字段
+        url: 可选的初始导航 URL
+        action: 快捷操作 (navigate/scrape/screenshot), 自动生成 script
+        headless: 是否无头模式，默认 False (显示浏览器窗口)
+        browser_type: 浏览器类型 (chromium, chrome, firefox, webkit)
+        timeout: 超时时间(毫秒)
+        retry_delay: 重试延迟(秒)
+        session_id: 会话 ID，提供后可跨调用复用同一浏览器
+
+    Returns:
+        {
+            "success": bool,
+            "url": str,
+            "title": str,
+            "session_id": str,  # 会话 ID（当使用 session 时）
+            "steps": List[Dict],
+            "browser_info": Dict,
+            "platform": str,
+            "duration_ms": float,
+            "error": Optional[str],
+            "captcha_detected": bool,
+        }
+    """
+    start_time = time.time()
+    _ensure_cleanup_task()
+    await _cleanup_idle_sessions()
+
+    if not script:
+        script = []
+    if action == "screenshot":
+        if not any(s.get("type") == "screenshot" for s in script):
+            script.append({"type": "screenshot", "full_page": True})
+    elif action != "none" and not any(s.get("type") in ("extract", "screenshot", "pdf") for s in script):
+        script.append({"type": "extract", "what": "all"})
+
+    if not script and not url:
+        return {"success": False, "error": "Provide url or script to do something", "duration_ms": 0, "platform": _get_platform().value}
+
+    for attempt in range(retry_count + 1):
+        cm = None
+        try:
+            if session_id:
+                sess = await _get_session(session_id, headless, browser_type, timeout)
+                browser, context, page = sess.browser, sess.context, sess.page
+            else:
+                cm = _browser_context(headless, browser_type, timeout, context_config)
+                browser, context, page = await cm.__aenter__()
+
+            state = ExecutionState(pages=[page], project_path=kwargs.get("_project_path", ""))
+            if url:
+                await page.goto(url, wait_until="domcontentloaded")
+
+            for i, step in enumerate(script):
+                step_start = time.time()
+                result = await _execute_step(page, context, browser, state, step)
+                result["duration_ms"] = (time.time() - step_start) * 1000
+                result["step_index"] = i
+                state.step_results.append(result)
+                if not result.get("success", True) and step.get("abort_on_error", True):
+                    break
+
+            title = await _get_page_title(state)
+            overall_success = all(r.get("success", True) for r in state.step_results)
+            step_errors = [s.get("error") for s in state.step_results if not s.get("success") and s.get("error")]
+            first_error = step_errors[0] if step_errors else (None if overall_success else "Unknown step error")
+            page_text = _get_extracted_text(state)
+            is_captcha = _is_captcha_page(title=title, text=page_text)
+
+            if session_id and session_id in _sessions:
+                _sessions[session_id].page = state.page
+                _sessions[session_id].last_used = time.time()
+
+            if is_captcha:
+                logger.warning("CAPTCHA detected, returning for model to decide next step")
+                return _build_result(True,
+                    url=url or (state.page.url if state.pages else ""), title=title,
+                    steps=state.step_results, browser_type=browser_type, headless=headless,
+                    start_time=start_time,
+                    error="CAPTCHA detected",
+                    error_type="captcha", captcha_detected=True,
+                    monitored_console=state.monitored_console, monitored_requests=state.monitored_requests,
+                    **({"session_id": session_id} if session_id else {}))
+
+            return _build_result(overall_success,
+                url=url or (state.page.url if state.pages else ""), title=title,
+                steps=state.step_results, browser_type=browser_type, headless=headless,
+                start_time=start_time,
+                error=first_error or ("CAPTCHA detected" if is_captcha else None),
+                error_type="captcha" if is_captcha else None, captcha_detected=is_captcha,
+                monitored_console=state.monitored_console, monitored_requests=state.monitored_requests,
+                **({"session_id": session_id} if session_id else {}))
+
+        except ImportError:
+            return {"success": False, "error": "Playwright not installed", "error_type": "import_error", "steps": [], "duration_ms": (time.time() - start_time) * 1000, "platform": _get_platform().value, "solution": "pip install playwright && playwright install chromium chrome firefox"}
+        except Exception as e:
+            if attempt < retry_count:
+                await asyncio.sleep(retry_delay)
+                continue
+            err = _format_error_result(e, "run failed")
+            err.update({"duration_ms": (time.time() - start_time) * 1000, **({"session_id": session_id} if session_id else {})})
+            return err
+        finally:
+            if cm:
+                try:
+                    await cm.__aexit__(None, None, None)
+                except Exception:
+                    pass
+
+    return {"success": False, "error": f"All {retry_count + 1} attempts failed", "error_type": "max_retries_exceeded", "steps": [], "duration_ms": (time.time() - start_time) * 1000, "retry_attempts": retry_count, "platform": _get_platform().value}
+
+
 async def browser_automation(
     url: str,
-    actions: Optional[List[Dict[str, Any]]] = None,
+    steps: Optional[List[Dict[str, Any]]] = None,
+    action: Optional[str] = None,
     wait_for: Optional[Dict[str, Any]] = None,
     extract: Optional[List[str]] = None,
     screenshot: Optional[Dict[str, Any]] = None,
@@ -500,102 +1401,92 @@ async def browser_automation(
     headless: bool = True,
     browser_type: str = "chromium",
     retry_count: int = 2,
-    retry_delay: float = 1.0
+    retry_delay: float = 1.0,
+    **kwargs: Any,
 ) -> Dict[str, Any]:
     """
     浏览器自动化操作 - 支持动态网页处理和数据提取
-    
+
     Args:
         url: 目标URL
-        actions: 操作列表，每项包含:
+        action: 快捷操作 (navigate/scrape/screenshot), 自动生成 script
+        steps: 操作步骤列表，每项包含:
             - type: 操作类型 (click, input, select, hover, scroll, wait, evaluate, goto, back, forward)
             - selector: CSS选择器
             - value: 输入值/选项值
             - options: 额外选项
         wait_for: 等待条件
-            - selector: 等待元素出现
-            - network: 等待网络空闲 (idle, load)
-            - function: JS函数条件
-            - timeout: 超时时间(毫秒)
         extract: 提取数据类型列表
-            - text: 文本内容
-            - html: HTML内容
-            - links: 链接列表
-            - images: 图片列表
-            - table: 表格数据
-            - title: 页面标题
-            - metadata: 元数据
-            - all: 所有可提取内容
         screenshot: 截图配置
-            - path: 保存路径
-            - full_page: 是否截取整页
-            - selector: 指定元素截图
         timeout: 超时时间(毫秒)，默认30000
         headless: 是否无头模式，默认True
-        browser_type: 浏览器类型 (chromium, chrome, firefox, webkit)，默认chromium
+        browser_type: 浏览器类型
         retry_count: 重试次数，默认2
         retry_delay: 重试延迟(秒)，默认1.0
-    
+
     Returns:
-        操作结果，包含:
-            - success: 是否成功
-            - url: 目标URL
-            - title: 页面标题
-            - actions_performed: 执行的操作列表
-            - extracted_data: 提取的数据
-            - screenshot: 截图信息
-            - browser_info: 浏览器信息
-            - platform: 操作系统平台
-            - duration: 执行时长(秒)
-            - error: 错误信息(如果失败)
-            - error_type: 错误类型
-            - retry_attempts: 重试次数
+        操作结果
     """
-    start_time = asyncio.get_event_loop().time() if hasattr(asyncio, 'get_event_loop') else 0
+    start_time = time.time()
     logger.info(f"browser_automation starting: {url}")
-    
-    # 参数验证
+
+    # 快捷 action 模式：只要没有显式传 steps/extract/screenshot，就自动提取
+    if not steps and not extract and not screenshot:
+        if action == "screenshot":
+            result = await run(url=url, action="screenshot", headless=headless, browser_type=browser_type, timeout=timeout, retry_count=retry_count)
+        else:
+            result = await run(url=url, headless=headless, browser_type=browser_type, timeout=timeout, retry_count=retry_count)
+        return {
+            "success": result["success"],
+            "url": url,
+            "title": result.get("title", ""),
+            "actions_performed": result.get("steps", []),
+            "extracted_data": {s.get("what", "all"): s.get("data") for s in (result.get("steps") or []) if s.get("type") == "extract"},
+            "screenshot": None,
+            "browser_info": result.get("browser_info", {}),
+            "platform": result.get("platform", _get_platform().value),
+            "duration": result.get("duration_ms", 0) / 1000,
+            "error": result.get("error"),
+            "error_type": result.get("error_type"),
+            "retry_attempts": result.get("retry_attempts", 0),
+        }
+
     validation_errors = []
-    
-    # 验证URL
+
     url_valid, url_error = _validate_url(url)
     if not url_valid:
         validation_errors.append(f"URL validation failed: {url_error}")
-    
-    # 验证actions
-    if actions:
-        if not isinstance(actions, list):
-            validation_errors.append("actions must be a list")
+
+    if steps:
+        if not isinstance(steps, list):
+            validation_errors.append("steps must be a list")
         else:
-            for i, action in enumerate(actions):
-                if not isinstance(action, dict):
-                    validation_errors.append(f"action[{i}] must be a dict")
-                elif "type" not in action:
-                    validation_errors.append(f"action[{i}] missing type field")
-                elif action.get("selector"):
-                    selector_valid, selector_error = _validate_selector(action["selector"])
-                    if not selector_valid:
-                        validation_errors.append(f"action[{i}] selector invalid: {selector_error}")
-    
-    # 验证extract
+            for i, s in enumerate(steps):
+                if not isinstance(s, dict):
+                    validation_errors.append(f"steps[{i}] must be a dict")
+                elif "type" not in s:
+                    validation_errors.append(f"steps[{i}] missing 'type' field (use e.g. {{\"type\": \"click\", \"selector\": \"...\"}})")
+                elif s.get("selector"):
+                    sv, se = _validate_selector(s["selector"])
+                    if not sv:
+                        validation_errors.append(f"steps[{i}] selector invalid: {se}")
+
     if extract:
         if not isinstance(extract, list):
             validation_errors.append("extract must be a list")
         else:
             valid_extract_types = {"text", "html", "links", "images", "table", "title", "metadata", "all"}
-            for extract_type in extract:
-                if extract_type not in valid_extract_types:
-                    validation_errors.append(f"Unsupported extract type: {extract_type}")
-    
-    # 验证timeout
+            for et in extract:
+                if et not in valid_extract_types:
+                    validation_errors.append(f"Unsupported extract type: {et}")
+
     if not isinstance(timeout, int) or timeout < 1000 or timeout > 300000:
         validation_errors.append("timeout must be between 1000-300000ms")
-    
-    # 验证browser_type
+
     valid_browser_types = {"chromium", "chrome", "firefox", "webkit"}
     if browser_type.lower() not in valid_browser_types:
         validation_errors.append(f"Unsupported browser_type: {browser_type}")
-    
+
     if validation_errors:
         return {
             "success": False,
@@ -604,186 +1495,121 @@ async def browser_automation(
             "validation_errors": validation_errors,
             "platform": _get_platform().value
         }
-    
-    # 转换browser_type
+
     browser_type_enum = BrowserType(browser_type.lower())
-    
-    try:
-        from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
-    except ImportError:
-        return {
-            "success": False,
-            "url": url,
-            "error": "Playwright not installed",
-            "error_type": "import_error",
-            "platform": _get_platform().value,
-            "solution": "Please run: pip install playwright && playwright install chromium chrome firefox"
-        }
-    
-    result = {
-        "success": True,
-        "url": url,
-        "title": "",
-        "actions_performed": [],
-        "extracted_data": {},
-        "screenshot": None,
-        "browser_info": {
-            "type": browser_type,
-            "headless": headless,
-            "platform": _get_platform().value
-        },
-        "platform": _get_platform().value,
-        "duration": 0,
-        "error": None,
-        "error_type": None,
-        "retry_attempts": 0
-    }
-    
-    browser = None
-    context = None
-    page = None
-    retry_attempts = 0
-    
+
     for attempt in range(retry_count + 1):
-        retry_attempts = attempt
         try:
-            async with async_playwright() as p:
-                # 启动浏览器
-                browser, context, page = await _launch_browser_with_fallback(
-                    p, 
-                    browser_type=browser_type_enum, 
-                    headless=headless
-                )
-                
-                # 记录浏览器信息
-                detected_browsers = _detect_installed_browsers()
+            async with _browser_context(headless, browser_type, timeout) as (browser, context, page):
+                result = {
+                    "success": True,
+                    "url": url,
+                    "title": "",
+                    "actions_performed": [],
+                    "extracted_data": {},
+                    "screenshot": None,
+                    "browser_info": {
+                        "type": browser_type,
+                        "headless": headless,
+                        "platform": _get_platform().value,
+                    },
+                    "platform": _get_platform().value,
+                    "duration": 0,
+                    "error": None,
+                    "error_type": None,
+                    "retry_attempts": 0,
+                }
+
+                detected_browsers = _get_cached_browsers()
                 matching_browsers = [b for b in detected_browsers if b.type == browser_type_enum]
                 if matching_browsers:
                     result["browser_info"]["detected_version"] = matching_browsers[0].version
                     result["browser_info"]["is_playwright_managed"] = matching_browsers[0].is_playwright_managed
-                
-                # 设置超时
-                page.set_default_timeout(timeout)
-                page.set_default_navigation_timeout(timeout)
-                
-                # 导航到URL
-                navigation_start = asyncio.get_event_loop().time() if hasattr(asyncio, 'get_event_loop') else 0
+
+                nav_start = time.time()
                 await page.goto(url, wait_until="domcontentloaded")
-                navigation_end = asyncio.get_event_loop().time() if hasattr(asyncio, 'get_event_loop') else 0
-                
-                logger.info(f"Navigated to: {url}")
                 result["actions_performed"].append({
-                    "type": "goto", 
+                    "type": "goto",
                     "url": url,
-                    "duration": navigation_end - navigation_start if navigation_end > navigation_start else 0
+                    "duration": time.time() - nav_start,
                 })
-                
-                # Get 页面标题
+
                 result["title"] = await page.title()
-                
-                # 执行预加载等待
+
                 if wait_for:
                     await _wait_for_page_ready(page, wait_for)
-                
-                # 执行操作列表
-                if actions:
-                    for action in actions:
-                        action_start = asyncio.get_event_loop().time() if hasattr(asyncio, 'get_event_loop') else 0
-                        action_result = await _execute_action(page, action)
-                        action_end = asyncio.get_event_loop().time() if hasattr(asyncio, 'get_event_loop') else 0
-                        action_result["duration"] = action_end - action_start if action_end > action_start else 0
+
+                if steps:
+                    for step in steps:
+                        act_start = time.time()
+                        action_result = await _execute_action(page, step)
+                        action_result["duration"] = time.time() - act_start
                         result["actions_performed"].append(action_result)
-                
-                # 等待页面稳定
+
                 await page.wait_for_load_state("load")
-                
-                # 提取数据
+
                 if extract:
-                    for extract_type in extract:
-                        data = await _extract_data(page, extract_type)
-                        result["extracted_data"][extract_type] = data
-                
-                # 截图
+                    for et in extract:
+                        data = await _extract_data(page, et)
+                        result["extracted_data"][et] = data
+
                 if screenshot:
-                    screenshot_path = screenshot.get("path", "screenshot.png")
+                    _proj = kwargs.get("_project_path", "")
+                    sp = _resolve_skill_path(screenshot.get("path") or _default_screenshot_path(), _proj)
                     full_page = screenshot.get("full_page", False)
-                    selector = screenshot.get("selector")
-                    
-                    # 确保目录存在
-                    os.makedirs(os.path.dirname(screenshot_path) or ".", exist_ok=True)
-                    
-                    if selector:
-                        element = await page.query_selector(selector)
+                    sel = screenshot.get("selector")
+                    os.makedirs(os.path.dirname(sp) or ".", exist_ok=True)
+                    if sel:
+                        element = await page.query_selector(sel)
                         if element:
-                            await element.screenshot(path=screenshot_path)
+                            await element.screenshot(path=sp)
                         else:
-                            logger.warning(f"Screenshot element not found: {selector}")
-                            await page.screenshot(path=screenshot_path, full_page=full_page)
+                            logger.warning(f"Screenshot element not found: {sel}")
+                            await page.screenshot(path=sp, full_page=full_page)
                     else:
-                        await page.screenshot(path=screenshot_path, full_page=full_page)
-                    
+                        await page.screenshot(path=sp, full_page=full_page)
                     result["screenshot"] = {
-                        "path": screenshot_path,
+                        "path": sp,
                         "full_page": full_page,
-                        "selector": selector,
-                        "file_size": os.path.getsize(screenshot_path) if os.path.exists(screenshot_path) else 0
+                        "selector": sel,
+                        "file_size": os.path.getsize(sp) if os.path.exists(sp) else 0,
                     }
-                    result["actions_performed"].append({"type": "screenshot", "path": screenshot_path})
-                
-                # 计算执行时长
-                end_time = asyncio.get_event_loop().time() if hasattr(asyncio, 'get_event_loop') else 0
-                result["duration"] = end_time - start_time if end_time > start_time else 0
-                result["retry_attempts"] = retry_attempts
-                
-                await browser.close()
+                    result["actions_performed"].append({"type": "screenshot", "path": sp})
+
+                result["duration"] = time.time() - start_time
+                result["retry_attempts"] = attempt
                 return result
-                
-        except PlaywrightTimeoutError as e:
-            error_result = _format_error_result(e, "Operation timed out")
-            error_result.update({
+
+        except ImportError:
+            return {
+                "success": False,
                 "url": url,
-                "retry_attempts": retry_attempts,
-                "duration": (asyncio.get_event_loop().time() if hasattr(asyncio, 'get_event_loop') else 0) - start_time
-            })
-            
-            if attempt < retry_count:
-                logger.warning(f"Attempt {attempt + 1} timed out, retrying in {retry_delay}s")
-                await asyncio.sleep(retry_delay)
-                continue
-            else:
-                return error_result
-                
+                "error": "Playwright not installed",
+                "error_type": "import_error",
+                "platform": _get_platform().value,
+                "solution": "pip install playwright && playwright install chromium chrome firefox",
+            }
         except Exception as e:
-            error_result = _format_error_result(e, "Browser automation failed")
-            error_result.update({
-                "url": url,
-                "retry_attempts": retry_attempts,
-                "duration": (asyncio.get_event_loop().time() if hasattr(asyncio, 'get_event_loop') else 0) - start_time
-            })
-            
             if attempt < retry_count:
                 logger.warning(f"Attempt {attempt + 1} failed, retrying in {retry_delay}s: {str(e)}")
                 await asyncio.sleep(retry_delay)
                 continue
-            else:
-                return error_result
-                
-        finally:
-            if browser:
-                try:
-                    await browser.close()
-                except:
-                    pass
-    
-    # 所有重试都失败
+            error_result = _format_error_result(e, "Browser automation failed")
+            error_result.update({
+                "url": url,
+                "retry_attempts": attempt,
+                "duration": time.time() - start_time,
+            })
+            return error_result
+
     return {
         "success": False,
         "url": url,
         "error": f"All {retry_count + 1} attempts failed",
         "error_type": "max_retries_exceeded",
         "platform": _get_platform().value,
-        "retry_attempts": retry_attempts,
-        "duration": (asyncio.get_event_loop().time() if hasattr(asyncio, 'get_event_loop') else 0) - start_time
+        "retry_attempts": retry_count,
+        "duration": time.time() - start_time,
     }
 
 
@@ -960,11 +1786,12 @@ async def scrape_dynamic_page(
     timeout: int = 30000,
     headless: bool = True,
     browser_type: str = "chromium",
-    retry_count: int = 2
+    retry_count: int = 2,
+    **kwargs: Any,
 ) -> Dict[str, Any]:
     """
-    抓取动态网页内容 - 适 with 于JavaScript渲染的页面
-    
+    抓取动态网页内容 - 适用于 JavaScript 渲染的页面
+
     Args:
         url: 目标URL
         selectors: CSS选择器列表，指定要提取的元素
@@ -976,112 +1803,71 @@ async def scrape_dynamic_page(
         headless: 是否无头模式
         browser_type: 浏览器类型
         retry_count: 重试次数
-    
+
     Returns:
         抓取结果
     """
-    start_time = asyncio.get_event_loop().time() if hasattr(asyncio, 'get_event_loop') else 0
+    start_time = time.time()
     logger.info(f"scrape_dynamic_page starting: {url}")
-    
-    # 参数验证
+
     url_valid, url_error = _validate_url(url)
     if not url_valid:
-        return {
-            "success": False,
-            "url": url,
-            "error": f"URL validation failed: {url_error}",
-            "platform": _get_platform().value
-        }
-    
+        return {"success": False, "url": url, "error": f"URL validation failed: {url_error}", "platform": _get_platform().value}
+
     if selectors:
-        for i, selector in enumerate(selectors):
-            selector_valid, selector_error = _validate_selector(selector)
-            if not selector_valid:
-                return {
-                    "success": False,
-                    "url": url,
-                    "error": f"Selector [{i}] invalid: {selector_error}",
-                    "platform": _get_platform().value
-                }
-    
+        for i, s in enumerate(selectors):
+            sv, se = _validate_selector(s)
+            if not sv:
+                return {"success": False, "url": url, "error": f"Selector [{i}] invalid: {se}", "platform": _get_platform().value}
+
     if wait_for_selector:
-        selector_valid, selector_error = _validate_selector(wait_for_selector)
-        if not selector_valid:
-            return {
-                "success": False,
-                "url": url,
-                "error": f"Wait selector invalid: {selector_error}",
-                "platform": _get_platform().value
-            }
-    
-    try:
-        from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
-    except ImportError:
-        return {
-            "success": False,
-            "url": url,
-            "error": "Playwright not installed",
-            "error_type": "import_error",
-            "platform": _get_platform().value
-        }
-    
-    result = {
-        "success": True,
-        "url": url,
-        "title": "",
-        "content": {},
-        "platform": _get_platform().value,
-        "duration": 0,
-        "error": None,
-        "retry_attempts": 0
-    }
-    
-    browser_type_enum = BrowserType(browser_type.lower())
-    
+        sv, se = _validate_selector(wait_for_selector)
+        if not sv:
+            return {"success": False, "url": url, "error": f"Wait selector invalid: {se}", "platform": _get_platform().value}
+
     for attempt in range(retry_count + 1):
-        browser = None
         try:
-            async with async_playwright() as p:
-                browser, context, page = await _launch_browser_with_fallback(
-                    p, 
-                    browser_type=browser_type_enum, 
-                    headless=headless
-                )
-                
-                page.set_default_timeout(timeout)
-                page.set_default_navigation_timeout(timeout)
-                
+            async with _browser_context(headless, browser_type, timeout) as (browser, context, page):
+                result = {
+                    "success": True,
+                    "url": url,
+                    "title": "",
+                    "content": {},
+                    "platform": _get_platform().value,
+                    "duration": 0,
+                    "error": None,
+                    "retry_attempts": 0,
+                }
+
                 await page.goto(url, wait_until="domcontentloaded")
                 logger.info(f"Navigated to: {url}")
-                
+
                 if wait_for_selector:
                     await page.wait_for_selector(wait_for_selector, timeout=timeout)
-                
+
                 await page.wait_for_load_state("load")
-                
+
                 result["title"] = await page.title()
-                
+
                 if extract_text:
-                    result["content"]["text"] = await page.evaluate(
-                        "() => document.body.innerText.trim()"
-                    )
-                
+                    result["content"]["text"] = await page.evaluate("() => document.body.innerText.trim()")
+
                 if extract_links:
                     result["content"]["links"] = await page.evaluate("""
                         () => Array.from(document.querySelectorAll('a[href]'))
                             .map(a => ({text: a.innerText.trim(), href: a.href}))
                             .filter(l => l.href)
                     """)
-                
+
                 if extract_tables:
                     result["content"]["tables"] = await page.evaluate("""
                         () => Array.from(document.querySelectorAll('table')).map(table => {
-                            return Array.from(table.querySelectorAll('tr')).map(row => 
+                            return Array.from(table.querySelectorAll('tr')).map(row =>
                                 Array.from(row.querySelectorAll('th, td')).map(c => c.innerText.trim())
                             );
                         })
                     """)
-                
+
                 if selectors:
                     for sel in selectors:
                         safe_sel = sel.replace("'", "\\'").replace('"', '\\"')
@@ -1089,62 +1875,34 @@ async def scrape_dynamic_page(
                             () => {{
                                 try {{
                                     const els = document.querySelectorAll('{safe_sel}');
-                                    return Array.from(els).map(el => {{
-                                        return {{
-                                            text: el.innerText.trim(),
-                                            html: el.innerHTML,
-                                            tag: el.tagName.toLowerCase(),
-                                            id: el.id || '',
-                                            class: el.className || ''
-                                        }};
-                                    }});
+                                    return Array.from(els).map(el => ({{
+                                        text: el.innerText.trim(),
+                                        html: el.innerHTML,
+                                        tag: el.tagName.toLowerCase(),
+                                        id: el.id || '',
+                                        class: el.className || ''
+                                    }}));
                                 }} catch (e) {{
                                     return {{error: e.toString()}};
                                 }}
                             }}
                         """)
-                
+
                 result["retry_attempts"] = attempt
-                result["duration"] = (asyncio.get_event_loop().time() if hasattr(asyncio, 'get_event_loop') else 0) - start_time
-                
-                await browser.close()
+                result["duration"] = time.time() - start_time
                 return result
-                
-        except PlaywrightTimeoutError as e:
-            if attempt < retry_count:
-                logger.warning(f"Attempt {attempt + 1} timed out, retrying in 1s")
-                await asyncio.sleep(1)
-                continue
-            else:
-                error_result = _format_error_result(e, "Scraping timed out")
-                error_result.update({
-                    "url": url,
-                    "retry_attempts": attempt,
-                    "duration": (asyncio.get_event_loop().time() if hasattr(asyncio, 'get_event_loop') else 0) - start_time
-                })
-                return error_result
-                
+
+        except ImportError:
+            return {"success": False, "url": url, "error": "Playwright not installed", "error_type": "import_error", "platform": _get_platform().value}
         except Exception as e:
             if attempt < retry_count:
-                logger.warning(f"Attempt {attempt + 1} failed, retrying in 1s: {str(e)}")
+                logger.warning(f"Attempt {attempt + 1} failed, retrying: {str(e)}")
                 await asyncio.sleep(1)
                 continue
-            else:
-                error_result = _format_error_result(e, "Scraping failed")
-                error_result.update({
-                    "url": url,
-                    "retry_attempts": attempt,
-                    "duration": (asyncio.get_event_loop().time() if hasattr(asyncio, 'get_event_loop') else 0) - start_time
-                })
-                return error_result
-                
-        finally:
-            if browser:
-                try:
-                    await browser.close()
-                except:
-                    pass
-    
+            error_result = _format_error_result(e, "Scraping failed")
+            error_result.update({"url": url, "retry_attempts": attempt, "duration": time.time() - start_time})
+            return error_result
+
     return {
         "success": False,
         "url": url,
@@ -1152,13 +1910,13 @@ async def scrape_dynamic_page(
         "error_type": "max_retries_exceeded",
         "platform": _get_platform().value,
         "retry_attempts": retry_count,
-        "duration": (asyncio.get_event_loop().time() if hasattr(asyncio, 'get_event_loop') else 0) - start_time
+        "duration": time.time() - start_time,
     }
 
 
 async def take_screenshot(
     url: str,
-    output_path: str = "screenshot.png",
+    output_path: str = "",
     selector: Optional[str] = None,
     full_page: bool = False,
     wait_for_selector: Optional[str] = None,
@@ -1168,11 +1926,12 @@ async def take_screenshot(
     browser_type: str = "chromium",
     retry_count: int = 2,
     viewport_width: int = 1920,
-    viewport_height: int = 1080
+    viewport_height: int = 1080,
+    **kwargs: Any,
 ) -> Dict[str, Any]:
     """
     页面截图 - 支持整页截图和元素截图
-    
+
     Args:
         url: 目标URL
         output_path: 截图保存路径
@@ -1186,137 +1945,79 @@ async def take_screenshot(
         retry_count: 重试次数
         viewport_width: 视口宽度
         viewport_height: 视口高度
-    
+
     Returns:
         截图结果
     """
-    start_time = asyncio.get_event_loop().time() if hasattr(asyncio, 'get_event_loop') else 0
+    start_time = time.time()
     logger.info(f"take_screenshot starting: {url}")
-    
-    # 参数验证
+    if not output_path:
+        output_path = _default_screenshot_path()
+    output_path = _resolve_skill_path(output_path, kwargs.get("_project_path", ""))
+
     url_valid, url_error = _validate_url(url)
     if not url_valid:
-        return {
-            "success": False,
-            "url": url,
-            "screenshot_path": output_path,
-            "error": f"URL validation failed: {url_error}",
-            "platform": _get_platform().value
-        }
-    
+        return {"success": False, "url": url, "screenshot_path": output_path, "error": f"URL validation failed: {url_error}", "platform": _get_platform().value}
+
     if selector:
-        selector_valid, selector_error = _validate_selector(selector)
-        if not selector_valid:
-            return {
-                "success": False,
-                "url": url,
-                "screenshot_path": output_path,
-                "error": f"Selector invalid: {selector_error}",
-                "platform": _get_platform().value
-            }
-    
+        sv, se = _validate_selector(selector)
+        if not sv:
+            return {"success": False, "url": url, "screenshot_path": output_path, "error": f"Selector invalid: {se}", "platform": _get_platform().value}
+
     if wait_for_selector:
-        selector_valid, selector_error = _validate_selector(wait_for_selector)
-        if not selector_valid:
-            return {
-                "success": False,
-                "url": url,
-                "screenshot_path": output_path,
-                "error": f"Wait selector invalid: {selector_error}",
-                "platform": _get_platform().value
-            }
-    
+        sv, se = _validate_selector(wait_for_selector)
+        if not sv:
+            return {"success": False, "url": url, "screenshot_path": output_path, "error": f"Wait selector invalid: {se}", "platform": _get_platform().value}
+
     if delay < 0 or delay > 30000:
-        return {
-            "success": False,
-            "url": url,
-            "screenshot_path": output_path,
-            "error": "delay must be between 0-30000ms",
-            "platform": _get_platform().value
-        }
-    
+        return {"success": False, "url": url, "screenshot_path": output_path, "error": "delay must be between 0-30000ms", "platform": _get_platform().value}
+
     if viewport_width < 100 or viewport_width > 5000 or viewport_height < 100 or viewport_height > 5000:
-        return {
-            "success": False,
-            "url": url,
-            "screenshot_path": output_path,
-            "error": "Viewport dimensions must be between 100-5000 pixels",
-            "platform": _get_platform().value
-        }
-    
-    try:
-        from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
-    except ImportError:
-        return {
-            "success": False,
-            "url": url,
-            "screenshot_path": output_path,
-            "error": "Playwright not installed",
-            "error_type": "import_error",
-            "platform": _get_platform().value
-        }
-    
-    result = {
-        "success": True,
-        "url": url,
-        "screenshot_path": output_path,
-        "selector": selector,
-        "full_page": full_page,
-        "viewport": {"width": viewport_width, "height": viewport_height},
-        "platform": _get_platform().value,
-        "duration": 0,
-        "error": None,
-        "retry_attempts": 0
-    }
-    
-    browser_type_enum = BrowserType(browser_type.lower())
-    
+        return {"success": False, "url": url, "screenshot_path": output_path, "error": "Viewport dimensions must be between 100-5000 pixels", "platform": _get_platform().value}
+
     for attempt in range(retry_count + 1):
-        browser = None
         try:
-            async with async_playwright() as p:
-                browser, context, page = await _launch_browser_with_fallback(
-                    p, 
-                    browser_type=browser_type_enum, 
-                    headless=headless
-                )
-                
-                # 设置视口
-                await context.set_viewport_size({"width": viewport_width, "height": viewport_height})
-                page.set_default_timeout(timeout)
-                page.set_default_navigation_timeout(timeout)
-                
+            async with _browser_context(headless, browser_type, timeout) as (browser, context, page):
+                result = {
+                    "success": True,
+                    "url": url,
+                    "screenshot_path": output_path,
+                    "selector": selector,
+                    "full_page": full_page,
+                    "viewport": {"width": viewport_width, "height": viewport_height},
+                    "platform": _get_platform().value,
+                    "duration": 0,
+                    "error": None,
+                    "retry_attempts": 0,
+                }
+
+                await page.set_viewport_size({"width": viewport_width, "height": viewport_height})
                 await page.goto(url, wait_until="domcontentloaded")
                 logger.info(f"Navigated to: {url}")
-                
+
                 if wait_for_selector:
                     await page.wait_for_selector(wait_for_selector, timeout=timeout)
-                
+
                 if delay > 0:
                     await page.wait_for_timeout(delay)
-                
+
                 await page.wait_for_load_state("load")
-                
-                # 确保目录存在
+
                 os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-                
+
                 if selector:
                     element = await page.query_selector(selector)
                     if element:
                         await element.screenshot(path=output_path)
                         result["element_found"] = True
-                        
-                        # Get 元素信息
                         element_info = await page.evaluate("""(el) => {
                             const rect = el.getBoundingClientRect();
                             return {
                                 tag: el.tagName.toLowerCase(),
                                 visible: el.offsetParent !== null,
                                 position: {
-                                    x: Math.round(rect.x),
-                                    y: Math.round(rect.y),
-                                    width: Math.round(rect.width),
-                                    height: Math.round(rect.height)
+                                    x: Math.round(rect.x), y: Math.round(rect.y),
+                                    width: Math.round(rect.width), height: Math.round(rect.height)
                                 }
                             };
                         }""", element)
@@ -1327,58 +2028,29 @@ async def take_screenshot(
                         result["element_found"] = False
                 else:
                     await page.screenshot(path=output_path, full_page=full_page)
-                
-                if os.path.exists(output_path):
+
+                result["file_exists"] = os.path.exists(output_path)
+                if result["file_exists"]:
                     result["file_size"] = os.path.getsize(output_path)
-                    result["file_exists"] = True
                 else:
-                    result["file_exists"] = False
                     result["success"] = False
                     result["error"] = "Screenshot file not generated"
-                
+
                 result["retry_attempts"] = attempt
-                result["duration"] = (asyncio.get_event_loop().time() if hasattr(asyncio, 'get_event_loop') else 0) - start_time
-                
-                await browser.close()
+                result["duration"] = time.time() - start_time
                 return result
-                
-        except PlaywrightTimeoutError as e:
-            if attempt < retry_count:
-                logger.warning(f"Attempt {attempt + 1} timed out, retrying in 1s")
-                await asyncio.sleep(1)
-                continue
-            else:
-                error_result = _format_error_result(e, "Screenshot timed out")
-                error_result.update({
-                    "url": url,
-                    "screenshot_path": output_path,
-                    "retry_attempts": attempt,
-                    "duration": (asyncio.get_event_loop().time() if hasattr(asyncio, 'get_event_loop') else 0) - start_time
-                })
-                return error_result
-                
+
+        except ImportError:
+            return {"success": False, "url": url, "screenshot_path": output_path, "error": "Playwright not installed", "error_type": "import_error", "platform": _get_platform().value}
         except Exception as e:
             if attempt < retry_count:
-                logger.warning(f"Attempt {attempt + 1} failed, retrying in 1s: {str(e)}")
+                logger.warning(f"Attempt {attempt + 1} failed, retrying: {str(e)}")
                 await asyncio.sleep(1)
                 continue
-            else:
-                error_result = _format_error_result(e, "Screenshot failed")
-                error_result.update({
-                    "url": url,
-                    "screenshot_path": output_path,
-                    "retry_attempts": attempt,
-                    "duration": (asyncio.get_event_loop().time() if hasattr(asyncio, 'get_event_loop') else 0) - start_time
-                })
-                return error_result
-                
-        finally:
-            if browser:
-                try:
-                    await browser.close()
-                except:
-                    pass
-    
+            error_result = _format_error_result(e, "Screenshot failed")
+            error_result.update({"url": url, "screenshot_path": output_path, "retry_attempts": attempt, "duration": time.time() - start_time})
+            return error_result
+
     return {
         "success": False,
         "url": url,
@@ -1387,7 +2059,7 @@ async def take_screenshot(
         "error_type": "max_retries_exceeded",
         "platform": _get_platform().value,
         "retry_attempts": retry_count,
-        "duration": (asyncio.get_event_loop().time() if hasattr(asyncio, 'get_event_loop') else 0) - start_time
+        "duration": time.time() - start_time,
     }
 
 
@@ -1399,11 +2071,12 @@ async def test_element_exists(
     headless: bool = True,
     browser_type: str = "chromium",
     retry_count: int = 2,
-    check_visibility: bool = True
+    check_visibility: bool = True,
+    **kwargs: Any,
 ) -> Dict[str, Any]:
     """
-    测试页面元素是否存在 -  with 于前端测试
-    
+    测试页面元素是否存在 - 适用于前端测试
+
     Args:
         url: 目标URL
         selector: CSS选择器
@@ -1413,104 +2086,55 @@ async def test_element_exists(
         browser_type: 浏览器类型
         retry_count: 重试次数
         check_visibility: 是否检查元素可见性
-    
+
     Returns:
         测试结果
     """
-    start_time = asyncio.get_event_loop().time() if hasattr(asyncio, 'get_event_loop') else 0
+    start_time = time.time()
     logger.info(f"test_element_exists starting: {url}, selector: {selector}")
-    
-    # 参数验证
+
     url_valid, url_error = _validate_url(url)
     if not url_valid:
-        return {
-            "success": False,
-            "url": url,
-            "selector": selector,
-            "exists": False,
-            "error": f"URL validation failed: {url_error}",
-            "platform": _get_platform().value
-        }
-    
-    selector_valid, selector_error = _validate_selector(selector)
-    if not selector_valid:
-        return {
-            "success": False,
-            "url": url,
-            "selector": selector,
-            "exists": False,
-            "error": f"Selector invalid: {selector_error}",
-            "platform": _get_platform().value
-        }
-    
+        return {"success": False, "url": url, "selector": selector, "exists": False, "error": f"URL validation failed: {url_error}", "platform": _get_platform().value}
+
+    sv, se = _validate_selector(selector)
+    if not sv:
+        return {"success": False, "url": url, "selector": selector, "exists": False, "error": f"Selector invalid: {se}", "platform": _get_platform().value}
+
     if wait_for_selector:
-        selector_valid, selector_error = _validate_selector(wait_for_selector)
-        if not selector_valid:
-            return {
-                "success": False,
-                "url": url,
-                "selector": selector,
-                "exists": False,
-                "error": f"Wait selector invalid: {selector_error}",
-                "platform": _get_platform().value
-            }
-    
-    try:
-        from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
-    except ImportError:
-        return {
-            "success": False,
-            "url": url,
-            "selector": selector,
-            "exists": False,
-            "error": "Playwright not installed",
-            "error_type": "import_error",
-            "platform": _get_platform().value
-        }
-    
-    result = {
-        "success": True,
-        "url": url,
-        "selector": selector,
-        "exists": False,
-        "visible": False,
-        "count": 0,
-        "platform": _get_platform().value,
-        "duration": 0,
-        "error": None,
-        "retry_attempts": 0
-    }
-    
-    browser_type_enum = BrowserType(browser_type.lower())
-    
+        sv, se = _validate_selector(wait_for_selector)
+        if not sv:
+            return {"success": False, "url": url, "selector": selector, "exists": False, "error": f"Wait selector invalid: {se}", "platform": _get_platform().value}
+
     for attempt in range(retry_count + 1):
-        browser = None
         try:
-            async with async_playwright() as p:
-                browser, context, page = await _launch_browser_with_fallback(
-                    p, 
-                    browser_type=browser_type_enum, 
-                    headless=headless
-                )
-                
-                page.set_default_timeout(timeout)
-                page.set_default_navigation_timeout(timeout)
-                
+            async with _browser_context(headless, browser_type, timeout) as (browser, context, page):
+                result = {
+                    "success": True,
+                    "url": url,
+                    "selector": selector,
+                    "exists": False,
+                    "visible": False,
+                    "count": 0,
+                    "platform": _get_platform().value,
+                    "duration": 0,
+                    "error": None,
+                    "retry_attempts": 0,
+                }
+
                 await page.goto(url, wait_until="domcontentloaded")
                 logger.info(f"Navigated to: {url}")
-                
+
                 if wait_for_selector:
                     await page.wait_for_selector(wait_for_selector, timeout=timeout)
-                
+
                 await page.wait_for_load_state("load")
-                
-                # 检查元素存在性和数量
+
                 elements = await page.query_selector_all(selector)
                 result["count"] = len(elements)
                 result["exists"] = len(elements) > 0
-                
+
                 if elements:
-                    # Get 第一个元素的信息
                     first_element = elements[0]
                     element_info = await page.evaluate("""(el, checkVisibility) => {
                         const rect = el.getBoundingClientRect();
@@ -1519,96 +2143,50 @@ async def test_element_exists(
                         for (const attr of el.attributes) {
                             attributes[attr.name] = attr.value;
                         }
-                        
                         return {
                             tag: el.tagName.toLowerCase(),
                             text: el.innerText.trim().substring(0, 200),
-                            visible: checkVisibility ? (el.offsetParent !== null && 
-                                     style.display !== 'none' && 
+                            visible: checkVisibility ? (el.offsetParent !== null &&
+                                     style.display !== 'none' &&
                                      style.visibility !== 'hidden' &&
                                      rect.width > 0 && rect.height > 0) : true,
-                            position: {
-                                x: Math.round(rect.x),
-                                y: Math.round(rect.y),
-                                width: Math.round(rect.width),
-                                height: Math.round(rect.height)
-                            },
-                            style: {
-                                display: style.display,
-                                visibility: style.visibility,
-                                opacity: style.opacity
-                            },
+                            position: { x: Math.round(rect.x), y: Math.round(rect.y),
+                                        width: Math.round(rect.width), height: Math.round(rect.height) },
+                            style: { display: style.display, visibility: style.visibility, opacity: style.opacity },
                             attributes: attributes,
                             classes: el.className.split(' ').filter(c => c.trim()),
                             id: el.id || ''
                         };
                     }""", first_element, check_visibility)
-                    
+
                     result["element_info"] = element_info
                     result["visible"] = element_info["visible"]
-                    
-                    # Get 所有匹配元素的基本信息
+
                     if len(elements) > 1:
                         result["all_elements"] = []
-                        for i, element in enumerate(elements[:10]):  # 限制前10个
+                        for i, element in enumerate(elements[:10]):
                             basic_info = await page.evaluate("""(el) => {
                                 const rect = el.getBoundingClientRect();
-                                return {
-                                    tag: el.tagName.toLowerCase(),
-                                    text: el.innerText.trim().substring(0, 50),
-                                    position: {
-                                        x: Math.round(rect.x),
-                                        y: Math.round(rect.y)
-                                    }
-                                };
+                                return { tag: el.tagName.toLowerCase(), text: el.innerText.trim().substring(0, 50),
+                                         position: { x: Math.round(rect.x), y: Math.round(rect.y) } };
                             }""", element)
                             result["all_elements"].append(basic_info)
-                
+
                 result["retry_attempts"] = attempt
-                result["duration"] = (asyncio.get_event_loop().time() if hasattr(asyncio, 'get_event_loop') else 0) - start_time
-                
-                await browser.close()
+                result["duration"] = time.time() - start_time
                 return result
-                
-        except PlaywrightTimeoutError as e:
-            if attempt < retry_count:
-                logger.warning(f"Attempt {attempt + 1} timed out, retrying in 1s")
-                await asyncio.sleep(1)
-                continue
-            else:
-                error_result = _format_error_result(e, "Element test timed out")
-                error_result.update({
-                    "url": url,
-                    "selector": selector,
-                    "exists": False,
-                    "retry_attempts": attempt,
-                    "duration": (asyncio.get_event_loop().time() if hasattr(asyncio, 'get_event_loop') else 0) - start_time
-                })
-                return error_result
-                
+
+        except ImportError:
+            return {"success": False, "url": url, "selector": selector, "exists": False, "error": "Playwright not installed", "error_type": "import_error", "platform": _get_platform().value}
         except Exception as e:
             if attempt < retry_count:
-                logger.warning(f"Attempt {attempt + 1} failed, retrying in 1s: {str(e)}")
+                logger.warning(f"Attempt {attempt + 1} failed, retrying: {str(e)}")
                 await asyncio.sleep(1)
                 continue
-            else:
-                error_result = _format_error_result(e, "Element test failed")
-                error_result.update({
-                    "url": url,
-                    "selector": selector,
-                    "exists": False,
-                    "retry_attempts": attempt,
-                    "duration": (asyncio.get_event_loop().time() if hasattr(asyncio, 'get_event_loop') else 0) - start_time
-                })
-                return error_result
-                
-        finally:
-            if browser:
-                try:
-                    await browser.close()
-                except:
-                    pass
-    
+            error_result = _format_error_result(e, "Element test failed")
+            error_result.update({"url": url, "selector": selector, "exists": False, "retry_attempts": attempt, "duration": time.time() - start_time})
+            return error_result
+
     return {
         "success": False,
         "url": url,
@@ -1618,7 +2196,7 @@ async def test_element_exists(
         "error_type": "max_retries_exceeded",
         "platform": _get_platform().value,
         "retry_attempts": retry_count,
-        "duration": (asyncio.get_event_loop().time() if hasattr(asyncio, 'get_event_loop') else 0) - start_time
+        "duration": time.time() - start_time,
     }
 
 
@@ -1725,12 +2303,12 @@ async def _example_usage():
     print("=== Playwright Skill Usage Examples ===")
 
     print("\n1. System browser info:")
-    browser_info_result = asyncio.run(get_browser_info())
+    browser_info_result = asyncio.run(_get_system_browser_info())
     print(f"Platform: {browser_info_result['platform']}")
     print(f"Detected browsers: {len(browser_info_result['detected_browsers'])}")
 
     print("\n2. Playwright installation status:")
-    install_status = asyncio.run(check_playwright_install())
+    install_status = asyncio.run(_check_playwright_installation())
     print(f"Playwright installed: {install_status['playwright_installed']}")
     if install_status['playwright_installed']:
         print(f"Version: {install_status.get('playwright_version', 'Unknown')}")

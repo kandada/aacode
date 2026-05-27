@@ -139,6 +139,22 @@ class SafetyGuard:
             "attrib",
             "icacls",
             "whoami",
+            "open",  # macOS 打开文件/目录
+            "sw_vers",  # macOS 版本
+            "defaults",  # macOS 用户配置
+            "launchctl",  # macOS 服务管理
+            "osascript",  # macOS AppleScript
+            "xcrun",  # Xcode 工具
+            "diskutil",  # 磁盘信息
+            "mdfind",  # Spotlight 搜索
+            "sips",  # 图片处理
+            "plutil",  # plist 处理
+            "caffeinate",  # 阻止睡眠
+            "pmset",  # 电源管理
+            "hdiutil",  # 磁盘映像
+            "xattr",  # 扩展属性
+            "textutil",  # 文档转换
+            "logger",  # 系统日志
             "hostname",
             "systeminfo",
             "tasklist",
@@ -989,8 +1005,19 @@ class SafetyGuard:
         # 去除多余空格
         command = command.strip()
 
+        # 剥离前导注释行（# 开头的行在 shell 中是注释，不应作为命令检查）
+        lines = command.split('\n')
+        non_comment_lines = [l for l in lines if not l.strip().startswith('#')]
+        if non_comment_lines:
+            command = '\n'.join(non_comment_lines).strip()
+        else:
+            return self._build_result(
+                allowed=True, reason="Command is only comments",
+                risk_level=self.RISK_SAFE,
+            )
+
         # 空命令
-        if not command or len(command) == 0:
+        if not command:
             return self._build_result(
                 allowed=False, reason="Empty command", risk_level=self.RISK_DANGEROUS
             )

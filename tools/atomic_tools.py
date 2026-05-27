@@ -10,6 +10,7 @@ import asyncio
 import os
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from aacode.i18n import t
@@ -124,11 +125,21 @@ class AtomicTools:
                     # 不截断
                     pass
                 elif isinstance(max_output, int) and max_output > 0:
+                    # 截断前先存完整内容
+                    def _save_tool_output(text: str, prefix: str) -> str:
+                        extracts = self.project_path / ".aacode" / "extracts"
+                        extracts.mkdir(parents=True, exist_ok=True)
+                        path = extracts / f"tool_{prefix}_{uuid.uuid4().hex[:8]}.txt"
+                        path.write_text(text, encoding="utf-8")
+                        return f"\n\n[Full output saved to {path}. Use run_shell to Grep the file for what you need.]"
+
                     if stdout_text and len(stdout_text) > max_output:
-                        stdout_text = stdout_text[:max_output]
+                        suffix = _save_tool_output(stdout_text, "stdout")
+                        stdout_text = stdout_text[:max_output] + suffix
                         stdout_truncated = True
                     if stderr_text and len(stderr_text) > max_output:
-                        stderr_text = stderr_text[:max_output]
+                        suffix = _save_tool_output(stderr_text, "stderr")
+                        stderr_text = stderr_text[:max_output] + suffix
                         stderr_truncated = True
 
                 return {
