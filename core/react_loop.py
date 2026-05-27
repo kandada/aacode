@@ -895,25 +895,37 @@ During each thought, naturally plan:
                 action_input = schema.normalize_params(action_input)
 
             # 异步execute工具（增加timeout保护 + 心跳）
-            async def _heartbeat(act, start):
+            async def _heartbeat(act, start, timeout):
+                deadline = start + timeout
                 while True:
-                    await asyncio.sleep(3)
+                    remaining = max(0, deadline - time.time())
+                    if remaining <= 0:
+                        break
+                    await asyncio.sleep(min(3, remaining))
                     elapsed = int(time.time() - start)
-                    print(f"⏳ {act} running... ({elapsed}s)", flush=True)
+                    print(f"⏳ {act} running... ({elapsed}s / {timeout}s timeout)", flush=True)
 
             hb_task: asyncio.Task | None = None
             action_start = time.time()
+            # run_shell 自己管超时，框架不做二次兜底
+            timeout_cfg = getattr(settings, "timeout", None)
+            tool_timeout = timeout_cfg.tool_default if timeout_cfg and action not in ("run_shell", "finalize_task") else None
             if action != "finalize_task":
-                hb_task = asyncio.create_task(_heartbeat(action, action_start))
-            # Tools manage their own timeout internally (fastclaw style);
-            # the framework trusts each tool's timeout mechanism
+                hb_task = asyncio.create_task(_heartbeat(action, action_start, tool_timeout or 600))
             try:
-                if asyncio.iscoroutinefunction(self.tools[action]):
-                    result = await self.tools[action](**action_input)
-                else:
-                    result = await asyncio.get_event_loop().run_in_executor(
+                coro = (
+                    self.tools[action](**action_input)
+                    if asyncio.iscoroutinefunction(self.tools[action])
+                    else asyncio.get_event_loop().run_in_executor(
                         None, lambda: self.tools[action](**action_input)
                     )
+                )
+                if tool_timeout:
+                    result = await asyncio.wait_for(coro, timeout=tool_timeout)
+                else:
+                    result = await coro
+            except asyncio.TimeoutError:
+                return f"❌ Tool execution timeout after {tool_timeout}s: {action}"
             except asyncio.CancelledError:
                 raise
             finally:
@@ -921,7 +933,7 @@ During each thought, naturally plan:
                     hb_task.cancel()
                     try:
                         await hb_task
-                    except asyncio.CancelledError:
+                    except (asyncio.CancelledError, asyncio.TimeoutError):
                         pass
 
             # 处理结果（增强None检查）

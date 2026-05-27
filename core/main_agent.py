@@ -8,6 +8,7 @@ import asyncio
 import json
 import re
 import sys
+import uuid
 from aacode.i18n import t
 from pathlib import Path
 from datetime import datetime
@@ -236,15 +237,40 @@ class MainAgent(BaseAgent):
             return f"Error: Skill '{skill_name}' not enabled"
 
         func_name = params.pop("func", None)
+        # 注入项目路径，让 skill 函数用正确的工作目录解析相对路径
+        params.setdefault("_project_path", str(self.skills_manager.project_path.absolute()))
         try:
+
             result = await self.skills_manager.execute_skill(
                 sname, func_name=func_name, **params
             )
             if isinstance(result, dict):
                 if result.get("success"):
-                    return str(result.get("result", result))
-                return f"Error: {result.get('error', str(result))}"
-            return str(result)
+                    result_str = str(result.get("result", result))
+                else:
+                    result_str = f"Error: {result.get('error', str(result))}"
+            else:
+                result_str = str(result)
+
+            # 结果过大时截断并存入 .aacode/extracts/
+            max_chars = getattr(settings.limits, "skill_max_result_chars", 5000)
+            if len(result_str) > max_chars:
+                project_root = self.skills_manager.project_path.absolute()
+                extracts_dir = project_root / ".aacode" / "extracts"
+                extracts_dir.mkdir(parents=True, exist_ok=True)
+                file_path = extracts_dir / f"skill_result_{uuid.uuid4().hex[:8]}.txt"
+                file_path.write_text(result_str, encoding="utf-8")
+
+                preview = result_str[:2000]
+                result_str = (
+                    f"Result truncated ({len(result_str)} chars).\n"
+                    f"Full content saved to: {file_path}.\n"
+                    f"Use run_shell to Grep the file for what you need.\n"
+                    f"\n── Preview (2000 chars) ──\n{preview}"
+                )
+
+            return result_str
+
         except Exception as e:
             return f"Error executing skill '{skill_name}': {str(e)}"
 
@@ -558,8 +584,6 @@ class MainAgent(BaseAgent):
                 _stream_print(delta.content)
             # 处理 tool_calls (流式累积)
             if delta.tool_calls:
-                if not hasattr(self, '_tool_call_progress'):
-                    self._tool_call_progress: Dict[int, Dict] = {}
                 for tc_delta in delta.tool_calls:
                     idx = tc_delta.index
                     if idx not in tool_calls_accumulator:

@@ -236,9 +236,7 @@ class MCPConfig:
     # 通 with 配置
     auto_connect: bool = True
     connection_timeout: int = 30
-    max_retries: int = 3
-
-
+    max_retries: int = 1  # 工具调用重试次数。设为1=不重试，失败由模型决策
 @dataclass
 class OutputConfig:
     """输出处理配置（自适应截断 — 基于剩余上下文预算）"""
@@ -252,6 +250,7 @@ class OutputConfig:
 class TimeoutConfig:
     """timeout配置"""
 
+    tool_default: int = 300  # 通用工具执行timeout（秒），防挂起兜底
     shell_command: int = 30  # Shell命令executetimeout（秒）
     model_summary: int = 30  # 模型摘要生成timeout（秒）
     file_search: int = 5  # 文件搜索timeout（秒）
@@ -266,7 +265,8 @@ class LimitsConfig:
 
     max_file_list_results: int = 100  # 文件列表最大结果数
     max_search_results: int = 20  # 搜索最大结果数
-    max_retries: int = 3  # 最大重试次数
+    max_retries: int = 1  # 工具调用重试次数。设为1=不重试，失败由模型自行决策
+    skill_max_result_chars: int = 5000  # skill 返回结果最大字符数，超过则截断并存入 .aacode/extracts/
     shell_output_preview: int = 200  # Shell输出预览长度（字符）
     max_auto_read_lines: int = 200  # 超过此 lines数时提供分段建议
     structure_preview_lines: int = 50  # 结构预览显示的 lines数

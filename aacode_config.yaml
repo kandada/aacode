@@ -33,7 +33,7 @@ timeouts:
 limits:
   max_file_list_results: 100    # 文件列表最大结果数
   max_search_results: 10        # 搜索最大结果数
-  max_retries: 3                # 最大重试次数
+  max_retries: 1                # 最大重试次数（设为1=不重试）
   shell_output_preview: 200     # Shell输出预览长度（字符）
   
   # 文件读取智能提示配置
@@ -154,7 +154,7 @@ mcp:
   # 自动连接配置
   auto_connect: true
   connection_timeout: 30
-  max_retries: 3
+  max_retries: 1
   
   # STD类型MCP服务器配置（标准进程）
   std_servers:
