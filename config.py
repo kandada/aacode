@@ -12,6 +12,7 @@ from typing import Dict, Any, Optional
 from dataclasses import dataclass, asdict, field
 from typing import Dict, Any, Optional, List
 import yaml
+import platformdirs
 from aacode.i18n import t
 
 
@@ -370,8 +371,10 @@ class Settings:
             if path.exists():
                 return path, "explicit"
 
+        config_dir = Path(platformdirs.user_config_dir("com.aacode", roaming=True))
         candidates = [
             (Path.cwd() / "aacode_config.yaml", "cwd"),
+            (config_dir / "aacode_config.yaml", "platformdirs"),
             (Path(__file__).parent / "aacode_config.yaml", "package"),
             (Path.home() / ".aacode" / "aacode_config.yaml", "home"),
         ]
@@ -384,6 +387,7 @@ class Settings:
 
     def __init__(self, config_file: Optional[str] = None):
         self.config_path, self.config_source = self._find_config_file(config_file)
+        self._explicit_config_file = config_file
 
         # 默认配置
         self.model = ModelConfig()
@@ -411,6 +415,19 @@ class Settings:
 
     def load_config(self):
         """从文件加载配置"""
+        if not self.config_path or not self.config_path.exists():
+            if self._explicit_config_file is None:
+                pkg_config = Path(__file__).parent / "aacode_config.yaml"
+                if pkg_config.exists():
+                    target_dir = Path(platformdirs.user_config_dir("com.aacode", roaming=True))
+                    target_dir.mkdir(parents=True, exist_ok=True)
+                    target_path = target_dir / "aacode_config.yaml"
+                    import shutil
+                    shutil.copy(pkg_config, target_path)
+                    self.config_path = target_path
+                    self.config_source = "platformdirs"
+                    print(f"Config saved to {target_path}")
+
         if self.config_path and self.config_path.exists():
             try:
                 with open(self.config_path, "r", encoding="utf-8") as f:

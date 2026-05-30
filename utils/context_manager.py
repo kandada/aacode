@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 from typing import Dict, Any, List
 from aacode.i18n import t
+from aacode.utils.file_lock import file_lock
 
 try:
     from config import settings
@@ -333,37 +334,38 @@ class ContextManager:
             # 保存观察历史（追加模式，保留最近5次观察）
             history_file = self.context_dir / "observation_history.txt"
             try:
-                # 读取现有历史
-                existing_history = ""
-                if history_file.exists():
-                    try:
-                        existing_history = history_file.read_text(
-                            encoding="utf-8", errors="ignore"
-                        )
-                    except Exception:
-                        existing_history = ""
+                with file_lock(history_file):
+                    # 读取现有历史
+                    existing_history = ""
+                    if history_file.exists():
+                        try:
+                            existing_history = history_file.read_text(
+                                encoding="utf-8", errors="ignore"
+                            )
+                        except Exception:
+                            existing_history = ""
 
-                # 分割历史记录
-                history_entries = (
-                    existing_history.strip().split("\n---\n")
-                    if existing_history
-                    else []
-                )
+                    # 分割历史记录
+                    history_entries = (
+                        existing_history.strip().split("\n---\n")
+                        if existing_history
+                        else []
+                    )
 
-                # 添加新观察（截断到1000字符以节省空间）
-                new_entry = (
-                    f"[{asyncio.get_event_loop().time():.0f}] {observation[:1000]}"
-                )
-                history_entries.append(new_entry)
+                    # 添加新观察（截断到1000字符以节省空间）
+                    new_entry = (
+                        f"[{asyncio.get_event_loop().time():.0f}] {observation[:1000]}"
+                    )
+                    history_entries.append(new_entry)
 
-                # 只保留最近5次观察
-                if len(history_entries) > 5:
-                    history_entries = history_entries[-5:]
+                    # 只保留最近5次观察
+                    if len(history_entries) > 5:
+                        history_entries = history_entries[-5:]
 
-                # 写入更新后的历史
-                history_file.write_text(
-                    "\n---\n".join(history_entries), encoding="utf-8", errors="ignore"
-                )
+                    # 写入更新后的历史
+                    history_file.write_text(
+                        "\n---\n".join(history_entries), encoding="utf-8", errors="ignore"
+                    )
             except Exception:
                 # 静默失败，不影响主流程
                 pass
@@ -375,20 +377,21 @@ class ContextManager:
             ):
                 errors_file = self.context_dir / "important_errors.txt"
                 try:
-                    # 追加模式，保留历史
-                    existing_errors = ""
-                    if errors_file.exists():
-                        try:
-                            existing_errors = errors_file.read_text(
-                                encoding="utf-8", errors="ignore"
-                            )
-                        except Exception:
-                            existing_errors = ""
+                    with file_lock(errors_file):
+                        # 追加模式，保留历史
+                        existing_errors = ""
+                        if errors_file.exists():
+                            try:
+                                existing_errors = errors_file.read_text(
+                                    encoding="utf-8", errors="ignore"
+                                )
+                            except Exception:
+                                existing_errors = ""
 
-                    # 保留最近的错误（最多3000字符）
-                    new_error = f"\n[{asyncio.get_event_loop().time():.0f}] {observation[:300]}\n"
-                    combined = (existing_errors + new_error)[-3000:]
-                    errors_file.write_text(combined, encoding="utf-8", errors="ignore")
+                        # 保留最近的错误（最多3000字符）
+                        new_error = f"\n[{asyncio.get_event_loop().time():.0f}] {observation[:300]}\n"
+                        combined = (existing_errors + new_error)[-3000:]
+                        errors_file.write_text(combined, encoding="utf-8", errors="ignore")
                 except PermissionError:
                     print(f"⚠️ Permission error: unable to write errors history file")
                 except Exception:
@@ -427,14 +430,15 @@ class ContextManager:
             index_entry = f"{new_filename}|{content_hash}|{len(output)}|{asyncio.get_event_loop().time():.0f}\n"
 
             try:
-                if index_file.exists():
-                    with open(index_file, "a", encoding="utf-8") as f:
-                        f.write(index_entry)
-                else:
-                    with open(index_file, "w", encoding="utf-8") as f:
-                        f.write("# Archive Index\n")
-                        f.write("# Format: filename|hash|size|timestamp\n")
-                        f.write(index_entry)
+                with file_lock(index_file):
+                    if index_file.exists():
+                        with open(index_file, "a", encoding="utf-8") as f:
+                            f.write(index_entry)
+                    else:
+                        with open(index_file, "w", encoding="utf-8") as f:
+                            f.write("# Archive Index\n")
+                            f.write("# Format: filename|hash|size|timestamp\n")
+                            f.write(index_entry)
             except Exception:
                 # 索引创建失败不影响主流程
                 pass

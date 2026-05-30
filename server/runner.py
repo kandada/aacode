@@ -4,6 +4,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from datetime import datetime
 from typing import AsyncGenerator, Dict, Any, Optional
 
 
@@ -130,16 +131,32 @@ class AICoderRunner:
                 data = json.load(f)
                 sessions = []
                 for session_id, info in data.items():
+                    created_at = info.get("created_at", 0)
+                    last_activity = info.get("last_activity", 0)
+                    # 确保输出给前端的始终为 ISO 字符串，兼容旧版 float
+                    if isinstance(created_at, (int, float)):
+                        created_at = datetime.fromtimestamp(created_at).isoformat(timespec='seconds')
+                    if isinstance(last_activity, (int, float)):
+                        last_activity = datetime.fromtimestamp(last_activity).isoformat(timespec='seconds')
                     sessions.append(
                         {
                             "session_id": session_id,
                             "title": info.get("title", ""),
-                            "created_at": info.get("created_at", 0),
-                            "last_activity": info.get("last_activity", 0),
+                            "created_at": created_at,
+                            "last_activity": last_activity,
                             "status": info.get("status", "active"),
                         }
                     )
-                sessions.sort(key=lambda x: x.get("last_activity", 0), reverse=True)
+                # 排序：统一转为 float 比较
+                def _sort_key(s):
+                    ts = s.get("last_activity", "")
+                    if isinstance(ts, (int, float)):
+                        return float(ts)
+                    try:
+                        return datetime.fromisoformat(ts).timestamp()
+                    except (ValueError, TypeError):
+                        return 0.0
+                sessions.sort(key=_sort_key, reverse=True)
                 return sessions
         except Exception:
             return []

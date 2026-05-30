@@ -52,8 +52,6 @@ class SafetyGuard:
             # Shell危险操作
             (r":\(\)\{.*?;\s*\}.*?;", "Fork bomb"),
             (r"exec\s+/dev/", "Device execution"),
-            (r"pkill\s+", "Process termination"),  # pkill需要用户确认
-            (r"kill\s+", "Process termination"),  # kill需要用户确认
             (
                 r"systemctl\s+(stop|restart|start|disable|enable|mask|unmask)",
                 "System service management",
@@ -118,6 +116,10 @@ class SafetyGuard:
             "bg",
             "wait",
             "lsof",
+            "ulimit",
+            "renice",
+            "stdbuf",
+            "command",
             # ── Windows 基础命令 ──
             "dir",
             "type",
@@ -149,6 +151,7 @@ class SafetyGuard:
             "mdfind",  # Spotlight 搜索
             "sips",  # 图片处理
             "plutil",  # plist 处理
+            "dd",
             "caffeinate",  # 阻止睡眠
             "pmset",  # 电源管理
             "hdiutil",  # 磁盘映像
@@ -168,6 +171,10 @@ class SafetyGuard:
             "cls",
             "set",
             "setx",
+            "shopt",
+            "continue",
+            "break",
+            "fc",
             "reg",
             "sc",
             "wmic",
@@ -745,16 +752,24 @@ class SafetyGuard:
 
             # 3. 允许特定的系统目录访问（只读或临时操作）
             allowed_system_paths = [
+                "/dev",  # 虚拟设备（/dev/null, /dev/zero, /dev/random 等）
                 "/tmp",
                 "/var/tmp",
                 "/private/tmp",  # 临时目录（包括macOS的/private/tmp）
                 "/usr/share",
                 "/usr/local/share",  # 共享数据
-                "/etc/passwd",
-                "/etc/group",  # 只读系统文件
-                "/proc/self",
-                "/proc/cpuinfo",
-                "/proc/meminfo",  # 只读系统信息
+                "/usr/local",
+                "/usr/bin",
+                "/bin",
+                "/opt",
+                "/etc",  # 系统配置（/etc/hosts, /etc/resolv.conf, /etc/os-release 等）
+                "/proc",  # 系统信息（/proc/version, /proc/loadavg, /proc/uptime 等）
+                "/sys",  # 内核/设备信息
+                "/run",  # 运行时数据
+                "/var/log",  # 系统日志
+                "/Volumes",  # macOS 挂载卷
+                "/Applications",  # macOS 应用
+                "/Library",  # macOS 库
             ]
 
             # 检查原始路径和解析后的路径
@@ -959,6 +974,8 @@ class SafetyGuard:
             "shutdown": "System shutdown",
             "halt": "System halt",
             "reboot": "System reboot",
+            "pkill": "Process termination",
+            "kill": "Process termination",
             "iptables": "Firewall config",
             "ufw": "Firewall management",
         }
@@ -1329,110 +1346,111 @@ class SafetyGuard:
                 # 允许所有常见操作
                 return {"allowed": True, "reason": f"{cmd_name} operation"}
 
-            # 检查路径参数（使用新的is_safe_path方法）
-            # 对于awk, sed, grep等命令，它们的参数可能是正则表达式而非路径，需要特殊处理
-            regex_commands = {"awk", "sed", "grep", "rg", "ag", "find"}
+            # 纯输出命令：只写 stdout/stderr，不可能写文件，完全跳过路径检查
+            output_only_commands = {
+                "echo", "printf", "true", "false", "yes", "seq", "expr", "bc", "dc",
+                "basename", "dirname", "realpath", "readlink", "pwd",
+                "cat", "wc", "sort", "uniq", "cut", "tr", "fold", "rev", "nl", "fmt",
+                "grep", "rg", "ag", "find",
+                "strings", "od", "hexdump", "xxd", "jq", "yq", "diff",
+                "cksum", "sum", "md5sum", "sha256sum", "shasum", "base64", "iconv",
+                "uname", "arch", "hostname", "uptime", "dmesg",
+                "lscpu", "lsblk", "lsusb", "lspci", "getconf", "locale",
+                "id", "who", "w", "last", "groups",
+                "ls", "file", "stat", "du", "df", "ps", "top", "htop",
+                "head", "tail", "less", "more",
+                "which", "whereis", "date", "cal",
+                "man", "info", "tldr", "apropos", "whatis",
+                "logger", "tput", "stty",
+                # 解释器：脚本路径检查无实际安全意义，脚本本身可任意操作
+                "python", "python3", "node", "ruby", "java",
+            }
+            if cmd_name not in output_only_commands:
+                # 检查路径参数（使用新的is_safe_path方法）
+                # 对于awk, sed等命令，参数可能是正则表达式而非路径
+                regex_commands = {"awk", "sed", "grep", "rg", "ag", "find"}
 
-            for i, part in enumerate(parts):
-                # 跳过命令本身
-                if i == 0:
-                    continue
-
-                # 检查路径参数
-                if ".." in part or part.startswith("/"):
-                    # Windows 命令参数以 / 开头（如 /B、/S、/Q、/i），不是路径
-                    # 短标志（/X 或 /XX）在任何平台都不应被当作路径
-                    if part.startswith("/") and len(part) <= 3 and part[1:].isalpha():
+                for i, part in enumerate(parts):
+                    # 跳过命令本身
+                    if i == 0:
                         continue
 
-                    # 对于awk/sed/grep等命令，跳过正则表达式参数（以/开头且包含空格或特殊字符的是正则）
-                    if (
-                        cmd_name in regex_commands
-                        and "/" in part
-                        and ("{" in part or "'" in part or '"' in part)
-                    ):
-                        continue
+                    # 检查路径参数
+                    if ".." in part or part.startswith("/"):
+                        # Windows 命令参数以 / 开头（如 /B、/S、/Q、/i），不是路径
+                        # 短标志（/X 或 /XX）在任何平台都不应被当作路径
+                        if part.startswith("/") and len(part) <= 3 and part[1:].isalpha():
+                            continue
 
-                    try:
-                        # 解析路径
-                        if not part.startswith("/"):
-                            test_path = (Path.cwd() / part).resolve()
-                        else:
-                            test_path = Path(part).resolve()
+                        # 对于awk/sed/grep等命令，跳过正则表达式参数（以/开头且包含空格或特殊字符的是正则）
+                        if (
+                            cmd_name in regex_commands
+                            and "/" in part
+                            and ("{" in part or "'" in part or '"' in part)
+                        ):
+                            continue
 
-                        # 使用新的is_safe_path方法检查
-                        if not self.is_safe_path(test_path):
-                            # 对于某些只读命令，允许访问系统文件
-                            readonly_commands = {
-                                "ls",
-                                "cat",
-                                "file",
-                                "stat",
-                                "head",
-                                "tail",
-                                "less",
-                                "more",
-                                "grep",
-                                "find",
-                                "which",
-                                "whereis",
-                                "python",
-                                "python3",
-                                "node",
-                                "ruby",
-                                "java",
-                                "df",
-                                "du",
-                                "ps",
-                                "top",
-                                "htop",
-                            }
+                        try:
+                            # 解析路径
+                            if not part.startswith("/"):
+                                test_path = (Path.cwd() / part).resolve()
+                            else:
+                                test_path = Path(part).resolve()
 
-                            # 对于只读命令，允许访问（但会记录警告）
-                            if cmd_name in readonly_commands:
-                                print(
-                                    f"⚠️  Warning: {cmd_name} access outside project directory: {part}"
-                                )
-                                continue
+                            # 使用新的is_safe_path方法检查
+                            if not self.is_safe_path(test_path):
+                                # 对于某些只读命令，允许访问系统文件
+                                readonly_commands = {
+                                    "sysctl", "journalctl",
+                                }
 
-                            # 对于临时目录操作，允许
-                            tmp_prefixes = ["/tmp", "/var/tmp", "/private/tmp"]
-                            if any(
-                                str(test_path).startswith(prefix)
-                                for prefix in tmp_prefixes
-                            ):
-                                if cmd_name in ["mkdir", "touch", "rm", "cp", "mv"]:
+                                # 对于只读命令，允许访问（但会记录警告）
+                                if cmd_name in readonly_commands:
                                     print(
-                                        f"⚠️  Warning: {cmd_name} operating in temp directory: {part}"
+                                        f"⚠️  Warning: {cmd_name} access outside project directory: {part}"
                                     )
                                     continue
 
-                            # 对于包管理器，允许系统路径
-                            package_managers = {
-                                "apt",
-                                "apt-get",
-                                "dpkg",
-                                "yum",
-                                "dnf",
-                                "brew",
-                                "pip",
-                                "pip3",
-                                "npm",
-                                "yarn",
-                            }
-                            if cmd_name in package_managers:
-                                continue
+                                # 对于临时目录操作，允许
+                                tmp_prefixes = ["/tmp", "/var/tmp", "/private/tmp"]
+                                if any(
+                                    str(test_path).startswith(prefix)
+                                    for prefix in tmp_prefixes
+                                ):
+                                    if cmd_name in ["mkdir", "touch", "rm", "cp", "mv"]:
+                                        print(
+                                            f"⚠️  Warning: {cmd_name} operating in temp directory: {part}"
+                                        )
+                                        continue
 
-                            # 其他情况拒绝
-                            return self._build_result(
-                                allowed=False,
-                                reason=f"Path outside safe range: {part}",
-                                risk_level=self.RISK_DANGEROUS,
-                                path=part,
-                            )
-                    except Exception:
-                        # 路径解析失败，可能是无效路径，但允许继续
-                        continue
+                                # 对于包管理器，允许系统路径
+                                package_managers = {
+                                    "apt", "apt-get", "dpkg",
+                                    "yum", "dnf",
+                                    "brew",
+                                    "pip", "pip3", "pipx",
+                                    "npm", "yarn", "pnpm",
+                                    "cargo", "go", "gem", "bundle",
+                                    "dotnet",
+                                    "conda", "mamba",
+                                    "pacman", "zypper",
+                                    "flatpak", "snap", "apk",
+                                    "pkg", "port",
+                                    "cpan", "luarocks", "composer",
+                                }
+                                if cmd_name in package_managers:
+                                    continue
+
+                                # 其他情况拒绝
+                                return self._build_result(
+                                    allowed=False,
+                                    reason=f"Path outside safe range: {part}",
+                                    risk_level=self.RISK_DANGEROUS,
+                                    path=part,
+                                )
+                        except Exception:
+                            # 路径解析失败，可能是无效路径，但允许继续
+                            continue
 
             # 使用评估的风险等级
             return self._build_result(

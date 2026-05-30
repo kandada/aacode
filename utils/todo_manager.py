@@ -13,6 +13,7 @@ import aiofiles
 import json
 import re
 from aacode.i18n import t
+from aacode.utils.file_lock import file_lock
 
 
 class TodoManager:
@@ -111,45 +112,46 @@ class TodoManager:
             return None
 
         try:
-            async with aiofiles.open(
-                self.current_todo_file, "r", encoding="utf-8"
-            ) as f:
-                content = await f.read()
+            with file_lock(self.current_todo_file):
+                async with aiofiles.open(
+                    self.current_todo_file, "r", encoding="utf-8"
+                ) as f:
+                    content = await f.read()
 
-            # 首次添加时从文件恢复计数器
-            if self.todo_counter == 0:
-                self._load_counter(content)
+                # 首次添加时从文件恢复计数器
+                if self.todo_counter == 0:
+                    self._load_counter(content)
 
-            # 查找待办部分
-            lines = content.split("\n")
-            insert_pos = -1
-            for i, line in enumerate(lines):
-                if line.strip() == "## Todo":
-                    insert_pos = i + 1
-                    break
+                # 查找待办部分
+                lines = content.split("\n")
+                insert_pos = -1
+                for i, line in enumerate(lines):
+                    if line.strip() == "## Todo":
+                        insert_pos = i + 1
+                        break
 
-            if insert_pos == -1:
-                print("⚠️  Todo section not found")
-                return None
+                if insert_pos == -1:
+                    print("⚠️  Todo section not found")
+                    return None
 
-            # 生成 todo_id
-            self.todo_counter += 1
-            todo_id = f"t{self.todo_counter}"
+                # 生成 todo_id
+                self.todo_counter += 1
+                todo_id = f"t{self.todo_counter}"
 
-            # 格式：带 [#tN] 标记
-            priority_mark = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(
-                priority, ""
-            )
-            new_item = f"- [ ] {priority_mark} **{category}** [#{todo_id}]: {item}"
-            lines.insert(insert_pos, new_item)
+                # 格式：带 [#tN] 标记
+                priority_mark = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(
+                    priority, ""
+                )
+                new_item = f"- [ ] {priority_mark} **{category}** [#{todo_id}]: {item}"
+                lines.insert(insert_pos, new_item)
 
-            # 写回文件
-            async with aiofiles.open(
-                self.current_todo_file, "w", encoding="utf-8"
-            ) as f:
-                await f.write("\n".join(lines))
+                # 写回文件
+                async with aiofiles.open(
+                    self.current_todo_file, "w", encoding="utf-8"
+                ) as f:
+                    await f.write("\n".join(lines))
 
-            return todo_id
+                return todo_id
         except Exception as e:
             print(f"⚠️  Failed to add todo: {e}")
             return None
@@ -180,85 +182,86 @@ class TodoManager:
             print("⚠️  No active todo list file")
             return False
 
-        # 读取现有内容
-        async with aiofiles.open(self.current_todo_file, "r", encoding="utf-8") as f:
-            content = await f.read()
+        with file_lock(self.current_todo_file):
+            # 读取现有内容
+            async with aiofiles.open(self.current_todo_file, "r", encoding="utf-8") as f:
+                content = await f.read()
 
-        lines = content.split("\n")
-        updated = False
+            lines = content.split("\n")
+            updated = False
 
-        # 策略1：todo_id 精确匹配
-        if todo_id:
-            tag = f"[#{todo_id}]"
-            for i, line in enumerate(lines):
-                if line.strip().startswith("- [ ]") and tag in line:
-                    lines[i] = line.replace("- [ ]", "- [x]", 1)
-                    updated = True
-                    item_desc = line.replace("- [ ]", "").strip()
-                    item_desc = re.sub(r"^[🔴🟡🟢]\s*\*\*.*?\*\*\s*\[#\w+\]:\s*", "", item_desc)
-                    self._add_to_completed_section(lines, item_desc, todo_id)
-                    print(f"✅ Marked complete [#{todo_id}]: {item_desc[:50]}...")
-                    break
-
-        # 策略2：完整 pattern 文本包含匹配
-        if not updated and item_pattern:
-            pattern_lower = item_pattern.lower()
-            for i, line in enumerate(lines):
-                if (
-                    line.strip().startswith("- [ ]")
-                    and pattern_lower in line.lower()
-                ):
-                    lines[i] = line.replace("- [ ]", "- [x]", 1)
-                    updated = True
-                    # 提取 todo_id（如果有）
-                    id_match = re.search(r'\[#(t\d+)\]', line)
-                    matched_id = id_match.group(1) if id_match else None
-                    item_desc = line.replace("- [ ]", "").strip()
-                    item_desc = re.sub(r"^[🔴🟡🟢]\s*\*\*.*?\*\*\s*(\[#\w+\]:\s*)?", "", item_desc)
-                    self._add_to_completed_section(lines, item_desc, matched_id)
-                    print(f"✅ Marked complete: {item_desc[:50]}...")
-
-        # 策略3：关键词模糊匹配（只标记第一个命中的）
-        if not updated and item_pattern:
-            pattern_lower = item_pattern.lower()
-            # 提取关键词（停用词用子串匹配，解决中文分词粗糙的问题）
-            stop_words = {"the", "a", "an", "is", "of", "in", "to", "and", "for", "python", "py"}
-            raw_words = [w for w in re.split(r'[\s,，。、]+', pattern_lower) if w and len(w) > 1]
-            # 对每个词，过滤掉包含停用词的部分
-            keywords = []
-            for w in raw_words:
-                # 如果整个词就是停用词，跳过
-                if w in stop_words:
-                    continue
-                # 去掉词中包含的停用词子串
-                cleaned = w
-                for sw in stop_words:
-                    cleaned = cleaned.replace(sw, "")
-                if cleaned and len(cleaned) > 1:
-                    keywords.append(cleaned)
-
-            if keywords:
+            # 策略1：todo_id 精确匹配
+            if todo_id:
+                tag = f"[#{todo_id}]"
                 for i, line in enumerate(lines):
-                    if line.strip().startswith("- [ ]"):
-                        line_lower = line.lower()
-                        if any(kw in line_lower for kw in keywords):
-                            lines[i] = line.replace("- [ ]", "- [x]", 1)
-                            updated = True
-                            id_match = re.search(r'\[#(t\d+)\]', line)
-                            matched_id = id_match.group(1) if id_match else None
-                            item_desc = line.replace("- [ ]", "").strip()
-                            item_desc = re.sub(r"^[🔴🟡🟢]\s*\*\*.*?\*\*\s*(\[#\w+\]:\s*)?", "", item_desc)
-                            self._add_to_completed_section(lines, item_desc, matched_id)
-                            print(f"✅ Fuzzy match marked complete: {item_desc[:50]}...")
-                            break
+                    if line.strip().startswith("- [ ]") and tag in line:
+                        lines[i] = line.replace("- [ ]", "- [x]", 1)
+                        updated = True
+                        item_desc = line.replace("- [ ]", "").strip()
+                        item_desc = re.sub(r"^[🔴🟡🟢]\s*\*\*.*?\*\*\s*\[#\w+\]:\s*", "", item_desc)
+                        self._add_to_completed_section(lines, item_desc, todo_id)
+                        print(f"✅ Marked complete [#{todo_id}]: {item_desc[:50]}...")
+                        break
 
-        if updated:
-            async with aiofiles.open(
-                self.current_todo_file, "w", encoding="utf-8"
-            ) as f:
-                await f.write("\n".join(lines))
+            # 策略2：完整 pattern 文本包含匹配
+            if not updated and item_pattern:
+                pattern_lower = item_pattern.lower()
+                for i, line in enumerate(lines):
+                    if (
+                        line.strip().startswith("- [ ]")
+                        and pattern_lower in line.lower()
+                    ):
+                        lines[i] = line.replace("- [ ]", "- [x]", 1)
+                        updated = True
+                        # 提取 todo_id（如果有）
+                        id_match = re.search(r'\[#(t\d+)\]', line)
+                        matched_id = id_match.group(1) if id_match else None
+                        item_desc = line.replace("- [ ]", "").strip()
+                        item_desc = re.sub(r"^[🔴🟡🟢]\s*\*\*.*?\*\*\s*(\[#\w+\]:\s*)?", "", item_desc)
+                        self._add_to_completed_section(lines, item_desc, matched_id)
+                        print(f"✅ Marked complete: {item_desc[:50]}...")
 
-        return updated
+            # 策略3：关键词模糊匹配（只标记第一个命中的）
+            if not updated and item_pattern:
+                pattern_lower = item_pattern.lower()
+                # 提取关键词（停用词用子串匹配，解决中文分词粗糙的问题）
+                stop_words = {"the", "a", "an", "is", "of", "in", "to", "and", "for", "python", "py"}
+                raw_words = [w for w in re.split(r'[\s,，。、]+', pattern_lower) if w and len(w) > 1]
+                # 对每个词，过滤掉包含停用词的部分
+                keywords = []
+                for w in raw_words:
+                    # 如果整个词就是停用词，跳过
+                    if w in stop_words:
+                        continue
+                    # 去掉词中包含的停用词子串
+                    cleaned = w
+                    for sw in stop_words:
+                        cleaned = cleaned.replace(sw, "")
+                    if cleaned and len(cleaned) > 1:
+                        keywords.append(cleaned)
+
+                if keywords:
+                    for i, line in enumerate(lines):
+                        if line.strip().startswith("- [ ]"):
+                            line_lower = line.lower()
+                            if any(kw in line_lower for kw in keywords):
+                                lines[i] = line.replace("- [ ]", "- [x]", 1)
+                                updated = True
+                                id_match = re.search(r'\[#(t\d+)\]', line)
+                                matched_id = id_match.group(1) if id_match else None
+                                item_desc = line.replace("- [ ]", "").strip()
+                                item_desc = re.sub(r"^[🔴🟡🟢]\s*\*\*.*?\*\*\s*(\[#\w+\]:\s*)?", "", item_desc)
+                                self._add_to_completed_section(lines, item_desc, matched_id)
+                                print(f"✅ Fuzzy match marked complete: {item_desc[:50]}...")
+                                break
+
+            if updated:
+                async with aiofiles.open(
+                    self.current_todo_file, "w", encoding="utf-8"
+                ) as f:
+                    await f.write("\n".join(lines))
+
+            return updated
 
     def _add_to_completed_section(self, lines: List[str], item_desc: str, todo_id: Optional[str] = None):
         """添加到已完成部分"""
@@ -296,36 +299,37 @@ class TodoManager:
             print("⚠️  No active todo list file")
             return False
 
-        # 读取现有内容
-        async with aiofiles.open(self.current_todo_file, "r", encoding="utf-8") as f:
-            content = await f.read()
+        with file_lock(self.current_todo_file):
+            # 读取现有内容
+            async with aiofiles.open(self.current_todo_file, "r", encoding="utf-8") as f:
+                content = await f.read()
 
-        # 查找并更新待办事项
-        lines = content.split("\n")
-        updated = False
+            # 查找并更新待办事项
+            lines = content.split("\n")
+            updated = False
 
-        for i, line in enumerate(lines):
-            if line.strip().startswith("- [ ]") and old_pattern.lower() in line.lower():
-                match = re.match(
-                    r"^- \[ \]\s*([🔴🟡🟢])?\s*\*\*(.*?)\*\*:\s*(.*)", line
-                )
-                if match:
-                    priority_emoji = match.group(1) or ""
-                    category = match.group(2)
-                    lines[i] = f"- [ ] {priority_emoji} **{category}**: {new_item}"
-                else:
-                    lines[i] = f"- [ ] {new_item}"
-                updated = True
-                print(f"🔄 Updated todo: {new_item[:50]}...")
+            for i, line in enumerate(lines):
+                if line.strip().startswith("- [ ]") and old_pattern.lower() in line.lower():
+                    match = re.match(
+                        r"^- \[ \]\s*([🔴🟡🟢])?\s*\*\*(.*?)\*\*:\s*(.*)", line
+                    )
+                    if match:
+                        priority_emoji = match.group(1) or ""
+                        category = match.group(2)
+                        lines[i] = f"- [ ] {priority_emoji} **{category}**: {new_item}"
+                    else:
+                        lines[i] = f"- [ ] {new_item}"
+                    updated = True
+                    print(f"🔄 Updated todo: {new_item[:50]}...")
 
-        if updated:
-            # 写入文件
-            async with aiofiles.open(
-                self.current_todo_file, "w", encoding="utf-8"
-            ) as f:
-                await f.write("\n".join(lines))
+            if updated:
+                # 写入文件
+                async with aiofiles.open(
+                    self.current_todo_file, "w", encoding="utf-8"
+                ) as f:
+                    await f.write("\n".join(lines))
 
-        return updated
+            return updated
 
     async def add_execution_record(self, record: str) -> bool:
         """

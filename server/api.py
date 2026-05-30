@@ -4,15 +4,17 @@ import os
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 import yaml
+import platformdirs
 
 
 class ConfigAPI:
     """Configuration API for desktop client"""
 
     def __init__(self):
-        self.config_path = Path.home() / ".aacode" / "aacode_config.yaml"
-        self.recent_projects_path = Path.home() / ".aacode" / "recent_projects.json"
-        self.config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_dir = Path(platformdirs.user_config_dir("com.aacode", roaming=True))
+        self.config_path = config_dir / "aacode_config.yaml"
+        self.recent_projects_path = config_dir / "recent_projects.json"
+        config_dir.mkdir(parents=True, exist_ok=True)
 
     def get_config(self) -> Dict[str, Any]:
         """Get current configuration"""
@@ -118,7 +120,7 @@ class ConfigAPI:
         from .runner import AICoderRunner
 
         async def _validate():
-            runner = AICoderRunner(project_path=str(Path.home() / ".aacode"))
+            runner = AICoderRunner(project_path=str(Path(platformdirs.user_config_dir("com.aacode", roaming=True))))
             try:
                 result = await runner.validate_api_key(api_key, model, base_url)
                 return result
