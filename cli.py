@@ -38,25 +38,26 @@ def run_init_git_clone():
 
 def run_init_pip():
     """pip 安装模式：引导用户配置"""
+    import platformdirs
     print("🚀 AACode Initialization Wizard\n")
 
-    home_aacode_dir = Path.home() / ".aacode"
-    home_aacode_dir.mkdir(exist_ok=True)
+    config_dir = Path(platformdirs.user_config_dir("com.aacode", roaming=True))
+    config_dir.mkdir(parents=True, exist_ok=True)
 
-    config_file = home_aacode_dir / "aacode_config.yaml"
+    config_file = config_dir / "aacode_config.yaml"
     pkg_config = Path(__file__).parent / "aacode_config.yaml"
 
     if not config_file.exists() and pkg_config.exists():
         shutil.copy(pkg_config, config_file)
         print(t("cli.save_config", file=config_file))
 
-    print("\n🔧 Please configure your API Key:")
-    print("Set model.api_key in ~/.aacode/aacode_config.yaml")
+    print(f"\n🔧 Please configure your API Key:")
+    print(f"Set model.api_key in {config_file}")
     print("Or set the LLM_API_KEY environment variable\n")
 
     api_key = input("Enter API Key (or press Enter to use environment variable): ").strip()
     if api_key:
-        env_file = home_aacode_dir / ".env"
+        env_file = config_dir / ".env"
         with open(env_file, "a", encoding="utf-8") as f:
             f.write(f"\nLLM_API_KEY={api_key}\n")
         print(t("cli.save_env", file=env_file))

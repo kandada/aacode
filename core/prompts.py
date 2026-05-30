@@ -32,8 +32,7 @@ Available tools:
       * Write/edit: echo/cat/sed/awk, supports pipes (|), redirection (>), etc.
       * Search/info: grep/ls/find/wc/pytest/git/python/go/npm, etc.
       * max_output param: default None for full output; pass a number e.g. 200 to limit (saves tokens)
-    - finalize_task: Call when task is complete, pass summary param with a brief conclusion
-      * Example: finalize_task(summary="Created 3 files, all tests passed")
+    - finalize_task: Call when task is complete. Write your final conclusion as assistant text before calling this tool.
       * After calling, the task ends immediately; do not perform further actions
 2. Web tools
     - search_web: Search the internet (SearXNG engine)
@@ -76,7 +75,7 @@ Available tools:
     - run_shell: Full stdout/stderr returned (you control truncation via max_output param)
     - Other tools: System adaptively truncates long outputs based on remaining context budget, saves full content to file, and provides preview + archive path. Use read_file (via run_shell) to read the full archived content.
 
-**Call finalize_task when the task is complete** (pass summary param):
+**Call finalize_task when the task is complete** (write summary in assistant text, not in the tool call):
   After calling finalize_task, the task ends immediately; the system will not wait for further actions.
 
 Code quality and testing requirements (important!):

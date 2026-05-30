@@ -102,6 +102,7 @@ class AsyncReActLoop:
         task_description: str,
         todo_manager: Optional[Any] = None,
         history_messages: Optional[List[Dict]] = None,
+        on_new_messages: Optional[Callable[[List[Dict]], Awaitable[None]]] = None,
     ) -> Dict[str, Any]:
         """
         运 linesReAct循环
@@ -115,6 +116,9 @@ class AsyncReActLoop:
         Returns:
             execute结果
         """
+        # 清除上一轮的 last_messages，确保失败时不残留旧数据
+        self.last_messages = None
+
         # 开始日志记录
         if self.logger:
             task_id = await self.logger.start_task(task_description)
@@ -179,7 +183,8 @@ During each thought, naturally plan:
             for msg in history_messages:
                 role = msg.get("role", "")
                 content = msg.get("content", "")
-                if role in ("user", "assistant", "tool") and content:
+                has_tool_info = msg.get("tool_calls") or msg.get("tool_call_id")
+                if role in ("user", "assistant", "tool") and (content or has_tool_info):
                     if role == "tool":
                         messages.append({
                             "role": "tool",
@@ -208,6 +213,9 @@ During each thought, naturally plan:
         for iteration in range(self.max_iterations):
             iteration_start = asyncio.get_event_loop().time()
             print(f"\n🔄 Iteration {iteration + 1}/{self.max_iterations}")
+
+            # 记录本轮开始前的消息总数，用于增量持久化
+            msg_count_before = len(messages)
 
             # 调 with 模型Get 思考
             model_start = asyncio.get_event_loop().time()
@@ -271,6 +279,16 @@ During each thought, naturally plan:
                 pass
             elif not actions:
                 # 无 tool_calls 且无文本 actions → 任务完成
+                # 先追加 assistant 回复到 messages，确保 last_messages 包含模型输出内容
+                response_entry = {"role": "assistant", "content": response_text}
+                if reasoning_content:
+                    response_entry["reasoning_content"] = reasoning_content
+                messages.append(response_entry)
+
+                # 增量持久化：本轮新消息立即保存到会话文件
+                if on_new_messages:
+                    await on_new_messages(messages[msg_count_before:])
+
                 print(t("agent.task_done", default="✅ Task completed"))
                 total_time = asyncio.get_event_loop().time() - start_time
                 if self.logger:
@@ -313,7 +331,8 @@ During each thought, naturally plan:
             )
 
             for i, action_item in enumerate(actions):
-                print(f"🛠️  Action {i + 1}/{len(actions)}: {action_item.action}")
+                if sys.stdout.isatty():
+                    print(f"🛠️  Action {i + 1}/{len(actions)}: {action_item.action}")
                 action_start = asyncio.get_event_loop().time()
 
                 # 添加重试机制（使 with 配置的最大重试次数，来自 aacode_config.yaml）
@@ -389,13 +408,23 @@ During each thought, naturally plan:
                 )  #  user看到简化版本
 
                 # 实时打印 Observation（供客户端显示）
-                display_obs = observation_for_display or observation or ""
-                if display_obs:
-                    # 截断过长的输出，避免刷屏
-                    max_display = 3000
-                    if len(display_obs) > max_display:
-                        display_obs = display_obs[:max_display] + f"\n... (truncated, {len(observation_for_display or observation)} chars total)"
-                    print(f"📋 Observation:\n{display_obs}", flush=True)
+                # finalize_task 是终结工具，其观察结果无需打印为独立 segment
+                if action_item.action != "finalize_task":
+                    display_obs = observation_for_display or observation or ""
+                    if display_obs:
+                        # 截断过长的输出，避免刷屏
+                        max_display = 3000
+                        if len(display_obs) > max_display:
+                            display_obs = display_obs[:max_display] + f"\n... (truncated, {len(observation_for_display or observation)} chars total)"
+                        print(f"📋 Observation:\n{display_obs}", flush=True)
+                        # ─── 源头数据：发送完整原始内容给前端做 markdown 渲染 ───
+                        # Rust 层 read_line() 逐行读取会：1) 丢弃空行  2) 拦截 {/[ 开头的 JSON 行
+                        # 前端逐行拼接重组的内容可能丢失信息，与 Python 原始数据不一致
+                        # 因此必须在 Python 侧发送 seg_content，前端渲染时使用此原始数据而非 Rust 重组数据
+                        if not sys.stdout.isatty():
+                            _full_obs = (observation_for_display or observation or "")
+                            import json as _json
+                            print(_json.dumps({"type": "seg_content", "seg": "observation", "content": _full_obs}), flush=True)
 
                 # 🔥 新增：从错误中自动更新待办清单
                 if todo_manager:
@@ -453,10 +482,10 @@ During each thought, naturally plan:
                 messages.append(assistant_msg)
 
                 # tool 结果消息
-                for tc, observation_item in zip(native_tool_calls, all_observations):
+                for otc, observation_item in zip(openai_tool_calls, all_observations):
                     messages.append({
                         "role": "tool",
-                        "tool_call_id": tc.get("id", ""),
+                        "tool_call_id": otc["id"],
                         "content": str(observation_item),
                     })
             else:
@@ -469,13 +498,20 @@ During each thought, naturally plan:
                     }
                 )
 
+            # 增量持久化：本轮新消息立即保存到会话文件
+            # 在上下文压缩和 finalize 检查之前保存，确保取消/压缩都不会丢消息
+            if on_new_messages:
+                await on_new_messages(messages[msg_count_before:])
+
             # 上下文一致性检查（在 messages 更新后，确保 assistant token 统计正确）
 
             # 检查是否有 finalize_task：消息已记录到会话历史，现在可以安全返回
             finalize_action = next((a for a in actions if a.action == "finalize_task"), None)
             if finalize_action:
-                summary_text = finalize_action.action_input.get("summary", "Task completed") if finalize_action.action_input else "Task completed"
-                print(t("agent.task_done_summary", summary=summary_text))
+                summary_text = response_text.strip() if response_text and response_text.strip() else "Task completed"
+                # TTY 模式下输出完成摘要；桌面/管道模式通过 done JSON 事件通知完成
+                if sys.stdout.isatty():
+                    print(t("agent.task_done_summary", summary=summary_text))
                 total_time = asyncio.get_event_loop().time() - start_time
                 if self.logger:
                     await self.logger.finish_task(
@@ -962,7 +998,17 @@ During each thought, naturally plan:
 
             # run_shell 不经过框架截断（工具自己管 max_output）
             if action == "run_shell" and isinstance(result, dict):
-                return result_str
+                # 避免 command 重复：heredoc 等场景 command 包含文件内容，模型已在
+                # tool_calls 中发送过，无需在 tool 消息中再次回传
+                summary = dict(result)
+                cmd = summary.pop("command", "")
+                first_line = cmd.split('\n')[0][:200] if cmd else ''
+                if len(cmd) > len(first_line) or len(cmd) > 200:
+                    summary["command"] = first_line + ("..." if first_line and len(cmd) > len(first_line) else "")
+                elif first_line:
+                    summary["command"] = first_line
+                summary.pop("working_directory", None)
+                return json.dumps(summary, ensure_ascii=False)
 
             threshold_chars = getattr(self, "_adaptive_threshold_chars", None)
             if threshold_chars is None:

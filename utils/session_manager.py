@@ -12,6 +12,7 @@ import sys
 from typing import Dict, List, Any, Optional
 from pathlib import Path
 from datetime import datetime
+import uuid
 import requests
 from dataclasses import dataclass
 from aacode.i18n import t
@@ -76,12 +77,12 @@ def _load_tiktoken_encoding():
     cache_file = os.path.expanduser("~/Library/Caches/tiktoken/cl100k_base.tiktoken")
 
     # 快速检查缓存文件是否存在且有效
-    if os.path.exists(cache_file):
-        file_size = os.path.getsize(cache_file)
-        # 有效的 tiktoken 文件应该远大于 100 字节
-        if file_size < 100:
-            print(f"\n⚠️ tiktoken cache file corrupted (only {file_size} bytes), using simple estimation")
-            return None
+    if not os.path.exists(cache_file):
+        return None
+    file_size = os.path.getsize(cache_file)
+    if file_size < 100:
+        print(f"\n⚠️ tiktoken cache file corrupted (only {file_size} bytes), using simple estimation")
+        return None
 
     result = [None]
     exception = [None]
@@ -122,15 +123,81 @@ def _load_tiktoken_encoding():
     return result[0]
 
 
+def _ensure_iso_timestamp(ts: Any) -> str:
+    """统一时间戳为 ISO 8601 字符串（如 "2026-05-28T09:16:11"），兼容旧版 float。
+
+    反序列化时调用，确保内存中全用统一格式。
+    """
+    if isinstance(ts, (int, float)):
+        return datetime.fromtimestamp(ts).isoformat(timespec='seconds')
+    return ts
+
+
+def _timestamp_sort_key(ts: Any) -> float:
+    """将 str/float 时间戳统一转为 float 用于排序，兼容新旧格式。"""
+    if isinstance(ts, (int, float)):
+        return float(ts)
+    try:
+        return datetime.fromisoformat(ts).timestamp()
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def _atomic_file_write(filepath, write_func):
+    """Atomically write to file using temp file + os.replace"""
+    import tempfile
+
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=filepath.parent, suffix='.tmp')
+    try:
+        with os.fdopen(tmp_fd, 'w', encoding='utf-8') as f:
+            write_func(f)
+        os.replace(tmp_path, filepath)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def _merge_sessions_index(filepath, our_data):
+    """Read disk index, merge with our data, write atomically under a file lock.
+
+    File lock ensures read-merge-write is atomic across concurrent processes,
+    preventing lost updates when two processes modify the index simultaneously.
+
+    Our data takes priority for same keys, but we preserve entries
+    from disk that we don't know about (added by other processes).
+    """
+    import json as _json
+    from aacode.utils.file_lock import file_lock
+
+    def _read_disk():
+        if filepath.exists():
+            try:
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    return _json.load(f)
+            except Exception:
+                pass
+        return {}
+
+    with file_lock(filepath):
+        disk_data = _read_disk()
+        merged = {**disk_data, **our_data}
+        _atomic_file_write(
+            filepath,
+            lambda f: _json.dump(merged, f, indent=2, ensure_ascii=False),
+        )
+
+
 @dataclass
 class SessionMessage:
     """会话消息"""
 
     role: str  # user, assistant, system, tool
     content: str
-    timestamp: float
+    timestamp: str  # ISO 8601 字符串（如 "2026-05-01T20:29:31.951047"），兼容旧版 float
     tokens: int = 0
-    metadata: Optional[Dict] = None
     tool_calls: Optional[List[Dict]] = None       # assistant 消息的 tool_calls
     tool_call_id: Optional[str] = None             # tool 消息的 tool_call_id
     reasoning_content: Optional[str] = None         # assistant 消息的 reasoning_content
@@ -141,8 +208,8 @@ class SessionSummary:
     """会话摘要"""
 
     session_id: str
-    created_at: float
-    last_activity: float
+    created_at: str  # ISO 8601 字符串（如 "2026-05-28T09:16:11"），兼容旧版 float
+    last_activity: str  # ISO 8601 字符串，兼容旧版 float
     total_messages: int
     total_tokens: int
     task_count: int
@@ -163,13 +230,12 @@ class SessionManager:
         # 当前会话
         self.current_session_id: Optional[str] = None
         self.current_messages: List[SessionMessage] = []
-        self._structured_messages: Optional[List[Dict]] = None
 
         # 会话索引
         self.sessions_index: Dict[str, SessionSummary] = {}
 
-        # token计数器
-        self.encoding = _load_tiktoken_encoding()
+        # token计数器（惰性加载，首次 _count_tokens 时才加载）
+        self._encoding = None
 
         # 加载会话索引
         self._load_sessions_index()
@@ -182,17 +248,20 @@ class SessionManager:
                 with open(index_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     for session_id, session_data in data.items():
+                        # 兼容旧版 float 时间戳，反序列化时统一转为 ISO 8601 字符串
+                        session_data["created_at"] = _ensure_iso_timestamp(session_data.get("created_at", ""))
+                        session_data["last_activity"] = _ensure_iso_timestamp(session_data.get("last_activity", ""))
                         self.sessions_index[session_id] = SessionSummary(**session_data)
             except Exception as e:
                 print(t("session.load_error", e=str(e)))
 
     def _save_sessions_index(self):
-        """保存会话索引"""
+        """保存会话索引（merge with disk to prevent concurrent overwrite loss）"""
         index_file = self.sessions_dir / "sessions_index.json"
         try:
-            data = {}
+            our_data = {}
             for session_id, session_summary in self.sessions_index.items():
-                data[session_id] = {
+                our_data[session_id] = {
                     "session_id": session_summary.session_id,
                     "created_at": session_summary.created_at,
                     "last_activity": session_summary.last_activity,
@@ -203,16 +272,17 @@ class SessionManager:
                     "status": session_summary.status,
                 }
 
-            with open(index_file, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
+            _merge_sessions_index(index_file, our_data)
         except Exception as e:
             print(f"⚠️ Failed to save session index: {e}")
 
     def _count_tokens(self, text: str) -> int:
         """计算文本的token数量"""
-        if self.encoding:
+        if self._encoding is None:
+            self._encoding = _load_tiktoken_encoding()
+        if self._encoding:
             try:
-                return len(self.encoding.encode(text))
+                return len(self._encoding.encode(text))
             except Exception:
                 pass
         # 回退到简单估算（大致4字符=1token）
@@ -224,17 +294,18 @@ class SessionManager:
 
     async def create_session(self, task: str, title: Optional[str] = None) -> str:
         """创建新会话"""
-        session_id = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{len(self.sessions_index)}"
+        session_id = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
 
         # 生成标题
         if title is None:
             title = task[:50] + "..." if len(task) > 50 else task
 
         # 创建会话摘要
+        now = datetime.now().isoformat(timespec='seconds')
         session_summary = SessionSummary(
             session_id=session_id,
-            created_at=datetime.now().timestamp(),
-            last_activity=datetime.now().timestamp(),
+            created_at=now,
+            last_activity=now,
             total_messages=0,
             total_tokens=0,
             task_count=0,
@@ -247,23 +318,23 @@ class SessionManager:
         self.current_messages = []
 
         # 添加系统消息和任务
+        now_ts = datetime.now().isoformat(timespec='seconds')
         system_msg = SessionMessage(
             role="system",
             content=f"You are an AI coding assistant. Please work as follows:\n1. First plan the task steps\n2. Execute and verify step by step\n3. Ensure code quality and maintainability",
-            timestamp=datetime.now().timestamp(),
+            timestamp=now_ts,
             tokens=self._count_tokens(
                 f"You are an AI coding assistant. Please work as follows:\n1. First plan the task steps\n2. Execute and verify step by step\n3. Ensure code quality and maintainability"
             ),
         )
 
         self.current_messages = [system_msg]
-        self._structured_messages = None
         # 只有 task 非空时才添加 user 消息
         if task and task.strip():
             user_msg = SessionMessage(
                 role="user",
                 content=task,
-                timestamp=datetime.now().timestamp(),
+                timestamp=datetime.now().isoformat(timespec='seconds'),
                 tokens=self._count_tokens(task),
             )
             self.current_messages.append(user_msg)
@@ -288,19 +359,19 @@ class SessionManager:
 
         current_session_file = self.sessions_dir.parent / "current_session.txt"
         try:
-            with open(current_session_file, "w", encoding="utf-8") as f:
-                f.write(f"Session ID: {self.current_session_id}\n")
-                f.write(
-                    f"Created: {datetime.fromtimestamp(self.sessions_index[self.current_session_id].created_at).strftime('%Y-%m-%d %H:%M:%S')}\n"
-                )
-                f.write(f"Title: {self.sessions_index[self.current_session_id].title}\n")
-                f.write(f"Messages: {len(self.current_messages)}\n")
-                f.write(f"Tokens: {self._get_total_tokens()}\n")
+            content = (
+                f"Session ID: {self.current_session_id}\n"
+                f"Created: {datetime.fromisoformat(self.sessions_index[self.current_session_id].created_at).strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"Title: {self.sessions_index[self.current_session_id].title}\n"
+                f"Messages: {len(self.current_messages)}\n"
+                f"Tokens: {self._get_total_tokens()}\n"
+            )
+            _atomic_file_write(current_session_file, lambda f: f.write(content))
         except Exception as e:
             print(t("session.save_id_error", e=str(e)))
 
     async def add_message(
-        self, role: str, content: str, metadata: Optional[Dict] = None,
+        self, role: str, content: str,
         tool_calls: Optional[List[Dict]] = None,
         tool_call_id: Optional[str] = None,
         reasoning_content: Optional[str] = None,
@@ -323,9 +394,8 @@ class SessionManager:
         message = SessionMessage(
             role=role,
             content=content,
-            timestamp=datetime.now().timestamp(),
+            timestamp=datetime.now().isoformat(timespec='seconds'),
             tokens=new_tokens,
-            metadata=metadata or {},
             tool_calls=tool_calls,
             tool_call_id=tool_call_id,
             reasoning_content=reasoning_content,
@@ -333,23 +403,10 @@ class SessionManager:
 
         self.current_messages.append(message)
 
-        # 如果 _structured_messages 已存在，同步追加（保持双源一致）
-        if self._structured_messages is not None:
-            entry = {
-                "role": role,
-                "content": content,
-                "tool_calls": tool_calls,
-                "tool_call_id": tool_call_id,
-                "reasoning_content": reasoning_content,
-            }
-            # 移除 None 值，保持 JSON 整洁
-            entry = {k: v for k, v in entry.items() if v is not None}
-            self._structured_messages.append(entry)
-
         # 更新会话摘要
         if self.current_session_id in self.sessions_index:
             session_summary = self.sessions_index[self.current_session_id]
-            session_summary.last_activity = datetime.now().timestamp()
+            session_summary.last_activity = datetime.now().isoformat(timespec='seconds')
             session_summary.total_messages = len(self.current_messages)
             session_summary.total_tokens = self._get_total_tokens()
             # 如果 title 为空，用第一条 user 消息作为标题
@@ -365,27 +422,14 @@ class SessionManager:
 
         return True
 
-    async def _save_structured_messages(self, messages: List[Dict]):
-        """保存结构化消息到会话文件（含 tool_calls / reasoning_content），与文本消息并存"""
-        if not self.current_session_id:
-            return
-        session_file = self.sessions_dir / f"{self.current_session_id}.json"
-        if not session_file.exists():
-            return
-        try:
-            with open(session_file, "r", encoding="utf-8") as f:
-                session_data = json.load(f)
-            session_data["structured_messages"] = messages
-            with open(session_file, "w", encoding="utf-8") as f:
-                json.dump(session_data, f, indent=2, ensure_ascii=False)
-            self._structured_messages = messages
-        except Exception as e:
-            print(f"⚠️ Failed to save structured message: {e}")
-
     async def get_messages(
         self, session_id: Optional[str] = None, include_system: bool = True
     ) -> List[Dict]:
-        """获取会话消息"""
+        """获取会话消息（转换为 dict 格式，供 LLM API / 客户端使用）
+
+        现在只有一个消息源 current_messages，始终包含结构化字段
+        （tool_calls / reasoning_content / tool_call_id）。
+        """
         target_session_id = session_id or self.current_session_id
         if not target_session_id:
             return []
@@ -393,15 +437,6 @@ class SessionManager:
         # 如果不是当前会话，加载它
         if target_session_id != self.current_session_id:
             await self._load_session(target_session_id)
-
-        # 优先返回结构化消息（含 tool_calls / reasoning_content）
-        if self._structured_messages:
-            filtered = []
-            for msg in self._structured_messages:
-                if not include_system and msg.get("role") == "system":
-                    continue
-                filtered.append(msg)
-            return filtered
 
         messages = []
         for msg in self.current_messages:
@@ -454,7 +489,7 @@ class SessionManager:
             summary_msg = SessionMessage(
                 role="system",
                 content=f"Context summary (compressed at: {compact_time}): {summary}",
-                timestamp=datetime.now().timestamp(),
+                timestamp=datetime.now().isoformat(timespec='seconds'),
                 tokens=self._count_tokens(summary),
             )
 
@@ -463,25 +498,16 @@ class SessionManager:
             self.current_messages = system_msgs + recent_msgs
 
     async def _save_session(self):
-        """保存当前会话（保留文件中已有的 structured_messages 等字段）"""
+        """保存当前会话（单轨：messages 数组包含全部结构化字段）"""
         if not self.current_session_id:
             return
 
         session_file = self.sessions_dir / f"{self.current_session_id}.json"
 
-        # 先读取已有文件，保留 structured_messages 等非冲突字段
-        existing = {}
-        if session_file.exists():
-            try:
-                with open(session_file, "r", encoding="utf-8") as f:
-                    existing = json.load(f)
-            except Exception:
-                existing = {}
-
         session_data = {
             "session_id": self.current_session_id,
             "created_at": self.sessions_index.get(
-                self.current_session_id, SessionSummary("", 0, 0, 0, 0, 0, "", "")
+                self.current_session_id, SessionSummary("", "", "", 0, 0, 0, "", "")
             ).created_at,
             "messages": [
                 {
@@ -489,7 +515,6 @@ class SessionManager:
                     "content": msg.content,
                     "timestamp": msg.timestamp,
                     "tokens": msg.tokens,
-                    "metadata": msg.metadata,
                     "tool_calls": msg.tool_calls,
                     "tool_call_id": msg.tool_call_id,
                     "reasoning_content": msg.reasoning_content,
@@ -498,20 +523,16 @@ class SessionManager:
             ],
         }
 
-        # 优先用内存中的 _structured_messages（更实时），否则保留文件中已有的
-        if self._structured_messages is not None:
-            session_data["structured_messages"] = self._structured_messages
-        elif "structured_messages" in existing:
-            session_data["structured_messages"] = existing["structured_messages"]
-
         try:
-            with open(session_file, "w", encoding="utf-8") as f:
-                json.dump(session_data, f, indent=2, ensure_ascii=False)
+            _atomic_file_write(
+                session_file,
+                lambda f: json.dump(session_data, f, indent=2, ensure_ascii=False)
+            )
         except Exception as e:
             print(t("session.save_error", e=str(e)))
 
     async def _load_session(self, session_id: str):
-        """加载指定会话"""
+        """加载指定会话（兼容旧版 collapsed text 格式和 structured_messages 双轨格式）"""
         session_file = self.sessions_dir / f"{session_id}.json"
         if not session_file.exists():
             return False
@@ -522,15 +543,20 @@ class SessionManager:
 
             self.current_session_id = session_id
             self.current_messages = []
-            self._structured_messages: Optional[List[Dict]] = session_data.get("structured_messages")
 
-            for msg_data in session_data.get("messages", []):
+            # ── 旧版兼容（TODO: 下个大版本移除，若确认无旧 structured_messages 会话） ──
+            # 旧版文件同时存了 structured_messages 和 messages（collapsed text）。
+            # 如果 structured_messages 存在，以它为准（它已经是我们需要的结构化格式）；
+            # 否则走 messages 数组。
+            raw_messages = session_data.get("structured_messages") or session_data.get("messages", [])
+
+            for msg_data in raw_messages:
+                msg_data["timestamp"] = _ensure_iso_timestamp(msg_data.get("timestamp"))
                 message = SessionMessage(
                     role=msg_data["role"],
-                    content=msg_data["content"],
+                    content=msg_data.get("content", ""),
                     timestamp=msg_data["timestamp"],
                     tokens=msg_data.get("tokens", 0),
-                    metadata=msg_data.get("metadata"),
                     tool_calls=msg_data.get("tool_calls"),
                     tool_call_id=msg_data.get("tool_call_id"),
                     reasoning_content=msg_data.get("reasoning_content"),
@@ -560,8 +586,8 @@ class SessionManager:
                 }
             )
 
-        # 按最后活动时间排序（处理None值）
-        sessions.sort(key=lambda x: float(x.get("last_activity", 0) or 0), reverse=True)
+        # 按最后活动时间排序（兼容 str / float 时间戳）
+        sessions.sort(key=lambda x: _timestamp_sort_key(x.get("last_activity")), reverse=True)
         return sessions
 
     async def switch_session(self, session_id: str) -> bool:

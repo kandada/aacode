@@ -148,22 +148,10 @@ RUN_SHELL_SCHEMA = ToolSchema(
 
 FINALIZE_TASK_SCHEMA = ToolSchema(
     name="finalize_task",
-    description="End the current task and output a final summary. Call this when you are certain the task is fully complete. The task ends immediately after invocation.",
-    parameters=[
-        ToolParameter(
-            name="summary",
-            type=str,
-            required=True,
-            description="A brief summary of what was done and the results",
-            example="Successfully created 3 files in src/, all tests passing",
-            aliases=["message", "conclusion", "result"],
-        ),
-    ],
-    examples=[
-        {"summary": "All file modifications completed, all tests passing"},
-        {"summary": "Optimized 3 files, removed redundant code, lint check passed"},
-    ],
-    returns="Returns status=completed and summary",
+    description="Mark the current task as complete. The task ends immediately after invocation. Write your final summary or conclusion in your assistant response text before calling this tool — do not pass it as a parameter.",
+    parameters=[],
+    examples=[],
+    returns="Returns status=completed",
 )
 
 RUN_SKILLS_SCHEMA = ToolSchema(

@@ -138,7 +138,7 @@ class WebTools:
         self,
         url: str,
         timeout: Optional[int] = None,
-        max_content_length: int = 100000,
+        max_content_length: int = 5000,
         **kwargs,
     ) -> Dict[str, Any]:
         """
