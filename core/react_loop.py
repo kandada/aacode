@@ -27,6 +27,11 @@ else:
     from ..utils.tool_registry import get_global_registry
     from ..config import settings
 from aacode.i18n import t
+from aacode.utils.message_utils import (
+    estimate_tokens as _util_estimate_tokens,
+    split_into_rounds,
+    build_compact_view,
+)
 
 
 @dataclass
@@ -95,6 +100,10 @@ class AsyncReActLoop:
         from ..utils.session_manager import _load_tiktoken_encoding
 
         self.encoding = _load_tiktoken_encoding()
+
+        # 上下文压缩摘要缓存
+        self._compact_summary: Optional[str] = None
+        self._compact_summary_msg_count: int = 0
 
     async def run(
         self,
@@ -217,9 +226,10 @@ During each thought, naturally plan:
             # 记录本轮开始前的消息总数，用于增量持久化
             msg_count_before = len(messages)
 
-            # 调 with 模型Get 思考
+            # 调 with 模型Get 思考（使用 round-aware 压缩视图）
             model_start = asyncio.get_event_loop().time()
-            response = await self.model_caller(messages)
+            effective_msgs, _ = self._build_compact_view(messages)
+            response = await self.model_caller(effective_msgs)
             model_time = asyncio.get_event_loop().time() - model_start
 
             # 提取文本和 tool_calls（兼容旧版返回字符串）
@@ -318,8 +328,9 @@ During each thought, naturally plan:
             all_observations = []
             all_observations_for_display = []  #   for显示的简化版本
 
-            # 基于剩余上下文预算计算自适应截断阈值
-            current_tokens = self._estimate_tokens(messages)
+            # 基于剩余上下文预算计算自适应截断阈值（使用压缩视图的 token 数）
+            effective_msgs, _ = self._build_compact_view(messages)
+            current_tokens = _util_estimate_tokens(self.encoding, effective_msgs)
             total_budget = (
                 self.context_config.max_context_length
                 if self.context_config
@@ -548,21 +559,25 @@ During each thought, naturally plan:
             await self.context_manager.update(observation)
             self.current_context = await self.context_manager.get_compact_context()
 
-            # 智能上下文缩减检查（基于token数）
-            current_tokens = self._estimate_tokens(messages)
+            # 智能上下文缩减检查（基于传入模型的压缩视图 token 数，而非全量消息）
+            effective_msgs, was_compacted = self._build_compact_view(messages)
+            compact_view_tokens = _util_estimate_tokens(self.encoding, effective_msgs)
             trigger_tokens = (
                 self.context_config.compact_trigger_tokens
                 if self.context_config
                 else 8000
             )
 
-            if current_tokens > trigger_tokens:
-                print(f"📊 Current tokens: {current_tokens}, trigger threshold: {trigger_tokens}")
-                await self._compact_context(messages)
+            # 当压缩视图也超过触发阈值时，需要重新生成摘要（更激进地丢弃中间轮次）
+            if compact_view_tokens > trigger_tokens:
+                print(f"📊 Compact view tokens: {compact_view_tokens}, trigger threshold: {trigger_tokens}")
+                msg_count_changed = len(messages) - self._compact_summary_msg_count
+                if msg_count_changed > 20 or self._compact_summary is None:
+                    await self._compact_context(messages)
                 if self.logger:
                     await self.logger.log_context_update(
                         update_type="compact",
-                        content=f"Context compaction executed after iteration {iteration + 1} (tokens: {current_tokens})",
+                        content=f"Context compaction executed after iteration {iteration + 1} (compact_view_tokens: {compact_view_tokens})",
                     )
 
         total_time = asyncio.get_event_loop().time() - start_time
@@ -1103,58 +1118,80 @@ During each thought, naturally plan:
 
             return f"❌ Execution error: {error_type}\n\n{error_msg}\n\n💡 Tip: {tip}\n\n📋 Details:\n{error_trace[:300]}..."
 
+    def _build_compact_view(self, messages: List[Dict]) -> tuple:
+        """
+        构建可传入模型的 round-aware 压缩视图。
+
+        不修改原始 messages 列表，每次从全量消息中按 round 边界
+        选出 system_prompt + 前N轮 + 摘要 + 后N轮，确保 tool_calls/tool_messages
+        完整性。
+
+        Returns:
+            (view_messages, was_compacted): 压缩视图的消息列表, 是否实际进行了压缩
+        """
+        protect_first = (
+            self.context_config.compact_protect_first_rounds
+            if self.context_config
+            else 3
+        )
+        keep_last = (
+            self.context_config.compact_keep_rounds
+            if self.context_config
+            else 10
+        )
+        max_tokens = (
+            self.context_config.max_context_length
+            if self.context_config
+            else 131072
+        )
+        return build_compact_view(
+            encoding=self.encoding,
+            messages=messages,
+            max_tokens=max_tokens,
+            protect_first_rounds=protect_first,
+            keep_last_rounds=keep_last,
+            cached_summary=self._compact_summary,
+        )
+
     async def _compact_context(self, messages: List[Dict]):
-        """上下文缩减 - 智能版：让模型参与判断重要信息，并缩减文件内容"""
+        """上下文缩减 - 智能版：生成 AI 摘要并缓存，不修改全量 messages"""
         print("📦 Executing smart context compaction...")
 
-        # Save 完整历史到文件
         history_file = await self.context_manager.save_history(self.steps)
 
-        # 从配置Get 参数
-        keep_messages = (
-            self.context_config.compact_keep_messages if self.context_config else 50
-        )
-        keep_rounds = (
-            self.context_config.compact_keep_rounds if self.context_config else 10
-        )
-        summary_steps = (
-            self.context_config.compact_summary_steps if self.context_config else 10
-        )
         protect_first_rounds = (
             self.context_config.compact_protect_first_rounds
             if self.context_config
             else 3
         )
+        keep_last_rounds = (
+            self.context_config.compact_keep_rounds
+            if self.context_config
+            else 10
+        )
+        summary_steps = (
+            self.context_config.compact_summary_steps if self.context_config else 10
+        )
 
-        # 计算需要缩减的消息范围
-        if len(messages) <= keep_messages:
-            print("✅ Message count within threshold, no compaction needed")
+        # 使用 round 感知拆分，确保不会切断 tool_calls/tool_messages 配对
+        rounds = split_into_rounds(messages)
+
+        if len(rounds) <= protect_first_rounds + keep_last_rounds:
+            print("✅ Round count within threshold, no compaction needed")
             return
 
-        # 提取需要总结的中间消息（保留系统提示、前N轮、最近N轮）
-        system_messages = messages[:2]  # 系统提示 + 初始任务
-        first_rounds_messages = messages[
-            2 : 2 + protect_first_rounds * 2
-        ]  # 前N轮对话（任务规划）
-        recent_messages = messages[-keep_rounds * 2 :]  # 最近N轮对话
-
-        # 中间消息：跳过系统、前N轮、最近N轮
-        middle_start = 2 + protect_first_rounds * 2
-        middle_end = -keep_rounds * 2
-        middle_messages = (
-            messages[middle_start:middle_end]
-            if len(messages) > middle_start + keep_rounds * 2
-            else []
-        )
+        # 提取中间轮次的消息（扁平化）
+        middle_rounds = rounds[protect_first_rounds:-keep_last_rounds]
+        middle_messages = [m for r in middle_rounds for m in r]
 
         if not middle_messages:
             print("✅ No intermediate messages to compact")
             return
 
-        # 智能缩减文件内容：将大段文件内容Save 到.aacode，只保留 summarized 
+        # 智能缩减文件内容：将大段文件内容保存到 .aacode
         middle_messages = await self._compact_file_contents(middle_messages)
 
-        # 使 with 模型生成三块智能 summarized 
+        # 使用模型生成三块智能摘要
         try:
             summaries = await self._generate_three_part_summary(
                 middle_messages, self.steps[-summary_steps:]
@@ -1168,13 +1205,9 @@ During each thought, naturally plan:
                 "keep_original_summary": "",
             }
 
-        # 构建缩减后的消息列表
-        compacted_messages = system_messages.copy()
-        compacted_messages.extend(first_rounds_messages)  # 添加前N轮（任务规划）
-
-        # 插入三块智能 summarized 
+        # 构建并缓存摘要内容（供后续 _build_compact_view 使用）
         compact_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        summary_content = f"""## 🧠 Smart History Summary (AI Generated)
+        self._compact_summary = f"""## 🧠 Smart History Summary (AI Generated)
 
 **⏰ Compaction Time**: {compact_time}
 
@@ -1196,19 +1229,14 @@ During each thought, naturally plan:
 - Continue executing the current task, referencing recent observations
 - Avoid duplicating already completed work"""
 
-        compacted_messages.append({"role": "system", "content": summary_content})
+        self._compact_summary_msg_count = len(messages)
 
-        # 添加最近的消息
-        compacted_messages.extend(recent_messages)
-
-        # 计算缩减效果
+        # 验证：使用缓存摘要构建压缩视图，确认 tool_calls 完整性
+        view, _ = self._build_compact_view(messages)
         old_tokens = self._estimate_tokens(messages)
-        new_tokens = self._estimate_tokens(compacted_messages)
+        new_tokens = self._estimate_tokens(view)
 
-        messages.clear()
-        messages.extend(compacted_messages)
-
-        print(f"✅ Smart context compaction done: {len(messages)} messages | Token: {old_tokens} → {new_tokens} (reduced {(old_tokens - new_tokens) / old_tokens * 100:.1f}%) | Protected first {protect_first_rounds} rounds | Kept last {keep_rounds} rounds | Summarized {len(middle_messages)} messages")
+        print(f"✅ Smart context compaction done: full messages kept intact ({len(messages)} messages) | Summary cached for compact view | Token: {old_tokens} → {new_tokens} (compact view: {(old_tokens - new_tokens) / max(old_tokens, 1) * 100:.1f}% reduction) | Protected first {protect_first_rounds} rounds | Kept last {keep_last_rounds} rounds | Summarized {len(middle_rounds)} rounds")
 
     async def _compact_file_contents(self, messages: List[Dict]) -> List[Dict]:
         """
@@ -2052,30 +2080,8 @@ Please return the three-part summary in JSON format:"""
                     )
 
     def _estimate_tokens(self, messages: List[Dict]) -> int:
-        """
-        估算消息列表的token数
-
-        Args:
-            messages: 消息列表
-
-        Returns:
-            估算的token数
-        """
-        if self.encoding:
-            # 使 with tiktoken精确计算
-            total_tokens = 0
-            for message in messages:
-                content = message.get("content", "")
-                try:
-                    total_tokens += len(self.encoding.encode(content))
-                except:
-                    # 回退到简单估算
-                    total_tokens += len(content) // 4
-            return total_tokens
-        else:
-            # 简单估算：大约4字符=1token
-            total_chars = sum(len(msg.get("content", "")) for msg in messages)
-            return total_chars // 4
+        """估算消息列表的 token 数（含 tool_calls / tool_call_id / reasoning_content）"""
+        return _util_estimate_tokens(self.encoding, messages)
 
 
 # 测试
