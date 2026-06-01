@@ -1,0 +1,40 @@
+spec_version: "0.1.0"
+name: aacode
+version: 1.7.8
+description: >
+  AACode is a lightweight, 100%-Python CLI coding agent built on a ReAct architecture.
+  It takes a natural-language task description, plans and executes multi-step coding
+  work autonomously — writing code, running shell commands, searching the web, delegating
+  to sub-agents, and verifying results through test-driven loops. Provider-agnostic: works
+  with DeepSeek, OpenAI, Anthropic Claude, Kimi, Gemini, and any OpenAI-compatible API.
+  No vendor lock-in, no bloat. Installable via pip as `aacode`.
+license: GPL-3.0
+model:
+  preferred: deepseek:deepseek-chat
+  fallback:
+    - openai:gpt-4o
+    - anthropic:claude-sonnet-4-6
+runtime:
+  max_turns: 100
+  entrypoint: main.py
+skills:
+  - name: run_shell
+    description: Execute any shell command; universal Swiss-Army-knife for file I/O, search, and build
+  - name: delegate_task
+    description: Spawn a sub-agent to handle a sub-task in an isolated context window
+  - name: search_web
+    description: Web search via SearXNG for real-time information
+  - name: fetch_url
+    description: Fetch and read a web page
+  - name: understand_image
+    description: Multimodal image understanding (screenshots, mockups, photos)
+  - name: understand_video
+    description: Video scene and action analysis
+  - name: run_skills
+    description: Execute built-in skills (pandas, numpy, playwright, and user-defined skills)
+  - name: add_todo_item
+    description: Manage a structured to-do list for multi-step task tracking
+compliance:
+  risk_tier: standard
+  supervision:
+    human_in_the_loop: destructive
