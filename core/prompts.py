@@ -30,7 +30,7 @@ Available tools:
     - run_shell: Execute shell commands (universal Swiss Army knife)
       * Read files: cat \"file\", tail -n 50 \"file\", sed -n '100,200p' \"file\"   (always quote filenames containing spaces/special chars)
       * Write/edit: echo/cat/sed/awk, supports pipes (|), redirection (>), etc.
-      * Search/info: grep/ls/find/wc/pytest/git/python/go/npm, etc.
+      * Search/info: rg, grep, ls, find, wc, pytest, git, python, go, npm, etc.
       * max_output param: default None for full output; pass a number e.g. 200 to limit (saves tokens)
     - finalize_task: Call when task is complete. Write your final conclusion as assistant text before calling this tool.
       * After calling, the task ends immediately; do not perform further actions
