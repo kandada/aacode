@@ -78,31 +78,43 @@ class SkillsManager:
             # 从配置加载启 with 的skills
             self.enabled_skills = skills_config.get("enabled_skills", [])
 
-    def discover_skills(
-        self, load_full_instructions: bool = False
-    ) -> Dict[str, SkillInfo]:
-        """发现并加载所有skills（从 SKILL.md 提取元数据，不依赖 yaml）"""
-        if not self.skills_dir.exists():
-            return {}
+        import platformdirs
+        self.user_skills_dir = Path(platformdirs.user_config_dir("com.aacode", roaming=True)) / "skills"
 
-        for skill_dir in self.skills_dir.iterdir():
+    def _scan_skills_dir(self, skills_dir: Path, load_full_instructions: bool) -> int:
+        """扫描单个 skills 目录，返回新加载的数量"""
+        if not skills_dir.exists():
+            return 0
+        count = 0
+        for skill_dir in skills_dir.iterdir():
             if not skill_dir.is_dir():
                 continue
             skill_name = skill_dir.name
             if skill_name.startswith(".") or skill_name.startswith("_"):
                 continue
 
-            # 所有 skill 统一从 SKILL.md 提取元数据
             skill_info = self._load_skill(skill_dir)
             if skill_info is None:
                 continue
 
             skill_info.metadata_loaded = True
             if not load_full_instructions:
-                # 渐进式：先不加载完整指令
                 skill_info.full_instruction_loaded = False
             self.loaded_skills[skill_name] = skill_info
+            count += 1
+        return count
 
+    def discover_skills(
+        self, load_full_instructions: bool = False
+    ) -> Dict[str, SkillInfo]:
+        """发现并加载所有skills（内置 + 用户自定义，从 SKILL.md 提取元数据）"""
+        count = self._scan_skills_dir(self.skills_dir, load_full_instructions)
+        user_count = self._scan_skills_dir(self.user_skills_dir, load_full_instructions)
+        if user_count > 0:
+            import logging
+            logging.getLogger(__name__).info(
+                f"Loaded {user_count} user skills from {self.user_skills_dir}"
+            )
         return self.loaded_skills
 
     def _load_full_instruction(self, skill_name: str) -> bool:
