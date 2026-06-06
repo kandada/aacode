@@ -462,6 +462,20 @@ class SafetyGuard:
             "getopts",
             "shift",
             "return",
+            # Shell 控制流关键字和内置命令
+            "for",
+            "if",
+            "while",
+            "until",
+            "case",
+            "select",
+            "function",
+            "[",
+            "[[",
+            "declare",
+            "typeset",
+            "local",
+            "let",
             # ── 压缩工具 ──
             "tar",
             "gzip",
@@ -959,6 +973,14 @@ class SafetyGuard:
         if cmd_name not in self.allowed_commands:
             return self.RISK_UNKNOWN, f"Command not in whitelist: {cmd_name}"
 
+        # Shell 控制流关键字：纯语法结构，无直接文件操作，视为安全
+        shell_keywords = {
+            "for", "if", "while", "until", "case", "select", "function",
+            "[", "[[", "declare", "typeset", "local", "let",
+        }
+        if cmd_name in shell_keywords:
+            return self.RISK_SAFE, "Shell keyword/control flow"
+
         # 2. 检查危险命令模式（已经在check_command中检查过）
         # 3. 根据命令类型评估风险
 
@@ -1100,6 +1122,35 @@ class SafetyGuard:
 
             cmd_path = parts[0]
 
+            # 处理环境变量赋值模式: VAR=value command
+            # shlex 会将 VAR=value 解析为独立 token，需要跳过赋值找到实际命令
+            actual_cmd_index = 0
+            parts_len = len(parts)
+            while actual_cmd_index < parts_len and "=" in parts[actual_cmd_index]:
+                actual_cmd_index += 1
+            if actual_cmd_index > 0:
+                if actual_cmd_index >= parts_len:
+                    # 纯变量赋值（如 VAR=value），无害，放行
+                    return self._build_result(
+                        allowed=True,
+                        reason="Environment variable assignment only",
+                        risk_level=self.RISK_SAFE,
+                    )
+                # 跳过赋值 token，使用后续 token 作为实际命令
+                cmd_path = parts[actual_cmd_index]
+                parts = parts[actual_cmd_index:]
+
+            # 处理命令取反模式: ! command
+            if cmd_path == "!":
+                if len(parts) <= 1:
+                    return self._build_result(
+                        allowed=True,
+                        reason="Bare negation operator",
+                        risk_level=self.RISK_SAFE,
+                    )
+                cmd_path = parts[1]
+                parts = parts[1:]
+
             # 提取命令名称（智能处理路径）
             cmd_name = self._extract_command_name(cmd_path)
 
@@ -1134,6 +1185,18 @@ class SafetyGuard:
                     reason=f"Command not in whitelist: {cmd_name}",
                     risk_level=self.RISK_UNKNOWN,
                     suggestion=f"Available commands: {', '.join(sorted(list(self.allowed_commands)))}",
+                )
+
+            # Shell 控制流关键字：跳过后续特殊检查和路径检查，直接放行
+            shell_keywords = {
+                "for", "if", "while", "until", "case", "select", "function",
+                "[", "[[", "declare", "typeset", "local", "let",
+            }
+            if cmd_name in shell_keywords:
+                return self._build_result(
+                    allowed=True,
+                    reason=f"Shell keyword/control flow: {cmd_name}",
+                    risk_level=self.RISK_SAFE,
                 )
 
             # 特殊检查：rm命令（智能检查）
