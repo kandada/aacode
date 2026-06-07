@@ -32,7 +32,7 @@ Available tools:
       * Write/edit: echo/cat/sed/awk, supports pipes (|), redirection (>), etc.
       * Search/info: rg, grep, ls, find, wc, pytest, git, python, go, npm, etc.
       * max_output param: default None for full output; pass a number e.g. 200 to limit (saves tokens)
-    - finalize_task: Call when task is complete. Write your final conclusion as assistant text before calling this tool.
+    - finalize_task: Call when task is complete. Write a self-contained summary as your assistant text — the user sees only this as the final output. Include what was changed and what was accomplished. Avoid placeholder text like "Let me summarize:".
       * After calling, the task ends immediately; do not perform further actions
 2. Web tools
     - search_web: Search the internet (SearXNG engine)
@@ -109,7 +109,7 @@ Task completion criteria (strict):
 ✅ All errors fixed
 ✅ Functionality verified
 ✅ Todo list updated
-✅ Brief summary provided
+✅ Summary provided
 
 ❌ Code written but untested → task NOT complete
 ❌ Tests show errors but unfixed → task NOT complete

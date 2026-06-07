@@ -7,6 +7,7 @@ from __future__ import annotations
 """
 
 import os
+import shutil
 from pathlib import Path
 from typing import Dict, Any, Optional
 from dataclasses import dataclass, asdict, field
@@ -178,6 +179,8 @@ class ToolConfig:
     enable_web_search: bool = True
     search_engine: str = "searxng"
     search_api_url: Optional[str] = None
+    search_api_key: Optional[str] = None
+    enable_fallback_scrape: bool = True
 
     # 代码工具
     enable_code_execution: bool = True
@@ -190,10 +193,10 @@ class SafetyConfig:
     """安全配置"""
 
     enable_safety_guard: bool = True
-    restrict_to_project: bool = True
-    allow_network: bool = False
+    restrict_to_project: bool = False
+    allow_network: bool = True
     max_file_size: int = 50 * 1024 * 1024  # 50MB
-    dangerous_command_action: str = "reject"  # reject, ask, log
+    dangerous_command_action: str = "ask"  # reject, ask, log — ask 模式下危险命令弹窗确认
 
 
 @dataclass
@@ -413,6 +416,26 @@ class Settings:
         from aacode.i18n import init as i18n_init
         i18n_init(self.language)
 
+    @staticmethod
+    def _deep_merge(base: dict, override: dict) -> dict:
+        """深度合并两个字典：override 的值优先，base 中缺失的 key 被补充进去"""
+        result = override.copy()
+        for key, value in base.items():
+            if key not in result:
+                result[key] = value
+            elif isinstance(value, dict) and isinstance(result[key], dict):
+                result[key] = Settings._deep_merge(value, result[key])
+        return result
+
+    def _merge_with_defaults(self, user_config: dict) -> dict:
+        """将包内默认 YAML 中的缺失字段合并到用户配置中（不覆盖已有值）"""
+        pkg_config_path = Path(__file__).parent / "aacode_config.yaml"
+        if not pkg_config_path.exists():
+            return user_config
+        with open(pkg_config_path, "r", encoding="utf-8") as f:
+            default_config = yaml.safe_load(f) or {}
+        return self._deep_merge(default_config, user_config)
+
     def load_config(self):
         """从文件加载配置"""
         if not self.config_path or not self.config_path.exists():
@@ -422,7 +445,6 @@ class Settings:
                     target_dir = Path(platformdirs.user_config_dir("com.aacode", roaming=True))
                     target_dir.mkdir(parents=True, exist_ok=True)
                     target_path = target_dir / "aacode_config.yaml"
-                    import shutil
                     shutil.copy(pkg_config, target_path)
                     self.config_path = target_path
                     self.config_source = "platformdirs"
@@ -433,6 +455,20 @@ class Settings:
                 with open(self.config_path, "r", encoding="utf-8") as f:
                     config_data = yaml.safe_load(f)
 
+                if config_data is None:
+                    config_data = {}
+
+                # 对非 package 来源的配置做缺失字段合并（老用户升级兼容）
+                if self.config_source not in ("package", "none"):
+                    merged = self._merge_with_defaults(config_data)
+                    if merged != config_data:
+                        config_data = merged
+                        try:
+                            with open(self.config_path, "w", encoding="utf-8") as f:
+                                yaml.dump(config_data, f, default_flow_style=False, allow_unicode=True)
+                        except Exception as e:
+                            print(t("config.save_error", e=str(e)))
+
                 # 更新配置
                 if config_data:
                     self._update_from_dict(config_data)
@@ -442,12 +478,18 @@ class Settings:
     def save_config(self):
         """保存配置到文件"""
         config_data = {
+            "language": self.language,
             "model": asdict(self.model),
             "tools": asdict(self.tools),
             "safety": asdict(self.safety),
             "context": asdict(self.context),
+            "agent": asdict(self.agent),
+            "output": asdict(self.output),
+            "timeouts": asdict(self.timeouts),
+            "limits": asdict(self.limits),
             "mcp": asdict(self.mcp),
             "skills": asdict(self.skills),
+            "multimodal": asdict(self.multimodal),
         }
 
         try:
@@ -495,6 +537,9 @@ class Settings:
         if search_api_url:
             self.tools.search_api_url = search_api_url
             self.tools.enable_web_search = True
+        search_api_key = os.getenv("SEARCH_API_KEY") or os.getenv("SEARCHXNG_API_KEY")
+        if search_api_key:
+            self.tools.search_api_key = search_api_key
 
         # 语言配置
         lang = os.getenv("AACODE_LANG")

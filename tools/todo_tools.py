@@ -3,9 +3,10 @@
 """
 To-Do List管理工具
 为Agent提供管理待办清单的能力
+支持按 session_id 隔离多个会话
 """
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Callable
 from pathlib import Path
 import asyncio
 
@@ -13,9 +14,19 @@ import asyncio
 class TodoTools:
     """To-Do List工具类"""
 
-    def __init__(self, project_path: Path, safety_guard: Any = None):
+    def __init__(self, project_path: Path, safety_guard: Any = None,
+                 get_session_id: Optional[Callable[[], Optional[str]]] = None):
         self.project_path = project_path
         self.safety_guard = safety_guard
+        self._get_session_id = get_session_id
+
+    def _session_id(self) -> Optional[str]:
+        if self._get_session_id:
+            try:
+                return self._get_session_id()
+            except Exception:
+                pass
+        return None
 
     async def add_todo_item(
         self,
@@ -26,23 +37,6 @@ class TodoTools:
         task_id: Optional[str] = None,
         **kwargs,
     ) -> Dict[str, Any]:
-        """
-        添加Todo item(兼容多种参数格式)
-
-        Args:
-            description: Todo item描述(优先使 with )
-            item: Todo item描述(兼容旧格式)
-            title: Todo item标题(兼容旧格式)
-            priority: 优先级 (high/medium/low)
-            category: 分类
-            task_id: 任务ID(可选, with 于关联)
-
-        注意:**kwargs  with 于接收并忽略模型可能传入的额外参数
-
-        Returns:
-            操作结果
-        """
-        # 兼容多种参数格式
         title = kwargs.get("title")
         item_desc = description or item or title
         if not item_desc:
@@ -54,26 +48,27 @@ class TodoTools:
             from ..utils.todo_manager import get_todo_manager
 
             todo_manager = get_todo_manager(self.project_path)
+            session_id = self._session_id()
 
-            # 如果没有活动的待办清单,尝试创建默认的
-            if (
-                todo_manager.current_todo_file is None
-                or not todo_manager.current_todo_file.exists()
-            ):
-                # 尝试Get 最近的Todo files
+            if session_id:
+                todo_file = todo_manager._resolve_todo_file(session_id)
+            else:
+                todo_file = todo_manager.current_todo_file
+
+            if todo_file is None or not todo_file.exists():
                 files = await todo_manager.list_todo_files()
                 if files:
-                    # 使 with 最新的Todo files
                     latest_file = todo_manager.todo_dir / files[0]["filename"]
                     todo_manager.current_todo_file = latest_file
                 else:
-                    # 创建默认待办清单
-                    await todo_manager.create_todo_list("Default Task", "Default Project")
+                    await todo_manager.create_todo_list("Default Task", "Default Project",
+                                                        session_id=session_id)
 
-            success = await todo_manager.add_todo_item(item_desc, priority, category)
+            success = await todo_manager.add_todo_item(item_desc, priority, category,
+                                                       session_id=session_id)
 
             if success:
-                todo_id_val = success  # add_todo_item now returns todo_id string or None
+                todo_id_val = success
                 result = {
                     "success": True,
                     "todo_id": todo_id_val,
@@ -96,22 +91,9 @@ class TodoTools:
     async def mark_todo_completed(
         self, item_pattern: str = None, todo_id: str = None, **kwargs
     ) -> Dict[str, Any]:
-        """
-        标记Todo item为完成
-
-        Args:
-            item_pattern: Todo item匹配模式（文本）
-            todo_id: Todo itemID（如 "t1"），由 add_todo_item 返回，优先使 with 
-            **kwargs: 兼容模型常 with 参数名（title/item/name/task/todo）
-
-        Returns:
-            操作结果
-        """
-        # 从 kwargs 提取 todo_id（兼容模型可能 with 的参数名）
         if not todo_id:
             todo_id = kwargs.get("todo_id") or kwargs.get("id")
 
-        # 兼容多种参数名Get  item_pattern
         if not item_pattern:
             for key in ("title", "item", "name", "task", "todo", "description"):
                 val = kwargs.get(key)
@@ -129,9 +111,10 @@ class TodoTools:
             from ..utils.todo_manager import get_todo_manager
 
             todo_manager = get_todo_manager(self.project_path)
+            session_id = self._session_id()
 
             success = await todo_manager.mark_todo_completed(
-                item_pattern=item_pattern or "", todo_id=todo_id
+                item_pattern=item_pattern or "", todo_id=todo_id, session_id=session_id
             )
 
             if success:
@@ -159,24 +142,14 @@ class TodoTools:
     async def update_todo_item(
         self, old_pattern: str, new_item: str, **kwargs
     ) -> Dict[str, Any]:
-        """
-        更新Todo item
-
-        Args:
-            old_pattern: 原Todo item匹配模式
-            new_item: 新Todo item描述
-
-        注意:**kwargs  with 于接收并忽略模型可能传入的额外参数
-
-        Returns:
-            操作结果
-        """
         try:
             from ..utils.todo_manager import get_todo_manager
 
             todo_manager = get_todo_manager(self.project_path)
+            session_id = self._session_id()
 
-            success = await todo_manager.update_todo_item(old_pattern, new_item)
+            success = await todo_manager.update_todo_item(old_pattern, new_item,
+                                                          session_id=session_id)
 
             if success:
                 return {
@@ -195,20 +168,13 @@ class TodoTools:
             return {"success": False, "error": f"Error updating todo item: {str(e)}"}
 
     async def get_todo_summary(self, **kwargs) -> Dict[str, Any]:
-        """
-        Get 待办清单摘要
-
-        注意:**kwargs  with 于接收并忽略模型可能传入的额外参数
-
-        Returns:
-            摘要信息
-        """
         try:
             from ..utils.todo_manager import get_todo_manager
 
             todo_manager = get_todo_manager(self.project_path)
+            session_id = self._session_id()
 
-            summary = await todo_manager.get_todo_summary()
+            summary = await todo_manager.get_todo_summary(session_id=session_id)
 
             return {"success": "error" not in summary, **summary}
 
@@ -216,12 +182,6 @@ class TodoTools:
             return {"success": False, "error": f"Error getting todo summary: {str(e)}"}
 
     async def list_todo_files(self) -> Dict[str, Any]:
-        """
-        列出所有Todo files
-
-        Returns:
-            Todo files列表
-        """
         try:
             from ..utils.todo_manager import get_todo_manager
 
@@ -237,14 +197,6 @@ class TodoTools:
     async def add_execution_record(
         self, record: str = None, description: str = None, **kwargs
     ) -> Dict[str, Any]:
-        """
-        添加execute记录（已废弃，过程日志由 .aacode/logs/ 承担）
-
-        保留方法签名以向后兼容，静默返回成功。
-
-        Returns:
-            操作结果
-        """
         return {
             "success": True,
             "message": "Execution records have been merged into the log system",

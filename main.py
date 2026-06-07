@@ -86,6 +86,7 @@ class AICoder:
         self.safety_guard = SafetyGuard(
             self.target_project,
             dangerous_command_action=settings.safety.dangerous_command_action,
+            restrict_to_project=settings.safety.restrict_to_project,
         )
         # 上下文管理器使 with aacode工作目录（存放日志等）
         self.context_manager = ContextManager(self.project_path)

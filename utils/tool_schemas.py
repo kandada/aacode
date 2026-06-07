@@ -219,7 +219,12 @@ Use __list__ to see available skills first, then __info__ to get parameter detai
 
 SEARCH_WEB_SCHEMA = ToolSchema(
     name="search_web",
-    description="Search for information on the web. Use to find latest technical documentation, solutions, etc.",
+    description=(
+        "Search the web. Supports multiple search backends auto-detected by URL: "
+        "SearXNG (self-hosted, no API key), Brave Search, Google CSE, Bing, SerpAPI. "
+        "If all configured backends fail, falls back to scraping Bing/Sogou HTML results. "
+        "Use timeout parameter to control how long to wait (default 8s, increase for slow networks)."
+    ),
     parameters=[
         ToolParameter(
             name="query",
@@ -237,6 +242,15 @@ SEARCH_WEB_SCHEMA = ToolSchema(
             description="Maximum number of results to return",
             example=10,
             aliases=["limit", "count", "num", "num_results"],
+        ),
+        ToolParameter(
+            name="timeout",
+            type=int,
+            required=False,
+            default=8,
+            description="Timeout in seconds for the search request (default: 8)",
+            example=15,
+            aliases=["timeout_seconds", "time_limit"],
         ),
     ],
     examples=[

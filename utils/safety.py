@@ -27,11 +27,13 @@ class SafetyGuard:
         project_path: Path,
         interactive: bool = True,
         dangerous_command_action: str = "log",
+        restrict_to_project: bool = True,
     ):
         self.project_path = project_path
         self.project_root = str(project_path)
         self.interactive = interactive  # 是否启用交互式确认
         self.dangerous_command_action = dangerous_command_action  # reject, ask, log
+        self.restrict_to_project = restrict_to_project
 
         # 危险命令模式（注意：rm -rf 已移到特殊检查中，允许在项目目录内使用）
         self.dangerous_patterns = [
@@ -39,7 +41,7 @@ class SafetyGuard:
             # (r'rm\s+(-rf|-r|-f)\s+', '递归删除文件'),  # 移除，改为特殊检查
             (r"format\s+", "Disk formatting"),
             (r"\bdd\s+", "Disk copy/erase"),
-            (r"mkfs\s+", "Create filesystem"),
+            (r"\bmkfs", "Create filesystem"),
             # 系统危险操作
             (r"shutdown\s+", "Shutdown system"),
             (r"halt\s+", "Halt system"),
@@ -147,16 +149,35 @@ class SafetyGuard:
             "launchctl",  # macOS 服务管理
             "osascript",  # macOS AppleScript
             "xcrun",  # Xcode 工具
+            "xcodebuild",  # Xcode 构建
+            "xcode-select",  # Xcode 命令行工具选择
+            "simctl",  # iOS 模拟器控制
+            "codesign",  # 代码签名
+            "security",  # macOS 钥匙串/安全
+            "pbcopy",  # 剪贴板复制
+            "pbpaste",  # 剪贴板粘贴
+            "screencapture",  # 屏幕截图
+            "say",  # 文字转语音
             "diskutil",  # 磁盘信息
             "mdfind",  # Spotlight 搜索
+            "mdls",  # Spotlight 元数据列表
+            "mdutil",  # Spotlight 管理
             "sips",  # 图片处理
             "plutil",  # plist 处理
+            "qlmanage",  # Quick Look 管理
+            "textutil",  # 文档转换
+            "softwareupdate",  # 系统软件更新
+            "system_profiler",  # 系统信息
+            "networksetup",  # 网络设置
+            "scutil",  # 系统配置
+            "pkgutil",  # 安装包管理
+            "installer",  # macOS 安装器
+            "pluginkit",  # 插件管理
             "dd",
             "caffeinate",  # 阻止睡眠
             "pmset",  # 电源管理
             "hdiutil",  # 磁盘映像
             "xattr",  # 扩展属性
-            "textutil",  # 文档转换
             "logger",  # 系统日志
             "hostname",
             "systeminfo",
@@ -206,6 +227,62 @@ class SafetyGuard:
             "subst",
             "pushd",
             "popd",
+            # ── Windows 额外常用命令/工具 ──
+            "explorer",  # 资源管理器
+            "notepad",  # 记事本
+            "mspaint",  # 画图
+            "write",  # 写字板
+            "calc",  # 计算器
+            "winver",  # Windows 版本
+            "control",  # 控制面板
+            "mmc",  # 管理控制台
+            "devmgmt",  # 设备管理器 (mmc)
+            "diskmgmt",  # 磁盘管理 (mmc)
+            "eventvwr",  # 事件查看器 (mmc)
+            "perfmon",  # 性能监视器 (mmc)
+            "services",  # 服务 (mmc)
+            "taskschd",  # 任务计划程序 (mmc)
+            "gpedit",  # 组策略编辑器 (mmc)
+            "regedit",  # 注册表编辑器
+            "msconfig",  # 系统配置
+            "dxdiag",  # DirectX 诊断
+            "mstsc",  # 远程桌面
+            "appwiz",  # 程序和功能 (cpl)
+            "sysdm",  # 系统属性 (cpl)
+            "desk",  # 显示设置 (cpl)
+            "timedate",  # 日期和时间 (cpl)
+            "main",  # 鼠标属性 (cpl)
+            "powercfg",  # 电源配置
+            "diskpart",  # 磁盘分区 (危险操作已在 dangerous_patterns 中检查)
+            "bcdedit",  # 启动配置
+            "driverquery",  # 驱动查询
+            "getmac",  # MAC 地址
+            "route",  # 路由表
+            "arp",  # ARP 表
+            "nbtstat",  # NetBIOS
+            "sfc",  # 系统文件检查器 (只读)
+            "dism",  # 部署映像服务
+            "chkdsk",  # 磁盘检查 (只读)
+            "defrag",  # 磁盘碎片整理
+            "recover",  # 文件恢复
+            "logoff",  # 注销
+            "tscon",  # 终端服务连接
+            "tsdiscon",  # 终端服务断开
+            "qwinsta",  # 查询会话
+            "quser",  # 查询用户
+            "msg",  # 发送消息
+            "wusa",  # Windows Update 独立安装器
+            "gpupdate",  # 组策略更新
+            "gpresult",  # 组策略结果
+            "takeown",  # 获取所有权
+            "runas",  # 以其他用户身份运行
+            "icacls",  # 权限控制
+            "msiexec",  # Windows Installer
+            "winget",  # Windows 包管理器
+            "wsl",  # Windows Subsystem for Linux
+            "wslpath",  # WSL 路径转换
+            "ubuntu",  # WSL Ubuntu
+            "bash",  # Git Bash / WSL bash
             # ── Python 生态 ──
             "python",
             "python3",
@@ -283,6 +360,9 @@ class SafetyGuard:
             "git-flow",
             "husky",
             "gh",  # GitHub CLI
+            "glab",  # GitLab CLI
+            "hub",  # GitHub CLI (legacy)
+            "act",  # GitHub Actions 本地运行器
             # ── 网络工具 ──
             "curl",
             "wget",
@@ -476,6 +556,28 @@ class SafetyGuard:
             "typeset",
             "local",
             "let",
+            # Shell 流程控制关键字（续：闭合/中间关键字）
+            "done",
+            "esac",
+            "fi",
+            "then",
+            "else",
+            "elif",
+            "do",
+            "in",
+            # Shell 其他内置命令
+            "times",
+            "builtin",
+            "caller",
+            "complete",
+            "compgen",
+            "compopt",
+            "dirs",
+            "logout",
+            "mapfile",
+            "readarray",
+            "suspend",
+            "hash",
             # ── 压缩工具 ──
             "tar",
             "gzip",
@@ -505,6 +607,8 @@ class SafetyGuard:
             "yq",
             "xmlstarlet",
             "csvkit",
+            "miller",  # CSV/JSON 数据处理
+            "mlr",  # miller 的别名
             "pandoc",
             "printf",
             "xargs",
@@ -636,6 +740,9 @@ class SafetyGuard:
             "gifsicle",
             "svgo",
             "inkscape",
+            "dot",  # Graphviz 图形渲染
+            "graphviz",  # Graphviz
+            "sox",  # 音频处理
             # ── 其他常用工具 ──
             "date",
             "cal",
@@ -724,6 +831,8 @@ class SafetyGuard:
 
     def is_safe_path(self, path: Path) -> bool:
         """检查路径是否安全（放宽限制，允许合理操作）"""
+        if not self.restrict_to_project:
+            return True
         try:
             # 获取路径字符串
             path_str = str(path)
@@ -956,6 +1065,97 @@ class SafetyGuard:
         result.update(kwargs)
         return result
 
+    def _split_pipeline(self, parts: List[str]) -> List[List[str]]:
+        """将 token 列表按管道/分隔符拆分为多个命令段
+
+        分隔符: |, &&, ||, ;
+        每个段是一个独立的命令，可以单独检查安全性。
+        不拆分 heredoc (<<) 内容中的 | 字符。
+        """
+        separators = {"|", "&&", "||", ";"}
+        segments = []
+        current = []
+
+        heredoc_stack = []  # 栈：跟踪嵌套的 heredoc 结束标记
+
+        i = 0
+        while i < len(parts):
+            part = parts[i]
+
+            # 检测 heredoc 开始: << DELIM
+            if part == "<<" and i + 1 < len(parts):
+                delim_token = parts[i + 1]
+                delim_raw = delim_token
+                if (delim_raw.startswith("'") and delim_raw.endswith("'")) or \
+                   (delim_raw.startswith('"') and delim_raw.endswith('"')):
+                    delim_raw = delim_raw[1:-1]
+                heredoc_stack.append(delim_raw)
+                current.append(part)
+                current.append(delim_token)
+                i += 2
+                continue
+
+            # 检测 heredoc 结束：匹配最内层结束标记
+            if heredoc_stack and part == heredoc_stack[-1]:
+                heredoc_stack.pop()
+                current.append(part)
+                i += 1
+                continue
+
+            # 管道拆分（仅在非 heredoc 内时）
+            if not heredoc_stack and part in separators:
+                if current:
+                    segments.append(current)
+                    current = []
+            else:
+                current.append(part)
+
+            i += 1
+
+        if current:
+            segments.append(current)
+        return segments
+
+    def _merge_line_continuations(self, command: str) -> str:
+        """合并 shell 行续接符 \\，将多行物理行合并为逻辑行
+
+        shell 中行尾的 \\ 表示下一行是本行的续接。
+        此方法在 shlex 解析前将续接行合并，确保参数被正确识别。
+
+        Args:
+            command: 原始命令字符串（可能含多行和 \\ 续接符）
+
+        Returns:
+            合并续接行后的命令字符串
+        """
+        lines = command.split('\n')
+        result = []
+        i = 0
+        while i < len(lines):
+            line = lines[i].rstrip()
+            trailing_bs = len(line) - len(line.rstrip('\\'))
+            if trailing_bs % 2 == 1:
+                # 奇数个结尾反斜杠 → 最后一个 \\ 是续行符（转义了换行）
+                parts = [line[:-1].rstrip()]
+                i += 1
+                while i < len(lines):
+                    next_line = lines[i].rstrip()
+                    trailing_bs2 = len(next_line) - len(next_line.rstrip('\\'))
+                    if trailing_bs2 % 2 == 1:
+                        # 下一行也以续行符结尾，去掉 \\ 后继续
+                        parts.append(next_line[:-1].strip())
+                        i += 1
+                    else:
+                        # 续行结束
+                        parts.append(next_line.strip())
+                        i += 1
+                        break
+                result.append(' '.join(parts))
+            else:
+                result.append(line)
+                i += 1
+        return '\n'.join(result)
+
     def _assess_risk_level(
         self, cmd_name: str, command: str, parts: List[str]
     ) -> Tuple[str, str]:
@@ -977,6 +1177,7 @@ class SafetyGuard:
         shell_keywords = {
             "for", "if", "while", "until", "case", "select", "function",
             "[", "[[", "declare", "typeset", "local", "let",
+            "done", "esac", "fi", "then", "else", "elif", "do", "in",
         }
         if cmd_name in shell_keywords:
             return self.RISK_SAFE, "Shell keyword/control flow"
@@ -1045,21 +1246,33 @@ class SafetyGuard:
         command = command.strip()
 
         # 剥离前导注释行（# 开头的行在 shell 中是注释，不应作为命令检查）
+        # 只剥离命令开头的连续注释行，保留命令中间（如 -c "..." 内联脚本中）的注释行
         lines = command.split('\n')
-        non_comment_lines = [l for l in lines if not l.strip().startswith('#')]
-        if non_comment_lines:
-            command = '\n'.join(non_comment_lines).strip()
+        first_non_comment = 0
+        for i, l in enumerate(lines):
+            stripped = l.strip()
+            if stripped and not stripped.startswith('#'):
+                first_non_comment = i
+                break
         else:
-            return self._build_result(
-                allowed=True, reason="Command is only comments",
-                risk_level=self.RISK_SAFE,
-            )
+            if any(l.strip().startswith('#') for l in lines):
+                return self._build_result(
+                    allowed=True, reason="Command is only comments",
+                    risk_level=self.RISK_SAFE,
+                )
+            # All lines are empty/whitespace – fall through to empty check below
+        if first_non_comment > 0:
+            command = '\n'.join(lines[first_non_comment:]).strip()
 
         # 空命令
         if not command:
             return self._build_result(
                 allowed=False, reason="Empty command", risk_level=self.RISK_DANGEROUS
             )
+
+        # 合并 \ 行续接符（shell line continuation）
+        # 将结尾带 \ 的行与下一行合并，方便后续 shlex 正确解析参数
+        command = self._merge_line_continuations(command)
 
         # 检查危险模式
         for pattern, description in self.dangerous_patterns:
@@ -1120,25 +1333,85 @@ class SafetyGuard:
                     allowed=False, reason="Unable to parse command", risk_level=self.RISK_DANGEROUS
                 )
 
+            # 拆分管道/分隔符，每个段独立检查
+            segments = self._split_pipeline(parts)
+            if not segments:
+                return self._build_result(
+                    allowed=False, reason="No valid command segments", risk_level=self.RISK_DANGEROUS
+                )
+
+            if len(segments) > 1:
+                final_risk = self.RISK_SAFE
+                for segment_parts in segments:
+                    segment_cmd = " ".join(segment_parts)
+                    result = self.check_command(segment_cmd, ask_confirmation)
+                    if not result["allowed"]:
+                        return result
+                    seg_risk = result.get("risk_level", self.RISK_SAFE)
+                    if seg_risk == self.RISK_DANGEROUS:
+                        final_risk = self.RISK_DANGEROUS
+                    elif seg_risk == self.RISK_WARNING and final_risk != self.RISK_DANGEROUS:
+                        final_risk = self.RISK_WARNING
+                return self._build_result(
+                    allowed=True, reason="All pipeline segments passed", risk_level=final_risk
+                )
+
             cmd_path = parts[0]
 
             # 处理环境变量赋值模式: VAR=value command
-            # shlex 会将 VAR=value 解析为独立 token，需要跳过赋值找到实际命令
+            # shlex 会将 VAR=value 和 VAR=$(cmd) 解析为独立 token，需要智能跳过
+            # VAR=$(cmd args) 中 shlex 会把 $() 内的参数也拆成 token，
+            # 需提取 $(cmd) 中的真实命令名并跳过其参数 token
+            # 同时处理 VAR=$((expr)) 算术展开模式
             actual_cmd_index = 0
             parts_len = len(parts)
+            subshell_command = None  # 从 $(cmd) 或 `cmd` 中提取的命令名
+            has_shell_expansion = False  # 赋值 token 包含 $(...) / $((...)) / 反引号展开
+
             while actual_cmd_index < parts_len and "=" in parts[actual_cmd_index]:
+                token = parts[actual_cmd_index]
+                if not subshell_command:
+                    m = re.search(r'\$\((\w+)', token) or re.search(r'`(\w+)', token)
+                    if m:
+                        subshell_command = m.group(1)
+                if not has_shell_expansion and ('$(' in token or '`' in token):
+                    has_shell_expansion = True
                 actual_cmd_index += 1
+
             if actual_cmd_index > 0:
-                if actual_cmd_index >= parts_len:
+                if subshell_command or has_shell_expansion:
+                    # VAR=$(cmd args) / VAR=$((expr)) 模式：跳过展开内的参数 token
+                    while actual_cmd_index < parts_len:
+                        t = parts[actual_cmd_index]
+                        actual_cmd_index += 1
+                        if ')' in t or '`' in t:
+                            break
+                    if actual_cmd_index >= parts_len:
+                        if subshell_command:
+                            # $() 内是唯一命令，使用从替换中提取的命令名
+                            cmd_path = subshell_command
+                        else:
+                            # $((...)) 算术展开或空 $()，纯变量赋值，放行
+                            return self._build_result(
+                                allowed=True,
+                                reason="Variable assignment with shell expansion",
+                                risk_level=self.RISK_SAFE,
+                            )
+                    else:
+                        # 展开后还有命令（如 export VAR=$(cmd); actual_cmd）
+                        cmd_path = parts[actual_cmd_index]
+                        parts = parts[actual_cmd_index:]
+                elif actual_cmd_index >= parts_len:
                     # 纯变量赋值（如 VAR=value），无害，放行
                     return self._build_result(
                         allowed=True,
                         reason="Environment variable assignment only",
                         risk_level=self.RISK_SAFE,
                     )
-                # 跳过赋值 token，使用后续 token 作为实际命令
-                cmd_path = parts[actual_cmd_index]
-                parts = parts[actual_cmd_index:]
+                else:
+                    # 跳过赋值 token，使用后续 token 作为实际命令
+                    cmd_path = parts[actual_cmd_index]
+                    parts = parts[actual_cmd_index:]
 
             # 处理命令取反模式: ! command
             if cmd_path == "!":
@@ -1191,6 +1464,7 @@ class SafetyGuard:
             shell_keywords = {
                 "for", "if", "while", "until", "case", "select", "function",
                 "[", "[[", "declare", "typeset", "local", "let",
+                "done", "esac", "fi", "then", "else", "elif", "do", "in",
             }
             if cmd_name in shell_keywords:
                 return self._build_result(
@@ -1239,28 +1513,29 @@ class SafetyGuard:
                                 "suggestion": "Please explicitly specify the file or directory to delete",
                             }
 
-                        # 检查是否尝试删除项目目录外的文件
-                        try:
-                            # 解析目标路径
-                            if target_path.startswith("/"):
-                                # 绝对路径
-                                if not target_path.startswith(self.project_root):
-                                    dangerous_targets.append(target_path)
-                            else:
-                                # 相对路径，检查是否包含路径遍历
-                                if ".." in target_path:
-                                    # 解析相对路径
-                                    resolved_path = (Path.cwd() / target_path).resolve()
-                                    project_root = Path(self.project_root).resolve()
-                                    # 检查是否在项目目录内
-                                    try:
-                                        resolved_path.relative_to(project_root)
-                                    except ValueError:
-                                        # 不在项目目录内
+                        # 检查是否尝试删除项目目录外的文件（仅在严格模式下）
+                        if self.restrict_to_project:
+                            try:
+                                # 解析目标路径
+                                if target_path.startswith("/"):
+                                    # 绝对路径
+                                    if not target_path.startswith(self.project_root):
                                         dangerous_targets.append(target_path)
-                        except Exception:
-                            # 路径解析失败，保守起见视为危险
-                            dangerous_targets.append(target_path)
+                                else:
+                                    # 相对路径，检查是否包含路径遍历
+                                    if ".." in target_path:
+                                        # 解析相对路径
+                                        resolved_path = (Path.cwd() / target_path).resolve()
+                                        project_root = Path(self.project_root).resolve()
+                                        # 检查是否在项目目录内
+                                        try:
+                                            resolved_path.relative_to(project_root)
+                                        except ValueError:
+                                            # 不在项目目录内
+                                            dangerous_targets.append(target_path)
+                            except Exception:
+                                # 路径解析失败，保守起见视为危险
+                                dangerous_targets.append(target_path)
 
                 # 如果有危险选项
                 if has_dangerous_option:
@@ -1294,6 +1569,16 @@ class SafetyGuard:
 
             # 特殊检查：sudo命令（允许但需要确认）
             if cmd_name == "sudo":
+                if not self.restrict_to_project:
+                    # 宽松模式：允许任意 sudo 子命令
+                    if len(parts) > 1:
+                        if ask_confirmation and self.interactive:
+                            if not self._ask_user_confirmation(command, "sudo privilege operation"):
+                                return {"allowed": False, "reason": "User cancelled operation"}
+                            return {"allowed": True, "reason": "sudo operation (user confirmed)"}
+                        return {"allowed": True, "reason": "sudo operation (relaxed mode)"}
+                    return {"allowed": True, "reason": "sudo command (relaxed mode)"}
+
                 # 只允许特定的sudo命令
                 allowed_sudo_commands = {
                     "apt",
@@ -1344,44 +1629,56 @@ class SafetyGuard:
 
             # 特殊检查：chmod和chown命令（项目内允许，但需要确认）
             if cmd_name in ["chmod", "chown"]:
-                # 检查是否尝试修改系统文件权限
-                if len(parts) > 1:
-                    for part in parts[1:]:
-                        if part.startswith("/") and not part.startswith(
-                            self.project_root
-                        ):
-                            return {
-                                "allowed": False,
-                                    "reason": f"{cmd_name} command cannot modify file permissions outside project directory",
-                            }
-                        # 检查危险权限设置（如777）
-                        if cmd_name == "chmod" and "777" in part:
-                            if ask_confirmation and self.interactive:
-                                if not self._ask_user_confirmation(
-                                        command, "chmod 777 permissions too permissive, security risk"
-                                    ):
-                                    return {"allowed": False, "reason": "User cancelled operation"}
+                if self.restrict_to_project:
+                    # 严格模式：检查是否尝试修改系统文件权限
+                    if len(parts) > 1:
+                        for part in parts[1:]:
+                            if part.startswith("/") and not part.startswith(
+                                self.project_root
+                            ):
                                 return {
-                                    "allowed": True,
-                                    "reason": "chmod 777 operation (user confirmed)",
+                                    "allowed": False,
+                                        "reason": f"{cmd_name} command cannot modify file permissions outside project directory",
                                 }
-                            else:
-                                # 非交互模式，允许但警告
-                                return {
-                                    "allowed": True,
-                                    "reason": "chmod 777 operation (within project)",
-                                }
+                            # 检查危险权限设置（如777）
+                            if cmd_name == "chmod" and "777" in part:
+                                if ask_confirmation and self.interactive:
+                                    if not self._ask_user_confirmation(
+                                            command, "chmod 777 permissions too permissive, security risk"
+                                        ):
+                                        return {"allowed": False, "reason": "User cancelled operation"}
+                                    return {
+                                        "allowed": True,
+                                        "reason": "chmod 777 operation (user confirmed)",
+                                    }
+                                else:
+                                    return {
+                                        "allowed": True,
+                                        "reason": "chmod 777 operation (within project)",
+                                    }
 
-                # 项目内的权限修改，在交互模式下询问确认
-                if ask_confirmation and self.interactive:
-                    if not self._ask_user_confirmation(
-                        command, f"{cmd_name} permission modification"
-                    ):
-                        return {"allowed": False, "reason": "User cancelled operation"}
-                    return {"allowed": True, "reason": f"{cmd_name} operation (user confirmed)"}
+                    # 项目内的权限修改，在交互模式下询问确认
+                    if ask_confirmation and self.interactive:
+                        if not self._ask_user_confirmation(
+                            command, f"{cmd_name} permission modification"
+                        ):
+                            return {"allowed": False, "reason": "User cancelled operation"}
+                        return {"allowed": True, "reason": f"{cmd_name} operation (user confirmed)"}
+                    else:
+                        return {"allowed": True, "reason": f"{cmd_name} operation (within project)"}
                 else:
-                    # 非交互模式，直接允许（项目内）
-                    return {"allowed": True, "reason": f"{cmd_name} operation (within project)"}
+                    # 宽松模式：允许项目外路径，但 chmod 777 仍需确认
+                    if len(parts) > 1 and cmd_name == "chmod":
+                        for part in parts[1:]:
+                            if "777" in part:
+                                if ask_confirmation and self.interactive:
+                                    if not self._ask_user_confirmation(
+                                            command, "chmod 777 permissions too permissive, security risk"
+                                        ):
+                                        return {"allowed": False, "reason": "User cancelled operation"}
+                                    return {"allowed": True, "reason": "chmod 777 operation (user confirmed)"}
+                                return {"allowed": True, "reason": "chmod 777 operation (relaxed mode)"}
+                    return {"allowed": True, "reason": f"{cmd_name} operation (relaxed mode)"}
 
             # 特殊检查：pip/pip3命令（允许大部分操作）
             if cmd_name in ["pip", "pip3"]:
@@ -1414,7 +1711,7 @@ class SafetyGuard:
                 "echo", "printf", "true", "false", "yes", "seq", "expr", "bc", "dc",
                 "basename", "dirname", "realpath", "readlink", "pwd",
                 "cat", "wc", "sort", "uniq", "cut", "tr", "fold", "rev", "nl", "fmt",
-                "grep", "rg", "ag", "find",
+                "grep", "rg", "ag", "find", "sed", "awk",
                 "strings", "od", "hexdump", "xxd", "jq", "yq", "diff",
                 "cksum", "sum", "md5sum", "sha256sum", "shasum", "base64", "iconv",
                 "uname", "arch", "hostname", "uptime", "dmesg",
@@ -1422,13 +1719,35 @@ class SafetyGuard:
                 "id", "who", "w", "last", "groups",
                 "ls", "file", "stat", "du", "df", "ps", "top", "htop",
                 "head", "tail", "less", "more",
-                "which", "whereis", "date", "cal",
+                "which", "whereis", "date", "cal", "locate", "mlocate",
                 "man", "info", "tldr", "apropos", "whatis",
                 "logger", "tput", "stty",
                 # 解释器：脚本路径检查无实际安全意义，脚本本身可任意操作
                 "python", "python3", "node", "ruby", "java",
             }
-            if cmd_name not in output_only_commands:
+
+            # 子命令委托：元命令的子命令若是纯输出型，整个命令跳过路径检查
+            # 例如 git grep → grep 在 output_only，则 git grep 也视为纯输出
+            actual_cmd = cmd_name
+            if cmd_name not in output_only_commands and len(parts) > 1:
+                # 跳过前导全局标志找到子命令（如 git -C /path grep ...）
+                sub_idx = 1
+                while sub_idx < len(parts) and parts[sub_idx].startswith("-"):
+                    sub_idx += 1
+                    # 跳过短标志的值 (git -C /path ...)
+                    if (
+                        sub_idx > 1
+                        and sub_idx < len(parts)
+                        and len(parts[sub_idx - 1]) == 2
+                        and parts[sub_idx - 1][0] == "-"
+                    ):
+                        sub_idx += 1
+                if sub_idx < len(parts):
+                    sub_cmd = self._extract_command_name(parts[sub_idx])
+                    if sub_cmd in output_only_commands:
+                        actual_cmd = sub_cmd
+
+            if actual_cmd not in output_only_commands:
                 # 检查路径参数（使用新的is_safe_path方法）
                 # 对于awk, sed等命令，参数可能是正则表达式而非路径
                 regex_commands = {"awk", "sed", "grep", "rg", "ag", "find"}
@@ -1445,11 +1764,34 @@ class SafetyGuard:
                         if part.startswith("/") and len(part) <= 3 and part[1:].isalpha():
                             continue
 
-                        # 对于awk/sed/grep等命令，跳过正则表达式参数（以/开头且包含空格或特殊字符的是正则）
+                        # 对于awk/sed/grep等命令，跳过正则表达式参数
+                        # 条件1: 包含 { } (awk 的典型语法)
                         if (
                             cmd_name in regex_commands
                             and "/" in part
                             and ("{" in part or "'" in part or '"' in part)
+                        ):
+                            continue
+
+                        # 条件2: sed/awk 的地址/模式表达式 (/pattern/, //, /re/d 等)
+                        # 以 // 开头或包含 , 范围分隔符的斜杠参数是 sed 脚本而非路径
+                        if (
+                            cmd_name in {"sed", "awk"}
+                            and part.startswith("/")
+                            and ("," in part or part.count("/") >= 3)
+                        ):
+                            continue
+
+                        # 跳过解释器的内联代码参数（-c / -e 后的内容不是路径）
+                        if (
+                            i > 0
+                            and parts[i - 1] in {"-c", "-e"}
+                            and cmd_name
+                            in {
+                                "python", "python3", "node", "ruby",
+                                "perl", "php", "lua", "bash", "sh", "zsh",
+                                "sed",
+                            }
                         ):
                             continue
 
@@ -1590,6 +1932,8 @@ class SafetyGuard:
 
     def _check_shell_script(self, script: str) -> bool:
         """检查Shell脚本安全性"""
+        # 先合并 \ 续行符，确保续行的命令作为一个整体被检查
+        script = self._merge_line_continuations(script)
         lines = script.split("\n")
 
         for line in lines:
