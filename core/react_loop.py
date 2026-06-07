@@ -105,6 +105,26 @@ class AsyncReActLoop:
         self._compact_summary: Optional[str] = None
         self._compact_summary_msg_count: int = 0
 
+        # Stale loop detection: tracks fetch_url results per domain to detect
+        # when the model repeatedly hits pages that return no readable content
+        # (e.g. JS-rendered pages, redirect walls, CSS-only garbage).
+        #
+        # Design rationale:
+        # - We do NOT track "consecutive same tool" — run_shell is the universal
+        #   tool used for 80%+ of all operations (reading files, running tests,
+        #   git, etc.) and consecutive calls are normal productive workflow.
+        #   Tracking tool name alone produces massive false positives.
+        # - We ONLY detect fetch_url stale domains because the signal is clear:
+        #   3+ returns from the same domain with zero readable text means the
+        #   model really is wasting iterations and should switch to search_web.
+        #
+        # Performance: O(actions * unique_domains) per iteration, where both
+        # are bounded (actions ≤ ~5, unique_domains ≤ ~20). Negligible overhead.
+        self._stale_tracker: Dict[str, Any] = {
+            "fetch_url_by_domain": {},
+        }
+        self._stale_warnings_issued: set = set()
+
     async def run(
         self,
         initial_prompt: str,
@@ -112,21 +132,30 @@ class AsyncReActLoop:
         todo_manager: Optional[Any] = None,
         history_messages: Optional[List[Dict]] = None,
         on_new_messages: Optional[Callable[[List[Dict]], Awaitable[None]]] = None,
+        session_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         运 linesReAct循环
 
         Args:
-            initial_prompt: 初始提示
+            initial_prompt: 完整系统提示（调用方已组装好 todo/planning 等全部上下文）
             task_description: 任务描述
-            todo_manager: to-do-list管理器
+            todo_manager: to-do-list管理器（用于运行中错误时追加 todo 项，不影响初始 prompt）
             history_messages: 同一会话的历史对话消息（  for多轮任务上下文衔接）
+            session_id: 当前会话ID（用于多会话并发时的 todo 隔离）
 
         Returns:
             execute结果
         """
         # 清除上一轮的 last_messages，确保失败时不残留旧数据
         self.last_messages = None
+
+        # Reset stale loop detector for this run — each react_loop.run() call
+        # starts with a clean tracker (fresh fetch_url domain history).
+        self._stale_tracker = {
+            "fetch_url_by_domain": {},
+        }
+        self._stale_warnings_issued = set()
 
         # 开始日志记录
         if self.logger:
@@ -137,49 +166,22 @@ class AsyncReActLoop:
         # 初始上下文
         self.current_context = await self.context_manager.get_context()
 
-        # 构建初始消息，集成规划提示到系统prompt中
-        todo_section = ""
-        if todo_manager:
-            try:
-                todo_summary = await todo_manager.get_todo_summary()
-                if "error" not in todo_summary:
-                    todo_section = f"""
+        # initial_prompt 已由调用方（main_agent.execute）组装完整：
+        # SYSTEM_PROMPT + skills + working_dir + analysis + init_instructions + todo_section
+        # 此处仅追加静态的 Planning in Thought 指令（也适用于 sub_agent）
+        messages = [
+            {
+                "role": "system",
+                "content": f"""{initial_prompt}
 
-📋 Task Todo List
-For simple tasks like just answering a user question, there's no need to create or update a todo list. Check relevant files and analyze quickly before answering.
-For complex tasks, please use the todo task list:
-- Todo files: {todo_summary.get("todo_file", "Unknown")}
-- Total items: {todo_summary.get("total_todos", 0)} 
-- Completed: {todo_summary.get("completed_todos", 0)}
-- Pending: {todo_summary.get("pending_todos", 0)}
-- Completion rate: {todo_summary.get("completion_rate", 0):.1f}%
-
-Notes:
-1. add_todo_item will return a todo_id (e.g., t1, t2), please remember it
-2. When marking complete, prefer mark_todo_completed(todo_id="t1"), which is precise and reliable
-3. If new task steps are needed, add new Todo items
-4. If the task plan changes, update existing Todo items
-
-Example:
-add_todo_item(description="Implement authentication API") → returns todo_id: "t1"
-mark_todo_completed(todo_id="t1") → precisely marked complete
-
-"""
-            except Exception as e:
-                print(f"⚠️  Failed to get todo summarized: {e}")
-
-        system_prompt = f"""{initial_prompt}{todo_section}
-        
 Important - Planning in Thought:
 During each thought, naturally plan:
 - For complex tasks (involving applications, systems, projects, architecture, etc.), analyze requirements, check the environment, and formulate a plan in the first few thoughts
 - If the task contains keywords like "plan", "analyze", "check", "redesign", "strategy", "requirements", proactively plan in your thoughts
 - Keep thinking natural, treating planning as part of the thought process, not a separate task
 
-"""
-
-        messages = [
-            {"role": "system", "content": system_prompt},
+""",
+            },
         ]
 
         # ─── 多轮任务上下文衔接 ───────────────────────────────────
@@ -193,7 +195,7 @@ During each thought, naturally plan:
                 role = msg.get("role", "")
                 content = msg.get("content", "")
                 has_tool_info = msg.get("tool_calls") or msg.get("tool_call_id")
-                if role in ("user", "assistant", "tool") and (content or has_tool_info):
+                if role in ("user", "assistant", "tool", "system") and (content or has_tool_info):
                     if role == "tool":
                         messages.append({
                             "role": "tool",
@@ -227,8 +229,12 @@ During each thought, naturally plan:
             msg_count_before = len(messages)
 
             # 调 with 模型Get 思考（使用 round-aware 压缩视图）
+            # 同时缓存 compact view 和 token 数，供后续自适应截断复用，避免重复 split_into_rounds
             model_start = asyncio.get_event_loop().time()
-            effective_msgs, _ = self._build_compact_view(messages)
+            effective_msgs, _, compact_tokens = self._build_compact_view(messages)
+            self._cached_compact_view = effective_msgs
+            self._cached_compact_tokens = compact_tokens
+            self._cached_compact_msg_count = len(messages)
             response = await self.model_caller(effective_msgs)
             model_time = asyncio.get_event_loop().time() - model_start
 
@@ -328,9 +334,23 @@ During each thought, naturally plan:
             all_observations = []
             all_observations_for_display = []  #   for显示的简化版本
 
-            # 基于剩余上下文预算计算自适应截断阈值（使用压缩视图的 token 数）
-            effective_msgs, _ = self._build_compact_view(messages)
-            current_tokens = _util_estimate_tokens(self.encoding, effective_msgs)
+            # ─── Stale loop detection: warn model when stuck on unreadable fetch_url pages ───
+            # Injects a [SYSTEM WARNING] into the message context so the model sees it in
+            # the next API call. Each unique domain warning is issued at most once per run
+            # (tracked by _stale_warnings_issued). Does NOT track run_shell or other tools.
+            stale_warning = self._detect_stale_loop(actions)
+            if stale_warning:
+                print(f"\n⚠️  {stale_warning}")
+                messages.append({
+                    "role": "system",
+                    "content": f"[SYSTEM WARNING]: {stale_warning}",
+                })
+
+            # 基于剩余上下文预算计算自适应截断阈值（复用模型调用前的缓存）
+            if len(messages) == getattr(self, '_cached_compact_msg_count', -1):
+                current_tokens = self._cached_compact_tokens
+            else:
+                effective_msgs, _, current_tokens = self._build_compact_view(messages)
             total_budget = (
                 self.context_config.max_context_length
                 if self.context_config
@@ -439,7 +459,13 @@ During each thought, naturally plan:
 
                 # 🔥 新增：从错误中自动更新待办清单
                 if todo_manager:
-                    await self._update_todo_from_error(observation, todo_manager)
+                    await self._update_todo_from_error(observation, todo_manager, session_id)
+
+                # 死循环检测：记录 fetch_url 结果
+                if action_item.action == "fetch_url":
+                    url = (action_item.action_input or {}).get("url", "")
+                    if url:
+                        self._record_fetch_url_result(url, observation)
 
                 # Log tool call
                 if self.logger:
@@ -555,13 +581,8 @@ During each thought, naturally plan:
                     execution_time=asyncio.get_event_loop().time() - iteration_start,
                 )
 
-            # 更新上下文（使 with 完整observation）
-            await self.context_manager.update(observation)
-            self.current_context = await self.context_manager.get_compact_context()
-
             # 智能上下文缩减检查（基于传入模型的压缩视图 token 数，而非全量消息）
-            effective_msgs, was_compacted = self._build_compact_view(messages)
-            compact_view_tokens = _util_estimate_tokens(self.encoding, effective_msgs)
+            effective_msgs, was_compacted, compact_view_tokens = self._build_compact_view(messages)
             trigger_tokens = (
                 self.context_config.compact_trigger_tokens
                 if self.context_config
@@ -898,6 +919,34 @@ During each thought, naturally plan:
             else:
                 return f"📄 {path} ({lines} lines, {size} chars)\n```\n{preview}\n```"
 
+        # 特殊处理：fetch_url 结果摘要而非原始 HTML
+        if action == "fetch_url" and isinstance(result, dict) and result.get("success"):
+            url = result.get("url", "")
+            content_length = result.get("content_length", 0)
+            raw_length = result.get("raw_length", 0)
+            content_warning = result.get("content_warning")
+            content = result.get("content", "")
+
+            lines = []
+            lines.append(f"🌐 {url}")
+            if raw_length:
+                lines.append(f"Raw HTML: {raw_length} bytes, Cleaned text: {content_length} chars")
+            else:
+                lines.append(f"Content: {content_length} chars")
+
+            if content_warning:
+                lines.append(content_warning)
+
+            # 显示清洗后的文本前 500 字符作为预览
+            if content:
+                preview = content[:500]
+                if len(content) > 500:
+                    preview += f"\n... (total {content_length} chars)"
+                lines.append(f"\n── Preview ──\n{preview}")
+
+            lines.append("\n💡 Use run_shell to read the saved extract file for full content.")
+            return "\n".join(lines)
+
         # 其他Action：统一预览截断（仅影响终端显示，不影响 Agent 看到的内容）
         result_str = str(result)
         display_max = settings.output.display_preview_chars
@@ -905,6 +954,78 @@ During each thought, naturally plan:
             preview = result_str[:display_max]
             return f"{preview}...\n\n(Display truncated, {len(result_str)} chars total. Agent received full content)"
         return result_str
+
+    def _detect_stale_loop(self, actions: List[ActionItem]) -> Optional[str]:
+        """Detect when the model is stuck fetching unreadable content from the
+        same domain repeatedly.
+
+        Only tracks fetch_url calls. Rule: if the last 3 fetches to domain X
+        all returned no readable content (e.g. JS-only pages, redirect walls,
+        CSS garbage), warn the model to switch to search_web.
+
+        We intentionally do NOT track consecutive calls to other tools.
+        run_shell is the universal tool used for most operations (reading files,
+        running tests, git, etc.) and consecutive calls are normal workflow.
+
+        Returns a warning string to inject as [SYSTEM WARNING], or None.
+        """
+        for action_item in actions:
+            if action_item.action != "fetch_url":
+                continue
+
+            domain_tracker = self._stale_tracker.get("fetch_url_by_domain", {})
+            for domain, entries in domain_tracker.items():
+                if len(entries) < 3:
+                    continue
+                # Check if the 3 most recent fetches all returned no content
+                last_three = entries[-3:]
+                checks = [not r.get("has_content", True) for r in last_three]
+                if all(checks):
+                    warn_key = f"fetch_url_stale_{domain}"
+                    if warn_key not in self._stale_warnings_issued:
+                        self._stale_warnings_issued.add(warn_key)
+                        return (
+                            f"Last {len(entries)} fetch_url calls to '{domain}' returned unreadable content"
+                            " (page may be dynamically rendered or content was stripped)."
+                            " Try search_web for alternative sources, or proceed based on existing knowledge."
+                        )
+
+        return None
+
+    def _record_fetch_url_result(self, url: str, observation: Any):
+        """Record fetch_url result for stale-loop detection.
+
+        Called after every fetch_url action completes. Strips HTML tags from
+        the observation and checks if at least 200 chars of readable text remain.
+        Entries are capped at 5 per domain (FIFO) to bound memory.
+
+        Performance: urlparse is O(1); the regex strip is O(n) on the observation
+        text which is already bounded by the tool's content length limit.
+        """
+        from urllib.parse import urlparse
+
+        try:
+            domain = urlparse(url).netloc
+        except Exception:
+            domain = url
+
+        domain_tracker = self._stale_tracker["fetch_url_by_domain"]
+        if domain not in domain_tracker:
+            domain_tracker[domain] = []
+
+        obs_str = str(observation)
+        text_only = re.sub(r'<[^>]+>', ' ', obs_str)
+        text_only = re.sub(r'\s+', ' ', text_only).strip()
+        has_content = len(text_only) >= 200
+
+        domain_tracker[domain].append({
+            "url": url,
+            "has_content": has_content,
+        })
+
+        # Keep only last 5 entries per domain to bound memory
+        if len(domain_tracker[domain]) > 5:
+            domain_tracker[domain] = domain_tracker[domain][-5:]
 
     async def _execute_action_internal(self, action: str, action_input: Dict) -> str:
         """executeAction（内部方法，返回完整结果）"""
@@ -1127,7 +1248,7 @@ During each thought, naturally plan:
         完整性。
 
         Returns:
-            (view_messages, was_compacted): 压缩视图的消息列表, 是否实际进行了压缩
+            (view_messages, was_compacted, token_count): 压缩视图的消息列表, 是否压缩, token 数
         """
         protect_first = (
             self.context_config.compact_protect_first_rounds
@@ -1232,9 +1353,8 @@ During each thought, naturally plan:
         self._compact_summary_msg_count = len(messages)
 
         # 验证：使用缓存摘要构建压缩视图，确认 tool_calls 完整性
-        view, _ = self._build_compact_view(messages)
+        view, _, new_tokens = self._build_compact_view(messages)
         old_tokens = self._estimate_tokens(messages)
-        new_tokens = self._estimate_tokens(view)
 
         print(f"✅ Smart context compaction done: full messages kept intact ({len(messages)} messages) | Summary cached for compact view | Token: {old_tokens} → {new_tokens} (compact view: {(old_tokens - new_tokens) / max(old_tokens, 1) * 100:.1f}% reduction) | Protected first {protect_first_rounds} rounds | Kept last {keep_last_rounds} rounds | Summarized {len(middle_rounds)} rounds")
 
@@ -1779,7 +1899,7 @@ Please return the three-part summary in JSON format:"""
         """从思考中自动更新待办清单（已废弃，不再自动记录思考过程）"""
         pass
 
-    async def _update_todo_from_error(self, observation, todo_manager) -> None:
+    async def _update_todo_from_error(self, observation, todo_manager, session_id: Optional[str] = None) -> None:
         """从错误观察中自动添加修复任务到待办清单 - 优化版：更精确的错误检测"""
         try:
             if not todo_manager:
@@ -1903,7 +2023,7 @@ Please return the three-part summary in JSON format:"""
             if error_type != "Unknown error":
                 fix_task = f"{error_type}: {error_detail}"
                 await todo_manager.add_todo_item(
-                    item=fix_task, priority="high", category="Error Fix"
+                    item=fix_task, priority="high", category="Error Fix", session_id=session_id
                 )
 
                 # 不再打印"已自动添加Todo item"，因为 add_todo_item 已经打印了

@@ -926,7 +926,8 @@ class MainAgent(BaseAgent):
         atomic_tools = AtomicTools(project_path, safety_guard)
         code_tools = CodeTools(project_path, safety_guard)
         web_tools = WebTools(project_path, safety_guard)
-        todo_tools = TodoTools(project_path, safety_guard)
+        todo_tools = TodoTools(project_path, safety_guard,
+                                get_session_id=lambda: self.session_manager.current_session_id)
 
         # 保存web_tools引 with 以便后续清理
         self.web_tools = web_tools
@@ -1074,12 +1075,30 @@ class MainAgent(BaseAgent):
             new_msgs: 本轮新生成的消息列表（dict 格式，含 assistant/tool 角色）
         """
         try:
+            # 建立 call_id -> tool_name 映射，用于识别 fetch_url 的工具结果
+            call_id_to_name = {}
+            for msg in new_msgs:
+                if msg["role"] == "assistant":
+                    for tc in (msg.get("tool_calls") or []):
+                        func = tc.get("function", {})
+                        call_id_to_name[tc.get("id", "")] = func.get("name", "")
+
             for msg in new_msgs:
                 if msg["role"] not in ("assistant", "tool"):
                     continue
                 content = msg.get("content", "")
                 reasoning_content = msg.get("reasoning_content")
                 tool_calls = msg.get("tool_calls")
+
+                # fetch_url 结果持久化前清洗 CSS/JS 垃圾，减少 session 文件体积
+                if msg["role"] == "tool":
+                    tool_name = call_id_to_name.get(msg.get("tool_call_id", ""), "")
+                    if tool_name == "fetch_url" and content and "<html" in content.lower():
+                        try:
+                            content = type(self.web_tools)._clean_html(content)
+                        except Exception:
+                            pass
+
                 sm = SessionMessage(
                     role=msg["role"],
                     content=content,
@@ -1098,9 +1117,12 @@ class MainAgent(BaseAgent):
                 summary.total_messages = len(self.session_manager.current_messages)
                 summary.total_tokens = self.session_manager._get_total_tokens()
 
-            await self.session_manager._save_session()
-            self.session_manager._save_sessions_index()
-            await self.session_manager._save_current_session_id()
+            # 降低磁盘写入频率：每 5 轮迭代 + 首轮才写盘，最终保存由 _finalize_session_save 保证
+            self._save_batch_counter = getattr(self, '_save_batch_counter', 0) + 1
+            if self._save_batch_counter <= 1 or self._save_batch_counter % 5 == 0:
+                await self.session_manager._save_session()
+                self.session_manager._save_sessions_index()
+                await self.session_manager._save_current_session_id()
         except Exception as e:
             print(t("error.save_session", e=str(e)))
 
@@ -1143,6 +1165,7 @@ class MainAgent(BaseAgent):
         """
         print(t("agent.start_task", task=task))
         self.start_time = asyncio.get_event_loop().time()
+        self._save_batch_counter = 0
 
         # 如果已有当前会话，复 with ；否则创建新会话
         if self.session_manager.current_session_id:
@@ -1153,6 +1176,10 @@ class MainAgent(BaseAgent):
             print(t("agent.session_reuse", id=session_id))
         print(t("agent.session_hint", id=session_id))
 
+        # 将已创建的 todo 文件绑定到当前 session，实现会话级隔离
+        if todo_manager and todo_manager.current_todo_file:
+            todo_manager.set_session_todo(session_id, todo_manager.current_todo_file)
+
         # 更新系统提示，包含项目分析结果
         analysis_section = ""
         if project_analysis and "failed" not in project_analysis.lower():
@@ -1161,12 +1188,43 @@ class MainAgent(BaseAgent):
             )
             print(t("context.analysis_integrated"))
 
-        full_system_prompt = f"{self.system_prompt}{analysis_section}\n\nProject init instructions:\n{init_instructions}"
+        # 构建 task todo section，与系统提示合并为完整 prompt
+        todo_section = ""
+        if todo_manager:
+            try:
+                todo_summary = await todo_manager.get_todo_summary(session_id=session_id)
+                if "error" not in todo_summary:
+                    todo_section = f"""
+
+📋 Task Todo List
+For simple tasks like just answering a user question, there's no need to create or update a todo list. Check relevant files and analyze quickly before answering.
+For complex tasks, please use the todo task list:
+- Todo files: {todo_summary.get("todo_file", "Unknown")}
+- Total items: {todo_summary.get("total_todos", 0)} 
+- Completed: {todo_summary.get("completed_todos", 0)}
+- Pending: {todo_summary.get("pending_todos", 0)}
+- Completion rate: {todo_summary.get("completion_rate", 0):.1f}%
+
+Notes:
+1. add_todo_item will return a todo_id (e.g., t1, t2), please remember it
+2. When marking complete, prefer mark_todo_completed(todo_id="t1"), which is precise and reliable
+3. If new task steps are needed, add new Todo items
+4. If the task plan changes, update existing Todo items
+
+Example:
+add_todo_item(description="Implement authentication API") → returns todo_id: "t1"
+mark_todo_completed(todo_id="t1") → precisely marked complete
+
+"""
+            except Exception as e:
+                print(f"⚠️  Failed to get todo summarized: {e}")
+
+        full_system_prompt = f"""{self.system_prompt}{analysis_section}\n\nProject init instructions:\n{init_instructions}{todo_section}"""
         self.conversation_history[0]["content"] = full_system_prompt
-        # 同步完整的系统消息到 session_manager，确保 session JSON 记录完整
-        if self.session_manager.current_messages and self.session_manager.current_messages[0].role == "system":
-            self.session_manager.current_messages[0].content = full_system_prompt
-            self.session_manager.current_messages[0].tokens = self.session_manager._count_tokens(full_system_prompt)
+        # 不再将 system prompt 同步到 session_manager.current_messages。
+        # system prompt 完全由代码规则确定，无需持久化到 session JSON。
+        # 兼容性：旧版 session JSON 中 current_messages[0] 可能是占位 system，
+        # 由下方 get_messages(include_system=False) 过滤，不会传入 LLM。
 
         # 添加任务描述
         self.conversation_history.append(
@@ -1178,6 +1236,19 @@ class MainAgent(BaseAgent):
 
         # ─── 先获取历史消息（不含本轮 user 消息，避免传给 LLM 造成重复） ──
         history_messages = await self.session_manager.get_messages(include_system=False)
+
+        # ─── 会话恢复保护：检测上次会话是否中断在工具执行中途 ───
+        if history_messages and history_messages[-1].get("role") == "tool":
+            print("⚠️  Detected incomplete previous session (ended mid-tool-execution). Injecting recovery hint.")
+            recovery_hint = (
+                "[系统提示] 上一轮任务在工具执行后中断。"
+                " 请直接基于已有的工具执行结果和历史上下文继续，"
+                " 不要重复之前的工具调用，优先基于已有信息给出结论或完成任务。"
+            )
+            history_messages.append({
+                "role": "system",
+                "content": recovery_hint,
+            })
 
         # ─── 再保存 user 任务消息（在 react_loop 之前，确保取消也不会丢失） ──
         has_user_msg = (
@@ -1198,6 +1269,7 @@ class MainAgent(BaseAgent):
                 todo_manager=todo_manager,
                 history_messages=history_messages if history_messages else None,
                 on_new_messages=self._save_iteration_messages,
+                session_id=session_id,
             )
         except asyncio.CancelledError:
             _task_error = asyncio.CancelledError()
@@ -1217,6 +1289,10 @@ class MainAgent(BaseAgent):
             print(t("agent.react_loop_failed", e=str(e)))
             import traceback
             traceback.print_exc()
+            try:
+                await self._finalize_session_save()
+            except Exception:
+                pass
         finally:
             try:
                 if hasattr(self, "web_tools"):
@@ -1495,6 +1571,9 @@ class MainAgent(BaseAgent):
         try:
             success = await self.session_manager.delete_session(session_id)
             if success:
+                from ..utils.todo_manager import get_todo_manager
+                todo_mgr = get_todo_manager(self.project_path)
+                todo_mgr.remove_session_todo(session_id)
                 return {
                     "success": True,
                     "session_id": session_id,

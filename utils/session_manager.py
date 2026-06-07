@@ -317,19 +317,13 @@ class SessionManager:
         self.current_session_id = session_id
         self.current_messages = []
 
-        # 添加系统消息和任务
-        now_ts = datetime.now().isoformat(timespec='seconds')
-        system_msg = SessionMessage(
-            role="system",
-            content=f"You are an AI coding assistant. Please work as follows:\n1. First plan the task steps\n2. Execute and verify step by step\n3. Ensure code quality and maintainability",
-            timestamp=now_ts,
-            tokens=self._count_tokens(
-                f"You are an AI coding assistant. Please work as follows:\n1. First plan the task steps\n2. Execute and verify step by step\n3. Ensure code quality and maintainability"
-            ),
-        )
-
-        self.current_messages = [system_msg]
-        # 只有 task 非空时才添加 user 消息
+        # 不再创建占位 system 消息。
+        # 第一条 system prompt 完全由代码规则确定（SYSTEM_PROMPT + skills + working_dir
+        # + analysis + init_instructions + todo_section），无需持久化到 session JSON。
+        # 仅持久化 user / assistant / tool 消息，以及 LLM 生成的压缩摘要 system 消息。
+        #
+        # 兼容性：旧版 session JSON 中 current_messages[0] 可能是占位 system，
+        # 由 get_messages(include_system=False) 过滤，不影响 LLM 调用。
         if task and task.strip():
             user_msg = SessionMessage(
                 role="user",
@@ -440,6 +434,9 @@ class SessionManager:
 
         messages = []
         for msg in self.current_messages:
+            # include_system=False 是关键兼容机制：
+            # 1. 过滤旧版占位 system（不再创建，但旧数据可能残留）
+            # 2. 过滤 LLM 生成的压缩摘要 system（仅在需要完整上下文时 include_system=True）
             if not include_system and msg.role == "system":
                 continue
             entry = {"role": msg.role, "content": msg.content}
@@ -477,7 +474,8 @@ class SessionManager:
         if len(self.current_messages) <= 4:  # 保留系统消息和最少对话
             return
 
-        # 保留系统消息和最近的用户消息
+        # 保留 system 消息：包含 LLM 生成的压缩摘要（必须保留，不可复现），
+        # 以及旧版数据可能残留的占位 system（无害，由 get_messages(include_system=False) 过滤）
         system_msgs = [msg for msg in self.current_messages if msg.role == "system"]
         recent_msgs = self.current_messages[-3:]  # 保留最近3条消息
 
@@ -532,7 +530,15 @@ class SessionManager:
             print(t("session.save_error", e=str(e)))
 
     async def _load_session(self, session_id: str):
-        """加载指定会话（兼容旧版 collapsed text 格式和 structured_messages 双轨格式）"""
+        """加载指定会话（兼容旧版 collapsed text 格式和 structured_messages 双轨格式）
+
+        兼容性说明：
+        - 旧版 session JSON（2026-06-07 之前）的 current_messages[0] 是一条占位 system 消息
+          （"You are an AI coding assistant..."），新代码不再创建此消息。
+        - 加载旧数据时该消息会原样保留在 current_messages 中，不影响运行：
+          通过 get_messages(include_system=False) 过滤，不会传给 LLM；
+          通过 _compact_context 被归类为 system_msgs 保留但无实际影响。
+        """
         session_file = self.sessions_dir / f"{session_id}.json"
         if not session_file.exists():
             return False

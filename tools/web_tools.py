@@ -3,7 +3,8 @@ from __future__ import annotations
 # tools/web_tools.py
 """
 网络搜索工具实现
-只支持searXNG搜索引擎聚合器
+支持 searXNG / Brave Search / Google CSE / Bing / SerpAPI
+通过 URL 自动识别引擎类型，填入对应 URL 即可使用
 """
 
 import asyncio
@@ -20,21 +21,96 @@ import time
 from aacode.i18n import t
 
 
+def _detect_engine_type(url: str) -> str:
+    """通过 URL 自动识别搜索引擎类型"""
+    if not url:
+        return "searxng"
+    url_lower = url.lower()
+    if "brave.com" in url_lower:
+        return "brave"
+    if "googleapis.com/customsearch" in url_lower:
+        return "google_cse"
+    if "bing.microsoft.com" in url_lower:
+        return "bing"
+    if "serpapi.com" in url_lower:
+        return "serpapi"
+    return "searxng"
+
+
 class WebTools:
-    """网络搜索和Web操作工具（只支持searXNG）"""
+    """网络搜索和Web操作工具（searXNG / Brave / Google CSE / Bing / SerpAPI）"""
 
     def __init__(self, project_path: Path, safety_guard):
         self.project_path = project_path
         self.safety_guard = safety_guard
         self.session: Optional[aiohttp.ClientSession] = None
+
+        # settings.tools.search_api_url 已在 Settings.__init__ 中融合了
+        # "env 覆盖 YAML" 的结果，直接信任它。env var 仅作为 settings 不可用时的兜底。
+        env_url = os.getenv("SEARCHXNG_URL")
+        config_url = None
+        enable_web_search = True
+        generic_api_key = None
+        enable_fallback = True
+        try:
+            if __package__ in (None, ""):
+                from config import settings
+            else:
+                from ..config import settings
+            config_url = settings.tools.search_api_url
+            enable_web_search = settings.tools.enable_web_search
+            generic_api_key = settings.tools.search_api_key
+            enable_fallback = settings.tools.enable_fallback_scrape
+        except Exception:
+            pass
+
+        if config_url:
+            base_url = config_url.rstrip("/search")
+        elif env_url:
+            base_url = env_url.rstrip("/search")
+        else:
+            base_url = "http://localhost:8080"
+
+        enabled = bool(config_url or env_url) and enable_web_search
+
+        engine_type = _detect_engine_type(base_url)
+
+        def _api_key(env_name):
+            return os.getenv(env_name) or generic_api_key or ""
+
         self.search_engines = {
             "searxng": {
-                "url": os.getenv("SEARCHXNG_URL", "http://localhost:8080").rstrip(
-                    "/search"
-                ),
-                "enabled": bool(os.getenv("SEARCHXNG_URL")),
+                "url": base_url,
+                "enabled": enabled and engine_type == "searxng",
                 "description": "Self-hosted search engine aggregator (integrates Google, Bing, Baidu, Sogou, etc.)",
-            }
+            },
+            "brave": {
+                "url": base_url,
+                "enabled": enabled and engine_type == "brave",
+                "api_key": _api_key("BRAVE_API_KEY"),
+                "description": "Brave Search API (2000 queries/month free, independent index)",
+            },
+            "google_cse": {
+                "url": base_url,
+                "enabled": enabled and engine_type == "google_cse",
+                "api_key": _api_key("GOOGLE_API_KEY"),
+                "cx": os.getenv("GOOGLE_CSE_CX", ""),
+                "description": "Google Custom Search JSON API (100 queries/day free)",
+            },
+            "bing": {
+                "url": base_url,
+                "enabled": enabled and engine_type == "bing",
+                "api_key": _api_key("BING_API_KEY"),
+                "description": "Bing Web Search API (1000 queries/month free)",
+            },
+            "serpapi": {
+                "url": base_url,
+                "enabled": enabled and engine_type == "serpapi",
+                "api_key": _api_key("SERPAPI_API_KEY"),
+                "description": "SerpAPI search aggregator (supports Google, Bing, etc.)",
+            },
+            "_engine_type": engine_type,
+            "_enable_fallback": enable_fallback,
         }
         self.last_search_time: dict[str, float] = {}
 
@@ -80,6 +156,7 @@ class WebTools:
         engine: str = "auto",
         max_results: int = 10,
         safe_search: bool = True,
+        timeout: int = 8,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -90,11 +167,12 @@ class WebTools:
             engine: 搜索引擎 (只支持searxng或auto)
             max_results: 最大结果数
             safe_search: 是否启用安全搜索
+            timeout: 搜索超时时间(秒)，默认8秒
 
-        注意:**kwargs 用于接收并忽略模型可能传入的额外参数
+         注意:**kwargs 用于接收并忽略模型可能传入的额外参数
 
         Returns:
-            搜索结果
+             搜索结果
         """
         try:
             await self._ensure_session()
@@ -108,20 +186,17 @@ class WebTools:
                     "success": False,
                     "error": f"search engine {engine} unavailable",
                     "available_engines": [
-                        k for k, v in self.search_engines.items() if v.get("enabled")
+                        k for k, v in self.search_engines.items()
+                        if isinstance(v, dict) and v.get("enabled")
                     ],
                 }
 
-            # 速率限制检查
-            if not self._check_rate_limit(engine):
-                return {
-                    "success": False,
-                    "error": f"search engine {engine} rate limited, retry later",
-                }
+            # 速率限制 — 内部等待而非报错
+            await self._enforce_rate_limit(engine)
 
             # 执行搜索
             results = await self._search_with_fallback(
-                query, engine, max_results, safe_search
+                query, engine, max_results, safe_search, timeout
             )
 
             # 更新速率限制
@@ -190,94 +265,233 @@ class WebTools:
                         "error": f"unsupported content type: {content_type}",
                     }
 
-                content = await response.text(errors="ignore")
+                raw_content = await response.text(errors="ignore")
+                raw_length = len(raw_content)
 
-                # 限制内容长度
-                if len(content) > max_content_length:
-                    extracts = self.project_path / ".aacode" / "extracts"
-                    extracts.mkdir(parents=True, exist_ok=True)
-                    file_path = extracts / f"tool_content_{uuid.uuid4().hex[:8]}.txt"
-                    file_path.write_text(content, encoding="utf-8")
-                    suffix = f"\n\n[Full content saved to {file_path}. Use run_shell to Grep the file for what you need.]"
-                    content = content[:max_content_length] + suffix
+                # 保存原始完整内容到文件（供后续 grep 使用）
+                extracts = self.project_path / ".aacode" / "extracts"
+                extracts.mkdir(parents=True, exist_ok=True)
+                file_path = extracts / f"tool_content_{uuid.uuid4().hex[:8]}.txt"
+                file_path.write_text(raw_content, encoding="utf-8")
 
-                return {
+                # 检测 JS 重定向并自动跟随（Cloudflare / SPA 页面）
+                redirect_url = self._detect_js_redirect(raw_content, url)
+                if redirect_url:
+                    redirect_result = await self._follow_redirect(
+                        redirect_url, timeout, max_content_length
+                    )
+                    if redirect_result.get("success"):
+                        return redirect_result
+
+                # 清洗 HTML：去除 script/style/head 等垃圾，提取纯文本
+                cleaned = self._clean_html(raw_content)
+                cleaned_length = len(cleaned)
+
+                # 对清洗后的纯文本做截断
+                if cleaned_length > max_content_length:
+                    content = cleaned[:max_content_length]
+                    suffix = f"\n\n[Full cleaned text ({cleaned_length} chars) saved to {file_path}. Raw HTML ({raw_length} bytes) also saved. Use run_shell to read the file for what you need.]"
+                    content += suffix
+                else:
+                    content = cleaned
+
+                # 清洗后无有效文本时附加警告
+                content_warning = None
+                if cleaned_length < 50 and raw_length > 2000:
+                    content_warning = (
+                        "[WARNING: This page appears to be dynamically rendered (SPA) or heavily scripted. "
+                        f"Only {cleaned_length} chars of visible text extracted from {raw_length} bytes of HTML. "
+                        "Consider using search_web to find alternative sources.]"
+                    )
+
+                result = {
                     "success": True,
                     "url": url,
                     "status_code": response.status,
                     "content_type": content_type,
-                    "content_length": len(content),
+                    "content_length": cleaned_length,
+                    "raw_length": raw_length,
                     "content": content,
                 }
+                if content_warning:
+                    result["content_warning"] = content_warning
+                    result["content"] = content_warning + "\n\n" + content
+                return result
 
         except asyncio.TimeoutError:
             return {"success": False, "error": f"request timeout ({timeout}s)"}
         except Exception as e:
             return {"success": False, "error": f"Fetch web page failed: {str(e)}"}
 
+    @staticmethod
+    def _clean_html(html: str) -> str:
+        """清洗 HTML：去除 script/style/head 标签，提取可见纯文本。"""
+        import re
+        # 移除整段 <script>...</script>
+        html = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL | re.IGNORECASE)
+        # 移除整段 <style>...</style>
+        html = re.sub(r'<style[^>]*>.*?</style>', '', html, flags=re.DOTALL | re.IGNORECASE)
+        # 移除 <head>...</head>
+        html = re.sub(r'<head[^>]*>.*?</head>', '', html, flags=re.DOTALL | re.IGNORECASE)
+        # 移除所有剩余 HTML 标签
+        text = re.sub(r'<[^>]+>', ' ', html)
+        # 解码 HTML 实体
+        text = text.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
+        text = text.replace('&quot;', '"').replace('&#8211;', '–').replace('&#8212;', '—')
+        text = text.replace('&hellip;', '…').replace('&#8216;', "'").replace('&#8217;', "'")
+        # 合并空白
+        text = re.sub(r'\s+', ' ', text).strip()
+        return text
+
+    @staticmethod
+    def _detect_js_redirect(html: str, original_url: str) -> Optional[str]:
+        """检测 JS 重定向页面，返回重定向目标 URL 或 None。"""
+        import re
+        from urllib.parse import urljoin
+        # location.replace("...") / location.href("...")
+        m = re.search(r'location\.(?:replace|href)\s*\(\s*["\']([^"\']+)["\']', html)
+        if m:
+            return urljoin(original_url, m.group(1))
+        # location.href = "..."
+        m = re.search(r'location\.href\s*=\s*["\']([^"\']+)["\']', html)
+        if m:
+            return urljoin(original_url, m.group(1))
+        # <meta http-equiv="refresh">
+        m = re.search(r'<meta[^>]+http-equiv\s*=\s*["\']?refresh["\']?[^>]+content\s*=\s*["\']?\d+\s*;\s*url\s*=\s*([^\s"\'<>]+)', html, re.IGNORECASE)
+        if m:
+            return urljoin(original_url, m.group(1))
+        return None
+
+    async def _follow_redirect(
+        self,
+        redirect_url: str,
+        timeout: Optional[int],
+        max_content_length: int,
+    ) -> Dict[str, Any]:
+        """跟随 JS 重定向链，最多 5 跳。"""
+        import re
+        visited = set()
+        current_url = redirect_url
+        for _ in range(5):
+            if current_url in visited:
+                break
+            visited.add(current_url)
+            try:
+                await self._ensure_session()
+                session = self.session
+                assert session is not None
+                client_timeout = aiohttp.ClientTimeout(total=timeout or 30)
+                async with session.get(current_url, timeout=client_timeout) as resp:
+                    ct = resp.headers.get("content-type", "").lower()
+                    if not any(t in ct for t in ["text/html", "text/plain", "application/json"]):
+                        break
+                    raw = await resp.text(errors="ignore")
+                    cleaned = self._clean_html(raw)
+                    if len(cleaned) >= 200:
+                        return {
+                            "success": True,
+                            "url": resp.url.human_repr() if hasattr(resp.url, 'human_repr') else str(resp.url),
+                            "status_code": resp.status,
+                            "content_type": ct,
+                            "content_length": len(cleaned),
+                            "content": cleaned[:max_content_length],
+                        }
+                    next_url = self._detect_js_redirect(raw, current_url)
+                    if not next_url:
+                        return {
+                            "success": True,
+                            "url": resp.url.human_repr() if hasattr(resp.url, 'human_repr') else str(resp.url),
+                            "status_code": resp.status,
+                            "content_type": ct,
+                            "content_length": len(cleaned),
+                            "content": cleaned[:max_content_length],
+                        }
+                    current_url = next_url
+            except Exception:
+                break
+        return {"success": False, "error": f"JS redirect chain exhausted after {len(visited)} hops"}
+
     def _choose_best_engine(self) -> str:
         """选择最佳搜索引擎"""
-        # 只支持searxng
+        engine_type = self.search_engines.get("_engine_type", "searxng")
+        if engine_type in self.search_engines and self.search_engines[engine_type].get("enabled", False):
+            return engine_type
         if self.search_engines.get("searxng", {}).get("enabled", False):
             return "searxng"
-
-        # 如果没有可用的引擎，返回空字符串
         return ""
 
     async def _search_with_fallback(
-        self, query: str, engine: str, max_results: int, safe_search: bool
+        self, query: str, engine: str, max_results: int, safe_search: bool, timeout: int = 8
     ) -> Dict[str, Any]:
-        """搜索实现（只支持searxng）"""
-        # 只支持searxng
+        """搜索实现，根据引擎类型路由"""
         if engine == "auto":
-            engine = "searxng"
-
-        if engine != "searxng":
+            engine = self._choose_best_engine()
+        if not engine:
             return {
                 "success": False,
-                "error": f"unsupported engine: {engine}, only searxng supported",
+                "error": "no search engine available",
                 "query": query,
-                "suggestion": "Please configure SEARCHXNG_URL environment variable",
             }
 
-        # 检查searxng是否启用
-        if not self.search_engines.get("searxng", {}).get("enabled", False):
+        engine_entry = self.search_engines.get(engine, {})
+        if not engine_entry.get("enabled", False):
+            desc = engine_entry.get("description", engine)
             return {
                 "success": False,
-                "error": "searxng search engine not enabled",
+                "error": f"search engine {engine} not enabled",
                 "query": query,
-                "suggestion": "Please set SEARCHXNG_URL environment variable to point to your searXNG instance",
+                "suggestion": f"Engine: {desc}. "
+                "Please configure tools.search_api_url in aacode_config.yaml or set SEARCHXNG_URL environment variable",
             }
 
         try:
             print(f"🔍 Using search engine: {engine}")
-            result = await self._search_searxng(query, max_results, safe_search)
-            return result
+            search_methods = {
+                "searxng": self._search_searxng,
+                "brave": self._search_brave,
+                "google_cse": self._search_google_cse,
+                "bing": self._search_bing,
+                "serpapi": self._search_serpapi,
+            }
+            method = search_methods.get(engine)
+            if method:
+                result = await method(query, max_results, safe_search, timeout)
+                if result.get("success"):
+                    return result
+            else:
+                result = {
+                    "success": False,
+                    "error": f"unsupported engine: {engine}",
+                    "query": query,
+                }
 
+            fallback_result = await self._search_fallback_scrape(query, max_results, timeout)
+            if fallback_result.get("success"):
+                return fallback_result
+            return result
         except Exception as e:
             return {
                 "success": False,
-                "error": f"searxngSearch failed: {str(e)}",
+                "error": f"search failed: {str(e)}",
                 "query": query,
-                "suggestion": "Please check if the searXNG instance is running and network connection is normal",
             }
 
-    def _check_rate_limit(self, engine: str) -> bool:
-        """检查速率限制"""
+    async def _enforce_rate_limit(self, engine: str):
+        """速率限制 — 内部等待，对调用方透明"""
         last_time = self.last_search_time.get(engine, 0)
         rate_limit_value = self.search_engines.get(engine, {}).get("rate_limit", 1.0)
 
-        # 确保rate_limit是数值类型
         try:
-            rate_limit = float(rate_limit_value)  # type: ignore[arg-type]
+            rate_limit = float(rate_limit_value)
         except (ValueError, TypeError):
-            rate_limit = 1.0  # 默认值
+            rate_limit = 1.0
 
-        # 对于searxng，放宽速率限制，因为它是本地实例
         if engine == "searxng":
-            rate_limit = 0.5  # 0.5秒
+            rate_limit = 0.5
 
-        return time.time() - last_time >= rate_limit
+        wait = rate_limit - (time.time() - last_time)
+        if wait > 0:
+            await asyncio.sleep(wait)
 
     def _is_safe_url(self, url: str) -> bool:
         """URL安全检查"""
@@ -316,9 +530,14 @@ class WebTools:
             return False
 
     async def _search_searxng(
-        self, query: str, max_results: int, safe_search: bool
+        self, query: str, max_results: int, safe_search: bool, timeout: int = 8
     ) -> Dict[str, Any]:
-        """使用searXNG搜索"""
+        """使用searXNG搜索（多参数变体重试，每个请求独立超时）"""
+        return await self._search_searxng_inner(query, max_results, safe_search, timeout)
+
+    async def _search_searxng_inner(
+        self, query: str, max_results: int, safe_search: bool, timeout: int = 8
+    ) -> Dict[str, Any]:
         try:
             base_url = self.search_engines["searxng"]["url"]
             search_url = f"{base_url}/search"
@@ -334,35 +553,25 @@ class WebTools:
                 "pageno": 1,  # 第一页
             }
 
-            # 尝试不同的参数组合
+            # 尝试不同的参数组合（精简为 2 个，减少无谓重试）
             param_variations = [
-                base_params,  # 原始参数
-                {**base_params, "format": "html"},  # 尝试HTML格式
-                {k: v for k, v in base_params.items() if k != "format"},  # 无format参数
-                {**base_params, "engines": "google,duckduckgo,bing"},  # 指定引擎
+                base_params,  # 标准参数（大多数 SearXNG 实例适用）
+                {**base_params, "engines": "google,duckduckgo,bing"},  # 兜底：显式指定引擎
             ]
 
-            # 使用配置的超时时间
-            if __package__ in (None, ""):
-                from config import settings
-            else:
-                from ..config import settings
+            # 使用传入的 timeout 作为单次请求超时
+            per_request_timeout = aiohttp.ClientTimeout(total=timeout)
 
-            web_timeout = settings.timeouts.web_request
-            client_timeout = aiohttp.ClientTimeout(total=web_timeout)
-
-            last_error = None
+            errors = []
             for i, test_params in enumerate(param_variations):
                 try:
                     print(f"🔍 Trying param combo {i+1}: {test_params}")
-                    # 确保session存在
                     if self.session is None:
                         await self._ensure_session()
-                    # 类型检查器需要知道session不为None
                     session = self.session
                     assert session is not None, "Session should be initialized"
                     async with session.get(
-                        search_url, params=test_params, timeout=client_timeout
+                        search_url, params=test_params, timeout=per_request_timeout
                     ) as response:
                         if response.status == 200:
                             content_type = response.headers.get(
@@ -372,18 +581,15 @@ class WebTools:
                             if "application/json" in content_type:
                                 data = await response.json()
 
-                                # 检查是否有错误
                                 if data.get("error"):
-                                    last_error = f"SearXNG error: {data.get('error')}"
+                                    errors.append(f"combo {i+1}: SearXNG error: {data.get('error')}")
                                     continue
 
-                                # 检查是否有结果
                                 results = data.get("results", [])
                                 if not results:
-                                    last_error = "SearXNG returned empty results"
+                                    errors.append(f"combo {i+1}: empty results")
                                     continue
 
-                                # 处理结果
                                 processed_results = []
                                 for item in results[:max_results]:
                                     processed_results.append(
@@ -404,35 +610,271 @@ class WebTools:
                                     "total_results": len(processed_results),
                                 }
                             else:
-                                # 尝试解析HTML响应
-                                html = await response.text()
-                                # 简单提取结果（实际应该用BeautifulSoup等库）
-                                import re
-
-                                # 这里简化处理，实际应该更复杂
-                                last_error = "SearXNG returned HTML format, needs parsing"
+                                errors.append(f"combo {i+1}: non-JSON response ({content_type[:50]})")
                                 continue
 
                         else:
-                            last_error = f"SearXNG HTTP error: {response.status}"
+                            errors.append(f"combo {i+1}: HTTP {response.status}")
                             continue
 
                 except asyncio.TimeoutError:
-                    last_error = f"Parameter combo {i + 1} timeout"
+                    errors.append(f"combo {i+1}: timeout after {timeout}s")
                     continue
                 except Exception as e:
-                    last_error = f"Parameter combo {i + 1} error: {str(e)}"
+                    errors.append(f"combo {i+1}: {str(e)}")
                     continue
 
             return {
                 "success": False,
-                "error": f"SearXNGSearch failed: {last_error}",
+                "error": f"SearXNG search failed: {'; '.join(errors)}" if errors else "SearXNG search failed: all variations exhausted",
                 "query": query,
                 "suggestion": "Please check searXNG configuration and network connection",
             }
 
         except Exception as e:
             return {"success": False, "error": f"SearXNGSearch failed: {str(e)}"}
+
+    async def _search_brave(
+        self, query: str, max_results: int, safe_search: bool, timeout: int = 8
+    ) -> Dict[str, Any]:
+        """Brave Search API"""
+        api_key = self.search_engines.get("brave", {}).get("api_key", "")
+        if not api_key:
+            return {"success": False, "error": "Brave API key not set (env: BRAVE_API_KEY)", "query": query}
+        try:
+            return await asyncio.wait_for(
+                self._search_brave_inner(query, max_results, safe_search, timeout, api_key),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            return {"success": False, "error": f"Brave search timed out after {timeout}s", "query": query}
+        except Exception as e:
+            return {"success": False, "error": f"Brave search failed: {str(e)}"}
+
+    async def _search_brave_inner(self, query, max_results, safe_search, timeout, api_key):
+        search_url = "https://api.search.brave.com/res/v1/web/search"
+        params = {"q": query, "count": min(max_results, 20), "safesearch": "strict" if safe_search else "off"}
+        headers = {"Accept": "application/json", "Accept-Encoding": "gzip", "X-Subscription-Token": api_key}
+        await self._ensure_session()
+        session = self.session
+        assert session is not None
+        async with session.get(search_url, params=params, headers=headers,
+                               timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
+            if resp.status != 200:
+                return {"success": False, "error": f"Brave HTTP {resp.status}", "query": query}
+            data = await resp.json()
+            results = []
+            for r in data.get("web", {}).get("results", [])[:max_results]:
+                results.append({"title": r.get("title", ""), "url": r.get("url", ""),
+                                "content": r.get("description", ""), "engine": "brave", "score": 0})
+            return {"success": True, "engine": "brave", "query": query,
+                    "results": results, "total_results": len(results)}
+
+    async def _search_google_cse(
+        self, query: str, max_results: int, safe_search: bool, timeout: int = 8
+    ) -> Dict[str, Any]:
+        """Google Custom Search JSON API"""
+        cfg = self.search_engines.get("google_cse", {})
+        api_key = cfg.get("api_key", "")
+        cx = cfg.get("cx", "")
+        if not api_key:
+            return {"success": False, "error": "Google API key not set (env: GOOGLE_API_KEY)", "query": query}
+        if not cx:
+            return {"success": False, "error": "Google CSE CX not set (env: GOOGLE_CSE_CX)", "query": query}
+        try:
+            return await asyncio.wait_for(
+                self._search_google_cse_inner(query, max_results, safe_search, timeout, api_key, cx),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            return {"success": False, "error": f"Google CSE search timed out after {timeout}s", "query": query}
+        except Exception as e:
+            return {"success": False, "error": f"Google CSE search failed: {str(e)}"}
+
+    async def _search_google_cse_inner(self, query, max_results, safe_search, timeout, api_key, cx):
+        search_url = "https://www.googleapis.com/customsearch/v1"
+        params = {"key": api_key, "cx": cx, "q": query, "num": min(max_results, 10),
+                  "safe": "active" if safe_search else "off"}
+        await self._ensure_session()
+        session = self.session
+        assert session is not None
+        async with session.get(search_url, params=params,
+                               timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
+            if resp.status != 200:
+                return {"success": False, "error": f"Google CSE HTTP {resp.status}", "query": query}
+            data = await resp.json()
+            results = []
+            for r in data.get("items", [])[:max_results]:
+                results.append({"title": r.get("title", ""), "url": r.get("link", ""),
+                                "content": r.get("snippet", ""), "engine": "google_cse", "score": 0})
+            return {"success": True, "engine": "google_cse", "query": query,
+                    "results": results, "total_results": len(results)}
+
+    async def _search_bing(
+        self, query: str, max_results: int, safe_search: bool, timeout: int = 8
+    ) -> Dict[str, Any]:
+        """Bing Web Search API"""
+        api_key = self.search_engines.get("bing", {}).get("api_key", "")
+        if not api_key:
+            return {"success": False, "error": "Bing API key not set (env: BING_API_KEY)", "query": query}
+        try:
+            return await asyncio.wait_for(
+                self._search_bing_inner(query, max_results, safe_search, timeout, api_key),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            return {"success": False, "error": f"Bing search timed out after {timeout}s", "query": query}
+        except Exception as e:
+            return {"success": False, "error": f"Bing search failed: {str(e)}"}
+
+    async def _search_bing_inner(self, query, max_results, safe_search, timeout, api_key):
+        search_url = "https://api.bing.microsoft.com/v7.0/search"
+        params = {"q": query, "count": min(max_results, 50),
+                  "safeSearch": "Strict" if safe_search else "Off"}
+        headers = {"Ocp-Apim-Subscription-Key": api_key}
+        await self._ensure_session()
+        session = self.session
+        assert session is not None
+        async with session.get(search_url, params=params, headers=headers,
+                               timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
+            if resp.status != 200:
+                return {"success": False, "error": f"Bing HTTP {resp.status}", "query": query}
+            data = await resp.json()
+            results = []
+            for r in data.get("webPages", {}).get("value", [])[:max_results]:
+                results.append({"title": r.get("name", ""), "url": r.get("url", ""),
+                                "content": r.get("snippet", ""), "engine": "bing", "score": 0})
+            return {"success": True, "engine": "bing", "query": query,
+                    "results": results, "total_results": len(results)}
+
+    async def _search_serpapi(
+        self, query: str, max_results: int, safe_search: bool, timeout: int = 8
+    ) -> Dict[str, Any]:
+        """SerpAPI search aggregator"""
+        api_key = self.search_engines.get("serpapi", {}).get("api_key", "")
+        if not api_key:
+            return {"success": False, "error": "SerpAPI key not set (env: SERPAPI_API_KEY)", "query": query}
+        try:
+            return await asyncio.wait_for(
+                self._search_serpapi_inner(query, max_results, safe_search, timeout, api_key),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            return {"success": False, "error": f"SerpAPI search timed out after {timeout}s", "query": query}
+        except Exception as e:
+            return {"success": False, "error": f"SerpAPI search failed: {str(e)}"}
+
+    async def _search_serpapi_inner(self, query, max_results, safe_search, timeout, api_key):
+        search_url = "https://serpapi.com/search"
+        params = {"api_key": api_key, "q": query, "engine": "google",
+                  "num": min(max_results, 100), "safe": "active" if safe_search else "off"}
+        await self._ensure_session()
+        session = self.session
+        assert session is not None
+        async with session.get(search_url, params=params,
+                               timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
+            if resp.status != 200:
+                return {"success": False, "error": f"SerpAPI HTTP {resp.status}", "query": query}
+            data = await resp.json()
+            results = []
+            for r in data.get("organic_results", [])[:max_results]:
+                results.append({"title": r.get("title", ""), "url": r.get("link", ""),
+                                "content": r.get("snippet", ""), "engine": "serpapi", "score": 0})
+            return {"success": True, "engine": "serpapi", "query": query,
+                    "results": results, "total_results": len(results)}
+
+    async def _search_fallback_scrape(
+        self, query: str, max_results: int, timeout: int = 8
+    ) -> Dict[str, Any]:
+        """兜底方案：直接抓取 Bing / Sogou 搜索结果页解析 HTML"""
+        if not self.search_engines.get("_enable_fallback", True):
+            return {"success": False, "error": "fallback scrape disabled", "query": query}
+
+        import re
+
+        scrapers = [
+            {
+                "name": "bing_scrape",
+                "url": "https://www.bing.com/search",
+                "params": {"q": query, "count": str(min(max_results, 20))},
+                "headers": {
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                },
+                "result_re": re.compile(
+                    r'<li\s+class="b_algo"[^>]*>.*?<a[^>]*href="(https?://[^"]+)"[^>]*>\s*(.*?)\s*</a>.*?<p[^>]*>(.*?)</p>',
+                    re.DOTALL | re.IGNORECASE,
+                ),
+                "clean_re": re.compile(r"<[^>]+>"),
+            },
+            {
+                "name": "sogou_scrape",
+                "url": "https://www.sogou.com/web",
+                "params": {"query": query},
+                "headers": {
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                },
+                "result_re": re.compile(
+                    r'<div[^>]*class="[^"]*vrwrap[^"]*"[^>]*>.*?<a[^>]*href="(https?://[^"]+)"[^>]*>\s*(.*?)\s*</a>.*?<p[^>]*>(.*?)</p>',
+                    re.DOTALL | re.IGNORECASE,
+                ),
+                "clean_re": re.compile(r"<[^>]+>"),
+            },
+        ]
+
+        import time as _time
+        start_time = _time.time()
+
+        for scraper in scrapers:
+            remaining = timeout - (_time.time() - start_time)
+            if remaining <= 0:
+                break
+            try:
+                await self._ensure_session()
+                session = self.session
+                assert session is not None
+                async with session.get(
+                    scraper["url"],
+                    params=scraper["params"],
+                    headers=scraper["headers"],
+                    timeout=aiohttp.ClientTimeout(total=timeout),
+                ) as resp:
+                    if resp.status != 200:
+                        continue
+                    html = await resp.text()
+                    matches = scraper["result_re"].findall(html)
+                    if not matches:
+                        continue
+                    results = []
+                    seen_urls = set()
+                    for url, title, snippet in matches[:max_results]:
+                        url = url.strip()
+                        if url in seen_urls:
+                            continue
+                        seen_urls.add(url)
+                        title = scraper["clean_re"].sub("", title).strip()
+                        snippet = scraper["clean_re"].sub("", snippet).strip()
+                        if title:
+                            results.append({
+                                "title": title,
+                                "url": url,
+                                "content": snippet,
+                                "engine": scraper["name"],
+                                "score": 0,
+                            })
+                    if results:
+                        return {
+                            "success": True,
+                            "engine": scraper["name"],
+                            "query": query,
+                            "results": results,
+                            "total_results": len(results),
+                        }
+            except Exception:
+                continue
+
+        return {"success": False, "error": "fallback scrape: no results from Bing or Sogou", "query": query}
 
     async def web_search(self, query: str, max_results: int = 5) -> Dict[str, Any]:
         """兼容性方法"""

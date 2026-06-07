@@ -90,7 +90,8 @@ def build_compact_view(
     protect_first_rounds: int = 3,
     keep_last_rounds: int = 10,
     cached_summary: Optional[str] = None,
-) -> Tuple[List[Dict], bool]:
+    protect_latest_user_round: bool = True,
+) -> Tuple[List[Dict], bool, int]:
     """
     构建可传入模型的 round-aware 压缩视图。
 
@@ -98,6 +99,7 @@ def build_compact_view(
     - 不修改原始 messages 列表
     - 只在 round 边界处切割，确保 tool_calls/tool_messages 完整性
     - 保留 system prompt + 前 N round + 摘要 + 后 N round
+    - 保护最近一条 user 消息所在轮（避免模型丢失当前任务描述）
 
     Args:
         encoding: tiktoken encoding 对象
@@ -106,24 +108,46 @@ def build_compact_view(
         protect_first_rounds: 保护前 N 个 round
         keep_last_rounds: 保留后 N 个 round
         cached_summary: 预生成的中间轮次摘要（None 表示尚未生成）
+        protect_latest_user_round: 是否保护最近 user 消息所在轮，避免当前任务描述被压缩
 
     Returns:
-        (compact_view, was_compacted): 压缩后的消息列表, 是否实际进行了压缩
+        (compact_view, was_compacted, token_count): 压缩后的消息列表, 是否实际压缩, token 数
     """
     full_tokens = estimate_tokens(encoding, messages)
 
     if full_tokens <= max_tokens:
-        return list(messages), False
+        result = list(messages)
+        return result, False, estimate_tokens(encoding, result)
 
     rounds = split_into_rounds(messages)
 
     if len(rounds) <= protect_first_rounds + keep_last_rounds:
-        return list(messages), False
+        result = list(messages)
+        return result, False, estimate_tokens(encoding, result)
+
+    latest_user_round_idx: Optional[int] = None
+    if protect_latest_user_round:
+        for i in range(len(rounds) - 1, -1, -1):
+            for msg in rounds[i]:
+                if msg.get("role") == "user":
+                    latest_user_round_idx = i
+                    break
+            if latest_user_round_idx is not None:
+                break
 
     result: List[Dict] = []
 
     for r in rounds[:protect_first_rounds]:
         result.extend(r)
+
+    user_round_in_middle = (
+        protect_latest_user_round
+        and latest_user_round_idx is not None
+        and latest_user_round_idx >= protect_first_rounds
+        and latest_user_round_idx < len(rounds) - keep_last_rounds
+    )
+    if user_round_in_middle:
+        result.extend(rounds[latest_user_round_idx])
 
     if cached_summary:
         summary_content = cached_summary
@@ -144,7 +168,8 @@ def build_compact_view(
 
     validate_tool_call_integrity(result)
 
-    return result, True
+    token_count = estimate_tokens(encoding, result)
+    return result, True, token_count
 
 
 def validate_tool_call_integrity(messages: List[Dict]) -> None:

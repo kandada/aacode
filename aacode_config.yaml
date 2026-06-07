@@ -130,10 +130,10 @@ agent:
   enable_todo_tracking: true
 safety:
   allow_network: true
-  dangerous_command_action: reject   # reject, ask, log
+  dangerous_command_action: ask   # reject, ask, log — ask 模式下危险命令弹窗确认
   enable_safety_guard: true
   max_file_size: 52428800
-  restrict_to_project: true
+  restrict_to_project: false    # false 允许访问项目外路径
 tools:
   enable_code_execution: true
   enable_sandbox: true
@@ -141,9 +141,11 @@ tools:
   enable_shell: true
   enable_testing: true
   enable_web_search: true
+  enable_fallback_scrape: true      # 所有搜索 API 失败后，用 Bing/Sogou 网页抓取兜底
   max_execution_time: 60
   sandbox_type: docker
   search_api_url: http://192.168.0.106:8081    # 这是开发者xiefujin自己部署的实例，需要替换为你自己的实例
+  search_api_key: ""                # SearXNG 无需配置。Brave/Google/Bing/SerpAPI 可填这里或设环境变量
   search_engine: searxng
 
 # MCP（模型上下文协议）配置
