@@ -297,6 +297,12 @@ python3 main.py -p examples/app "为所有功能编写测试"
 4. 推送到分支 (`git push origin feature/AmazingFeature`)
 5. 开启 Pull Request
 
+### 加入微信群
+
+扫描下方二维码加入微信群，与其他开发者交流讨论：
+
+<img src="aacode_wechat_group.png" alt="aacode微信群" width="200">
+
 ## 📄 许可证
 
 本项目为xiefujin（github: kandada，邮箱490021684@qq.com）发起并开发做出第一版，采用 GPL3.0 许可证，所有衍生作品必须同样以GPL开源。[license][https://github.com/kandada/aacode/blob/main/LICENSE]
