@@ -439,23 +439,21 @@ During each thought, naturally plan:
                 )  #  user看到简化版本
 
                 # 实时打印 Observation（供客户端显示）
-                # finalize_task 是终结工具，其观察结果无需打印为独立 segment
-                if action_item.action != "finalize_task":
-                    display_obs = observation_for_display or observation or ""
-                    if display_obs:
-                        # 截断过长的输出，避免刷屏
-                        max_display = 3000
-                        if len(display_obs) > max_display:
-                            display_obs = display_obs[:max_display] + f"\n... (truncated, {len(observation_for_display or observation)} chars total)"
-                        print(f"📋 Observation:\n{display_obs}", flush=True)
-                        # ─── 源头数据：发送完整原始内容给前端做 markdown 渲染 ───
-                        # Rust 层 read_line() 逐行读取会：1) 丢弃空行  2) 拦截 {/[ 开头的 JSON 行
-                        # 前端逐行拼接重组的内容可能丢失信息，与 Python 原始数据不一致
-                        # 因此必须在 Python 侧发送 seg_content，前端渲染时使用此原始数据而非 Rust 重组数据
-                        if not sys.stdout.isatty():
-                            _full_obs = (observation_for_display or observation or "")
-                            import json as _json
-                            print(_json.dumps({"type": "seg_content", "seg": "observation", "content": _full_obs}), flush=True)
+                display_obs = observation_for_display or observation or ""
+                if display_obs:
+                    # 截断过长的输出，避免刷屏
+                    max_display = 3000
+                    if len(display_obs) > max_display:
+                        display_obs = display_obs[:max_display] + f"\n... (truncated, {len(observation_for_display or observation)} chars total)"
+                    print(f"📋 Observation:\n{display_obs}", flush=True)
+                    # ─── 源头数据：发送完整原始内容给前端做 markdown 渲染 ───
+                    # Rust 层 read_line() 逐行读取会：1) 丢弃空行  2) 拦截 {/[ 开头的 JSON 行
+                    # 前端逐行拼接重组的内容可能丢失信息，与 Python 原始数据不一致
+                    # 因此必须在 Python 侧发送 seg_content，前端渲染时使用此原始数据而非 Rust 重组数据
+                    if not sys.stdout.isatty():
+                        _full_obs = (observation_for_display or observation or "")
+                        import json as _json
+                        print(_json.dumps({"type": "seg_content", "seg": "observation", "content": _full_obs}), flush=True)
 
                 # 🔥 新增：从错误中自动更新待办清单
                 if todo_manager:
@@ -541,30 +539,6 @@ During each thought, naturally plan:
                 await on_new_messages(messages[msg_count_before:])
 
             # 上下文一致性检查（在 messages 更新后，确保 assistant token 统计正确）
-
-            # 检查是否有 finalize_task：消息已记录到会话历史，现在可以安全返回
-            finalize_action = next((a for a in actions if a.action == "finalize_task"), None)
-            if finalize_action:
-                summary_text = response_text.strip() if response_text and response_text.strip() else "Task completed"
-                # TTY 模式下输出完成摘要；桌面/管道模式通过 done JSON 事件通知完成
-                if sys.stdout.isatty():
-                    print(t("agent.task_done_summary", summary=summary_text))
-                total_time = asyncio.get_event_loop().time() - start_time
-                if self.logger:
-                    await self.logger.finish_task(
-                        final_status="completed",
-                        total_iterations=iteration + 1,
-                        total_time=total_time,
-                        summary={"summary": summary_text},
-                    )
-                self.last_messages = messages
-                return {
-                    "status": "completed",
-                    "final_thought": summary_text,
-                    "iterations": iteration + 1,
-                    "steps": self.steps,
-                    "total_time": total_time,
-                }
 
             await self._validate_context_consistency(
                 all_observations, all_observations_for_display, messages
@@ -1081,9 +1055,8 @@ During each thought, naturally plan:
             action_start = time.time()
             # run_shell 自己管超时，框架不做二次兜底
             timeout_cfg = getattr(settings, "timeout", None)
-            tool_timeout = timeout_cfg.tool_default if timeout_cfg and action not in ("run_shell", "finalize_task") else None
-            if action != "finalize_task":
-                hb_task = asyncio.create_task(_heartbeat(action, action_start, tool_timeout or 600))
+            tool_timeout = timeout_cfg.tool_default if timeout_cfg and action != "run_shell" else None
+            hb_task = asyncio.create_task(_heartbeat(action, action_start, tool_timeout or 600))
             try:
                 coro = (
                     self.tools[action](**action_input)

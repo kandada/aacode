@@ -146,14 +146,6 @@ RUN_SHELL_SCHEMA = ToolSchema(
 )
 
 
-FINALIZE_TASK_SCHEMA = ToolSchema(
-    name="finalize_task",
-    description="Mark the current task as complete. The task ends immediately after invocation. Write your final summary or conclusion in your assistant response text before calling this tool — do not pass it as a parameter.",
-    parameters=[],
-    examples=[],
-    returns="Returns status=completed",
-)
-
 RUN_SKILLS_SCHEMA = ToolSchema(
     name="run_skills",
     description="""Execute pre-defined skills. Three modes:
@@ -480,7 +472,6 @@ GET_MCP_STATUS_SCHEMA = ToolSchema(
 ALL_SCHEMAS = {
     # Atomic Tools
     "run_shell": RUN_SHELL_SCHEMA,
-    "finalize_task": FINALIZE_TASK_SCHEMA,
     "run_skills": RUN_SKILLS_SCHEMA,
     # Web Tools
     "search_web": SEARCH_WEB_SCHEMA,

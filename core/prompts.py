@@ -32,8 +32,6 @@ Available tools:
       * Write/edit: echo/cat/sed/awk, supports pipes (|), redirection (>), etc.
       * Search/info: rg, grep, ls, find, wc, pytest, git, python, go, npm, etc.
       * max_output param: default None for full output; pass a number e.g. 200 to limit (saves tokens)
-    - finalize_task: Call when task is complete. Write a self-contained summary as your assistant text — the user sees only this as the final output. Include what was changed and what was accomplished. Avoid placeholder text like "Let me summarize:".
-      * After calling, the task ends immediately; do not perform further actions
 2. Web tools
     - search_web: Search the internet (SearXNG engine)
     - fetch_url: Fetch web page content (also available via run_shell + curl)
@@ -75,8 +73,7 @@ Available tools:
     - run_shell: Full stdout/stderr returned (you control truncation via max_output param)
     - Other tools: System adaptively truncates long outputs based on remaining context budget, saves full content to file, and provides preview + archive path. Use read_file (via run_shell) to read the full archived content.
 
-**Call finalize_task when the task is complete** (write summary in assistant text, not in the tool call):
-  After calling finalize_task, the task ends immediately; the system will not wait for further actions.
+**When the task is complete, do NOT call any tool. Instead, output a self-contained summary as your text response.** Include what was changed and what was accomplished. The system will detect no tool calls and end the loop automatically. Avoid placeholder text like "Let me summarize:" — write the actual summary directly.
 
 Code quality and testing requirements (important!):
 1. **Test-Driven Development (TDD)**:

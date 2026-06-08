@@ -185,10 +185,6 @@ class MainAgent(BaseAgent):
             context_config=settings.context,
         )
 
-    async def _finalize_task(self) -> Dict[str, Any]:
-        """结束当前任务。模型应在调用前在 assistant content 中写好总结。"""
-        return {"status": "completed"}
-
     # ------------------------------------------------------------------ #
     #  run_skills  —  统一技能入口，三种模式（仿 fastclaw）
     # ------------------------------------------------------------------ #
@@ -966,8 +962,6 @@ class MainAgent(BaseAgent):
         tools = {
             # 原子工具
             "run_shell": atomic_tools.run_shell,
-            # 任务控制工具
-            "finalize_task": self._finalize_task,
             "run_skills": self._run_skills,
             # 网络工具
             "search_web": web_tools.search_web,
@@ -1177,8 +1171,13 @@ class MainAgent(BaseAgent):
         print(t("agent.session_hint", id=session_id))
 
         # 将已创建的 todo 文件绑定到当前 session，实现会话级隔离
-        if todo_manager and todo_manager.current_todo_file:
-            todo_manager.set_session_todo(session_id, todo_manager.current_todo_file)
+        if todo_manager:
+            if not todo_manager.current_todo_file:
+                files = await todo_manager.list_todo_files()
+                if files:
+                    todo_manager.current_todo_file = todo_manager.todo_dir / files[0]["filename"]
+            if todo_manager.current_todo_file:
+                todo_manager.set_session_todo(session_id, todo_manager.current_todo_file)
 
         # 更新系统提示，包含项目分析结果
         analysis_section = ""
