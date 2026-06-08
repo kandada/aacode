@@ -60,6 +60,8 @@ class TodoTools:
                 if files:
                     latest_file = todo_manager.todo_dir / files[0]["filename"]
                     todo_manager.current_todo_file = latest_file
+                    if session_id:
+                        todo_manager.set_session_todo(session_id, latest_file)
                 else:
                     await todo_manager.create_todo_list("Default Task", "Default Project",
                                                         session_id=session_id)

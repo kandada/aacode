@@ -1116,6 +1116,91 @@ class SafetyGuard:
             segments.append(current)
         return segments
 
+    @staticmethod
+    def _is_pathlike(token: str) -> bool:
+        """Check if a token looks like a file path.
+
+        Returns True if the token is an absolute path (starts with '/')
+        or contains '..' as a standalone path component (parent traversal).
+        Does NOT match '..' as a substring inside other text
+        (e.g. '...' ellipsis, 'file..txt').
+        """
+        if token.startswith("/"):
+            return True
+        if ".." not in token:
+            return False
+        return bool(re.search(r'(^|/)\.\.($|/)', token))
+
+    def _split_by_newlines(self, command: str) -> List[str]:
+        """Split multi-line command by newlines, respecting heredoc boundaries
+        and multi-line quoted strings (e.g. python3 -c \"...\").
+
+        In shell, newlines are equivalent to ';' but only outside heredocs
+        and outside multi-line quoted strings.
+        """
+        lines = command.split('\n')
+        result = []
+        current = []
+        heredoc_delims = []  # queue of heredoc closing delimiters
+        in_dq = False  # inside double-quoted string
+        in_sq = False  # inside single-quoted string
+
+        def _update_quote_state(line_text: str) -> None:
+            """Update in_dq/in_sq based on line content."""
+            nonlocal in_dq, in_sq
+            i = 0
+            while i < len(line_text):
+                ch = line_text[i]
+                if ch == '\\' and i + 1 < len(line_text):
+                    i += 2
+                    continue
+                if ch == '"' and not in_sq:
+                    in_dq = not in_dq
+                elif ch == "'" and not in_dq:
+                    in_sq = not in_sq
+                i += 1
+
+        for line in lines:
+            if not line.strip():
+                continue
+
+            if heredoc_delims:
+                current.append(line)
+                if line.strip() == heredoc_delims[0]:
+                    heredoc_delims.pop(0)
+                continue
+
+            if in_dq or in_sq:
+                current.append(line)
+                _update_quote_state(line)
+                if in_dq or in_sq:
+                    continue
+                for m in re.finditer(r'<<-?\s*[\'"]?(\w+)[\'"]?', line):
+                    heredoc_delims.append(m.group(1))
+                if not heredoc_delims:
+                    result.append('\n'.join(current))
+                    current = []
+                continue
+
+            _update_quote_state(line)
+
+            for m in re.finditer(r'<<-?\s*[\'"]?(\w+)[\'"]?', line):
+                heredoc_delims.append(m.group(1))
+
+            current.append(line)
+
+            if in_dq or in_sq:
+                continue
+
+            if not heredoc_delims:
+                result.append('\n'.join(current))
+                current = []
+
+        if current:
+            result.append('\n'.join(current))
+
+        return result
+
     def _merge_line_continuations(self, command: str) -> str:
         """合并 shell 行续接符 \\，将多行物理行合并为逻辑行
 
@@ -1227,7 +1312,8 @@ class SafetyGuard:
         return self.RISK_SAFE, "Safe command"
 
     def check_command(
-        self, command: str, ask_confirmation: bool = True
+        self, command: str, ask_confirmation: bool = True,
+        _skip_newline_split: bool = False,
     ) -> Dict[str, Any]:
         """检查命令安全性
 
@@ -1273,6 +1359,28 @@ class SafetyGuard:
         # 合并 \ 行续接符（shell line continuation）
         # 将结尾带 \ 的行与下一行合并，方便后续 shlex 正确解析参数
         command = self._merge_line_continuations(command)
+
+        # 按换行符拆分为逻辑命令（尊重 heredoc 边界）
+        # shell 中换行等价于 ; 命令分隔符，但在 heredoc 内除外
+        # 只在顶级调用中拆分，递归调用跳过（避免 " ".join 丢失引号导致的误拆）
+        if not _skip_newline_split:
+            commands = self._split_by_newlines(command)
+            if len(commands) > 1:
+                final_risk = self.RISK_SAFE
+                for cmd in commands:
+                    result = self.check_command(cmd, ask_confirmation, _skip_newline_split=True)
+                    if not result["allowed"]:
+                        return result
+                    seg_risk = result.get("risk_level", self.RISK_SAFE)
+                    if seg_risk == self.RISK_DANGEROUS:
+                        final_risk = self.RISK_DANGEROUS
+                    elif seg_risk == self.RISK_WARNING and final_risk != self.RISK_DANGEROUS:
+                        final_risk = self.RISK_WARNING
+                return self._build_result(
+                    allowed=True,
+                    reason="All commands passed safety check",
+                    risk_level=final_risk,
+                )
 
         # 检查危险模式
         for pattern, description in self.dangerous_patterns:
@@ -1344,7 +1452,7 @@ class SafetyGuard:
                 final_risk = self.RISK_SAFE
                 for segment_parts in segments:
                     segment_cmd = " ".join(segment_parts)
-                    result = self.check_command(segment_cmd, ask_confirmation)
+                    result = self.check_command(segment_cmd, ask_confirmation, _skip_newline_split=True)
                     if not result["allowed"]:
                         return result
                     seg_risk = result.get("risk_level", self.RISK_SAFE)
@@ -1724,6 +1832,8 @@ class SafetyGuard:
                 "logger", "tput", "stty",
                 # 解释器：脚本路径检查无实际安全意义，脚本本身可任意操作
                 "python", "python3", "node", "ruby", "java",
+                # 目录导航：仅改变 shell 状态，不读写文件
+                "cd", "pushd", "popd", "dirs",
             }
 
             # 子命令委托：元命令的子命令若是纯输出型，整个命令跳过路径检查
@@ -1757,8 +1867,8 @@ class SafetyGuard:
                     if i == 0:
                         continue
 
-                    # 检查路径参数
-                    if ".." in part or part.startswith("/"):
+                    # 检查路径参数（只检测真正的路径组件，避免...省略号等误判）
+                    if self._is_pathlike(part):
                         # Windows 命令参数以 / 开头（如 /B、/S、/Q、/i），不是路径
                         # 短标志（/X 或 /XX）在任何平台都不应被当作路径
                         if part.startswith("/") and len(part) <= 3 and part[1:].isalpha():
