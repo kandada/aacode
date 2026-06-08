@@ -290,6 +290,12 @@ Contributions of code, bug reports, or suggestions are welcome!
 4. Push to the branch (`git push origin feature/AmazingFeature`)
 5. Open a Pull Request
 
+### Join WeChat Group
+
+Scan the QR code below to join our WeChat group and discuss with other developers:
+
+<img src="aacode_wechat_group.png" alt="aacode WeChat Group" width="200">
+
 ## 📄 License
 
 This project is initiated and developed by xiefujin (github: kandada, email: 490021684@qq.com) as the first version, licensed under GPL3.0. All derivative works must also be open source under GPL. [license][https://github.com/kandada/aacode/blob/main/LICENSE]
