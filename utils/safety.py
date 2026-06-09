@@ -96,6 +96,7 @@ class SafetyGuard:
             "wc",
             "sort",
             "uniq",
+            "tsort",
             "which",
             "whereis",
             "file",
@@ -103,7 +104,10 @@ class SafetyGuard:
             "basename",
             "dirname",
             "mktemp",
+            "split",
+            "csplit",
             "test",  # shell test / [ 命令
+            ":",  # POSIX null command (no-op)
             # ── 进程管理（需谨慎） ──
             "pkill",
             "kill",
@@ -151,6 +155,11 @@ class SafetyGuard:
             "xcrun",  # Xcode 工具
             "xcodebuild",  # Xcode 构建
             "xcode-select",  # Xcode 命令行工具选择
+            "otool",  # macOS 二进制分析
+            "lipo",  # macOS 通用二进制工具
+            "nm",  # 符号表
+            "actool",  # Xcode Asset Catalog 工具
+            "ibtool",  # Xcode Interface Builder 工具
             "simctl",  # iOS 模拟器控制
             "codesign",  # 代码签名
             "security",  # macOS 钥匙串/安全
@@ -162,6 +171,11 @@ class SafetyGuard:
             "mdfind",  # Spotlight 搜索
             "mdls",  # Spotlight 元数据列表
             "mdutil",  # Spotlight 管理
+            "fc-list",  # fontconfig 字体列表查询
+            "fc-cache",  # fontconfig 字体缓存
+            "fc-match",  # fontconfig 字体匹配
+            "fc-query",  # fontconfig 字体属性查询
+            "fc-scan",  # fontconfig 字体扫描
             "sips",  # 图片处理
             "plutil",  # plist 处理
             "qlmanage",  # Quick Look 管理
@@ -171,6 +185,7 @@ class SafetyGuard:
             "networksetup",  # 网络设置
             "scutil",  # 系统配置
             "pkgutil",  # 安装包管理
+            "pkgbuild",  # macOS 安装包构建
             "installer",  # macOS 安装器
             "pluginkit",  # 插件管理
             "dd",
@@ -180,6 +195,11 @@ class SafetyGuard:
             "xattr",  # 扩展属性
             "logger",  # 系统日志
             "hostname",
+            "vm_stat",  # macOS 虚拟内存统计
+            "ifconfig",  # 网络接口配置信息
+            "pgrep",  # 进程名查找
+            "pidof",  # 进程ID查找
+            "pwdx",  # 进程工作目录
             "systeminfo",
             "tasklist",
             "taskkill",
@@ -533,6 +553,7 @@ class SafetyGuard:
             "tcsh",
             "source",
             "export",
+            "readonly",
             "alias",
             "unalias",
             "eval",
@@ -543,6 +564,8 @@ class SafetyGuard:
             "shift",
             "return",
             # Shell 控制流关键字和内置命令
+            "{",
+            "}",
             "for",
             "if",
             "while",
@@ -586,6 +609,7 @@ class SafetyGuard:
             "unzip",
             "bzip2",
             "bunzip2",
+            "lzop",
             "xz",
             "unxz",
             "zstd",
@@ -602,9 +626,16 @@ class SafetyGuard:
             "paste",
             "join",
             "diff",
+            "diff3",
+            "sdiff",
+            "interdiff",
+            "cmp",
+            "comm",
             "patch",
             "jq",
             "yq",
+            "xsv",
+            "dasel",
             "xmlstarlet",
             "csvkit",
             "miller",  # CSV/JSON 数据处理
@@ -615,6 +646,7 @@ class SafetyGuard:
             "tee",
             "rev",
             "fold",
+            "pr",
             "column",
             "expand",
             "unexpand",
@@ -630,7 +662,9 @@ class SafetyGuard:
             "dos2unix",
             "unix2dos",
             "base64",
+            "base32",
             "md5sum",
+            "sha1sum",
             "sha256sum",
             "shasum",
             "cksum",
@@ -746,6 +780,7 @@ class SafetyGuard:
             # ── 其他常用工具 ──
             "date",
             "cal",
+            "ncal",
             "bc",
             "dc",
             "calc",
@@ -781,6 +816,8 @@ class SafetyGuard:
             "units",
             "neofetch",
             "screenfetch",
+            "fastfetch",
+            "hyperfine",
             "asciinema",
             "tldr",
             "cheat",
@@ -1071,16 +1108,40 @@ class SafetyGuard:
         分隔符: |, &&, ||, ;
         每个段是一个独立的命令，可以单独检查安全性。
         不拆分 heredoc (<<) 内容中的 | 字符。
+        不拆分 $(...) 命令替换内的管道符号。
         """
         separators = {"|", "&&", "||", ";"}
         segments = []
         current = []
 
         heredoc_stack = []  # 栈：跟踪嵌套的 heredoc 结束标记
+        subshell_depth = 0  # $(...) 嵌套深度计数器
 
         i = 0
         while i < len(parts):
             part = parts[i]
+
+            # 检测 $( ... ) 命令替换开始（分离 token：$ 后跟 (）
+            if part == '$' and i + 1 < len(parts) and parts[i + 1] == '(':
+                subshell_depth += 1
+                current.append(part)
+                i += 1
+                continue
+
+            # 检测 $( 在合并 token 内部（shlex 可能合并成 dollar_open=$(grep 这样的单一 token）
+            merged_open = part.count('$(')
+            if merged_open > 0:
+                subshell_depth += merged_open
+
+            # 检测 $( ... ) 命令替换结束（分离 token：)）
+            if subshell_depth > 0 and part == ')':
+                subshell_depth = max(0, subshell_depth - 1)
+
+            # 检测 ) 在合并 token 尾部（shlex 可能合并成 true) 这样的单一 token）
+            if subshell_depth > 0:
+                trailing_close = len(part) - len(part.rstrip(')'))
+                if trailing_close > 0:
+                    subshell_depth = max(0, subshell_depth - trailing_close)
 
             # 检测 heredoc 开始: << DELIM
             if part == "<<" and i + 1 < len(parts):
@@ -1102,8 +1163,8 @@ class SafetyGuard:
                 i += 1
                 continue
 
-            # 管道拆分（仅在非 heredoc 内时）
-            if not heredoc_stack and part in separators:
+            # 管道拆分（仅在非 heredoc 内且非 $(...) 内时）
+            if not heredoc_stack and subshell_depth == 0 and part in separators:
                 if current:
                     segments.append(current)
                     current = []
@@ -1261,8 +1322,9 @@ class SafetyGuard:
         # Shell 控制流关键字：纯语法结构，无直接文件操作，视为安全
         shell_keywords = {
             "for", "if", "while", "until", "case", "select", "function",
-            "[", "[[", "declare", "typeset", "local", "let",
+            "[", "[[", "{", "}", "declare", "typeset", "local", "let", "readonly",
             "done", "esac", "fi", "then", "else", "elif", "do", "in",
+            ":", "true", "false",
         }
         if cmd_name in shell_keywords:
             return self.RISK_SAFE, "Shell keyword/control flow"
@@ -1486,13 +1548,44 @@ class SafetyGuard:
                     has_shell_expansion = True
                 actual_cmd_index += 1
 
+            # shlex 在 POSIX 模式下会把 NAME=$(cmd) 拆成 NAME, =, $, (, cmd, ...
+            # 这里的 while 只能匹配 NAME= 一体的情况 (如 FOO=bar)
+            # 需要额外处理 NAME 和 = 分离 token 的情况
+            if actual_cmd_index == 0 and parts_len > 1 and parts[1] == "=":
+                actual_cmd_index = 2
+                if parts_len > 2:
+                    has_shell_expansion = True
+                    for j in range(2, parts_len - 1):
+                        if parts[j] == '$' and parts[j+1] == '(':
+                            if j + 2 < parts_len and re.match(r'\w+', parts[j+2]):
+                                subshell_command = parts[j+2]
+                            break
+                        if parts[j].startswith('`') and j + 1 < parts_len:
+                            m = re.search(r'`(\w+)', parts[j])
+                            if m:
+                                subshell_command = m.group(1)
+                            break
+
             if actual_cmd_index > 0:
                 if subshell_command or has_shell_expansion:
                     # VAR=$(cmd args) / VAR=$((expr)) 模式：跳过展开内的参数 token
+                    # 使用括号平衡计数，正确处理嵌套 () 和 $(()) 内的分组括号
+                    paren_depth = 1  # 已进入 $(...) / $((...)) 一层
                     while actual_cmd_index < parts_len:
                         t = parts[actual_cmd_index]
+                        for ch in t:
+                            if ch == '(':
+                                paren_depth += 1
+                            elif ch == ')':
+                                paren_depth -= 1
+                                if paren_depth == 0:
+                                    break
+                            elif ch == '`' and paren_depth == 1:
+                                # 反引号闭合最内层
+                                paren_depth = 0
+                                break
                         actual_cmd_index += 1
-                        if ')' in t or '`' in t:
+                        if paren_depth == 0:
                             break
                     if actual_cmd_index >= parts_len:
                         if subshell_command:
@@ -1507,8 +1600,21 @@ class SafetyGuard:
                             )
                     else:
                         # 展开后还有命令（如 export VAR=$(cmd); actual_cmd）
-                        cmd_path = parts[actual_cmd_index]
-                        parts = parts[actual_cmd_index:]
+                        # 跳过残留在当前 token 的 ) 或 ` 关闭符
+                        while actual_cmd_index < parts_len and (')' in parts[actual_cmd_index] or '`' in parts[actual_cmd_index]):
+                            actual_cmd_index += 1
+                        if actual_cmd_index >= parts_len:
+                            if subshell_command:
+                                cmd_path = subshell_command
+                            else:
+                                return self._build_result(
+                                    allowed=True,
+                                    reason="Variable assignment with shell expansion",
+                                    risk_level=self.RISK_SAFE,
+                                )
+                        else:
+                            cmd_path = parts[actual_cmd_index]
+                            parts = parts[actual_cmd_index:]
                 elif actual_cmd_index >= parts_len:
                     # 纯变量赋值（如 VAR=value），无害，放行
                     return self._build_result(
@@ -1571,8 +1677,9 @@ class SafetyGuard:
             # Shell 控制流关键字：跳过后续特殊检查和路径检查，直接放行
             shell_keywords = {
                 "for", "if", "while", "until", "case", "select", "function",
-                "[", "[[", "declare", "typeset", "local", "let",
+                "[", "[[", "{", "}", "declare", "typeset", "local", "let", "readonly",
                 "done", "esac", "fi", "then", "else", "elif", "do", "in",
+                ":", "true", "false",
             }
             if cmd_name in shell_keywords:
                 return self._build_result(

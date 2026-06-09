@@ -104,9 +104,13 @@ class TodoTools:
                     break
 
         if not item_pattern and not todo_id:
+            pending_hint = await self._get_pending_todos_hint()
+            error_msg = "Missing todo_id or item_pattern param. Use todo_id from add_todo_item."
+            if pending_hint:
+                error_msg += f"\n\n{pending_hint}"
             return {
                 "success": False,
-                "error": "Missing todo_id or item_pattern param. Use todo_id from add_todo_item.",
+                "error": error_msg,
             }
 
         try:
@@ -140,6 +144,50 @@ class TodoTools:
 
         except Exception as e:
             return {"success": False, "error": f"Error marking todo complete: {str(e)}"}
+
+    async def _get_pending_todos_hint(self) -> str:
+        try:
+            import re
+            from ..utils.todo_manager import get_todo_manager
+
+            todo_manager = get_todo_manager(self.project_path)
+            session_id = self._session_id()
+            todo_file = todo_manager._resolve_todo_file(session_id)
+
+            if not todo_file or not todo_file.exists():
+                files = await todo_manager.list_todo_files()
+                if files:
+                    todo_file = todo_manager.todo_dir / files[0]["filename"]
+                else:
+                    return ""
+
+            if not todo_file or not todo_file.exists():
+                return ""
+
+            content = todo_file.read_text(encoding="utf-8")
+            pending = []
+            for line in content.split("\n"):
+                stripped = line.strip()
+                if stripped.startswith("- [ ]"):
+                    m = re.search(r"\[#(\w+)\]\s*:\s*(.*)", stripped)
+                    if m:
+                        pending.append((m.group(1), m.group(2).strip()))
+                    else:
+                        desc = re.sub(r"^- \[ \]\s*[🔴🟡🟢]\s*\*\*[^*]+\*\*\s*", "", stripped).strip()
+                        if desc:
+                            pending.append(("?", desc[:80]))
+
+            if not pending:
+                return ""
+
+            hint = "📋 Available pending todos (use e.g. todo_id=\"t171\"):\n"
+            for tid, desc in pending[:15]:
+                hint += f"  #{tid}: {desc}\n"
+            if len(pending) > 15:
+                hint += f"  ... and {len(pending) - 15} more"
+            return hint.strip()
+        except Exception:
+            return ""
 
     async def update_todo_item(
         self, old_pattern: str, new_item: str, **kwargs

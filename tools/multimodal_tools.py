@@ -160,6 +160,11 @@ class MultimodalTools:
             **kwargs: 其他参数（用于兼容）
         """
         try:
+            if not image_path:
+                for alt in ("image", "path", "file"):
+                    image_path = kwargs.pop(alt, "")
+                    if image_path:
+                        break
             model_config = self._get_model_config(kwargs.get("model"))
 
             # 处理多张图片
@@ -235,6 +240,11 @@ class MultimodalTools:
             **kwargs: 其他参数
         """
         try:
+            if not video_path:
+                for alt in ("video", "path", "file"):
+                    video_path = kwargs.pop(alt, "")
+                    if video_path:
+                        break
             model_config = self._get_model_config(kwargs.get("model"))
 
             # 检查模型是否支持视频
@@ -304,6 +314,13 @@ class MultimodalTools:
             **kwargs: 其他参数
         """
         try:
+            if not design_path:
+                for alt in ("design", "path", "image", "file"):
+                    design_path = kwargs.pop(alt, "")
+                    if design_path:
+                        break
+            if "code" in kwargs:
+                generate_code = kwargs.pop("code")
             model_config = self._get_model_config(kwargs.get("model"))
 
             # 处理多张图片
@@ -510,6 +527,11 @@ Please generate corresponding HTML/CSS code (use pure CSS, no frameworks):
             **kwargs: 其他参数
         """
         try:
+            if not image_paths:
+                for alt in ("images", "paths", "files", "image_path"):
+                    image_paths = kwargs.pop(alt, "")
+                    if image_paths:
+                        break
             model_config = self._get_model_config(kwargs.get("model"))
 
             # 处理多张图片

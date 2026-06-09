@@ -1,6 +1,6 @@
 spec_version: "0.1.0"
 name: aacode
-version: 1.7.8
+version: 1.7.13
 description: >
   AACode is a lightweight, 100%-Python CLI coding agent built on a ReAct architecture.
   It takes a natural-language task description, plans and executes multi-step coding
