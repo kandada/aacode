@@ -1032,6 +1032,20 @@ class MainAgent(BaseAgent):
         # 注册多模态工具的schema
         from ..utils.tool_registry import ToolSchema, ToolParameter
 
+        _JSON_TYPE_MAP = {
+            "string": str, "integer": int, "number": float,
+            "boolean": bool, "array": list, "object": dict,
+        }
+
+        _PARAM_ALIASES = {
+            "image_path": ["image", "path", "file"],
+            "video_path": ["video", "path", "file"],
+            "design_path": ["design", "path", "image", "file"],
+            "image_paths": ["images", "paths", "files", "image_path"],
+            "prompt": ["question", "query"],
+            "generate_code": ["code", "gen_code"],
+        }
+
         multimodal_schema = get_multimodal_tools_schema()
         for schema_dict in multimodal_schema:
             func_name = schema_dict["function"]["name"]
@@ -1041,16 +1055,18 @@ class MainAgent(BaseAgent):
                 properties = params_def.get("properties", {})
                 required_fields = params_def.get("required", [])
 
-                # 将字典转换为 ToolSchema
                 schema = ToolSchema(
                     name=func_name,
                     description=func_def.get("description", ""),
                     parameters=[
                         ToolParameter(
                             name=pname,
-                            type=str,
+                            type=_JSON_TYPE_MAP.get(
+                                properties[pname].get("type", "string"), str
+                            ),
                             required=pname in required_fields,
                             description=properties[pname].get("description", ""),
+                            aliases=_PARAM_ALIASES.get(pname, []),
                         )
                         for pname in properties.keys()
                     ],

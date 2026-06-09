@@ -241,14 +241,21 @@ class TodoManager:
             if todo_id:
                 tag = f"[#{todo_id}]"
                 for i, line in enumerate(lines):
-                    if line.strip().startswith("- [ ]") and tag in line:
-                        lines[i] = line.replace("- [ ]", "- [x]", 1)
-                        updated = True
-                        item_desc = line.replace("- [ ]", "").strip()
-                        item_desc = re.sub(r"^[🔴🟡🟢]\s*\*\*.*?\*\*\s*\[#\w+\]:\s*", "", item_desc)
-                        self._add_to_completed_section(lines, item_desc, todo_id)
-                        print(f"✅ Marked complete [#{todo_id}]: {item_desc[:50]}...")
-                        break
+                    if tag in line:
+                        if line.strip().startswith("- [x]"):
+                            item_desc = line.replace("- [x]", "").strip()
+                            item_desc = re.sub(r"^[🔴🟡🟢]\s*\*\*.*?\*\*\s*\[#\w+\]:\s*", "", item_desc)
+                            print(f"⏭️  [#{todo_id}] already completed: {item_desc[:50]}...")
+                            updated = True
+                            break
+                        if line.strip().startswith("- [ ]"):
+                            lines[i] = line.replace("- [ ]", "- [x]", 1)
+                            updated = True
+                            item_desc = line.replace("- [ ]", "").strip()
+                            item_desc = re.sub(r"^[🔴🟡🟢]\s*\*\*.*?\*\*\s*\[#\w+\]:\s*", "", item_desc)
+                            self._add_to_completed_section(lines, item_desc, todo_id)
+                            print(f"✅ Marked complete [#{todo_id}]: {item_desc[:50]}...")
+                            break
 
             if not updated and item_pattern:
                 pattern_lower = item_pattern.lower()

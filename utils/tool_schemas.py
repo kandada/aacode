@@ -334,8 +334,8 @@ MARK_TODO_COMPLETED_SCHEMA = ToolSchema(
         ToolParameter(
             name="todo_id",
             type=str,
-            required=False,
-            description="Todo item ID (e.g. 't1', 't2'), returned by add_todo_item. Use this parameter first, it is precise and reliable.",
+            required=True,
+            description="Todo item ID (e.g. 't1', 't2'), returned by add_todo_item. ALWAYS include this parameter. Use the exact todo_id returned by add_todo_item.",
             example="t1",
             aliases=["id"],
         ),
@@ -348,7 +348,7 @@ MARK_TODO_COMPLETED_SCHEMA = ToolSchema(
             aliases=["title", "item", "task", "description", "name", "text", "content", "pattern", "todo"],
         ),
     ],
-    examples=[{"todo_id": "t1"}, {"item_pattern": "helloworld"}],
+    examples=[{"todo_id": "t1"}],
     returns="Returns a dictionary with success, message, todo_id, item_pattern, and other fields",
 )
 
@@ -468,6 +468,114 @@ GET_MCP_STATUS_SCHEMA = ToolSchema(
 # run_skills is the single entry point for all skills (three modes: __list__, __info__, execute)
 
 
+# ==================== Multimodal Tools Schemas ====================
+
+UNDERSTAND_IMAGE_SCHEMA = ToolSchema(
+    name="understand_image",
+    description="Understand image content - supports single or multiple images. Can be used to analyze screenshots, photos, design drafts, etc. This tool is especially suitable for scenarios where you need to view images but don't need to generate code.",
+    parameters=[
+        ToolParameter(
+            name="image_path",
+            type=str,
+            required=True,
+            description="Image path, supports single or multiple (comma separated). Example: 'screenshot.png' or 'img1.jpg,img2.png'",
+            example="screenshot.png",
+            aliases=["image", "path", "file"],
+        ),
+        ToolParameter(
+            name="prompt",
+            type=str,
+            required=False,
+            description="What do you want to know about the image? Example: 'What is the main content of this image?'",
+            example="What is the main content of this image?",
+            aliases=["question", "query"],
+        ),
+    ],
+    returns="Returns a dictionary with success, description, images_count, and images fields",
+)
+
+UNDERSTAND_VIDEO_SCHEMA = ToolSchema(
+    name="understand_video",
+    description="Understand video content - analyze scenes, characters, actions, etc. in the video. Requires video file path.",
+    parameters=[
+        ToolParameter(
+            name="video_path",
+            type=str,
+            required=True,
+            description="Video file path",
+            example="video.mp4",
+            aliases=["video", "path", "file"],
+        ),
+        ToolParameter(
+            name="prompt",
+            type=str,
+            required=False,
+            description="What do you want to know about the video? Example: 'What happened in the video?'",
+            example="What happened in the video?",
+            aliases=["question", "query"],
+        ),
+    ],
+    returns="Returns a dictionary with success, description, and video fields",
+)
+
+UNDERSTAND_UI_DESIGN_SCHEMA = ToolSchema(
+    name="understand_ui_design",
+    description="Understand UI design drafts/page screenshots and generate frontend code - an important tool for frontend development. Can analyze design drafts or page screenshots, describe UI layout, colors, components, etc., and try to generate corresponding HTML/CSS code. This tool combines multimodal understanding with frontend development knowledge, avoiding disconnection between understanding and code.",
+    parameters=[
+        ToolParameter(
+            name="design_path",
+            type=str,
+            required=True,
+            description="Design draft path, supports single or multiple (comma separated). Example: 'mockup.png' or 'desktop.png,mobile.png'",
+            example="mockup.png",
+            aliases=["design", "path", "image", "file"],
+        ),
+        ToolParameter(
+            name="prompt",
+            type=str,
+            required=False,
+            description="How do you want to analyze this design? Example: 'Please analyze this login page design'",
+            example="Please analyze this login page design",
+            aliases=["question", "query"],
+        ),
+        ToolParameter(
+            name="generate_code",
+            type=bool,
+            required=False,
+            default=True,
+            description="Whether to generate frontend code, default is true",
+            example=True,
+            aliases=["code", "gen_code"],
+        ),
+    ],
+    returns="Returns a dictionary with success, analysis, and code fields",
+)
+
+ANALYZE_IMAGE_CONSISTENCY_SCHEMA = ToolSchema(
+    name="analyze_image_consistency",
+    description="Analyze consistency across multiple images (people or objects) - used to check if people in multiple images are the same person, or if object styles are consistent. Suitable for image creation and video production scenarios.",
+    parameters=[
+        ToolParameter(
+            name="image_paths",
+            type=str,
+            required=True,
+            description="Multiple image paths, comma separated. Example: 'person1.jpg,person2.jpg'",
+            example="person1.jpg,person2.jpg",
+            aliases=["images", "paths", "files", "image_path"],
+        ),
+        ToolParameter(
+            name="prompt",
+            type=str,
+            required=False,
+            description="What aspects of consistency do you want to analyze?",
+            example="Are these the same person?",
+            aliases=["question", "query"],
+        ),
+    ],
+    returns="Returns a dictionary with success, analysis, images_count, and images fields",
+)
+
+
 # ==================== 所有工具schema的字典 ====================
 ALL_SCHEMAS = {
     # Atomic Tools
@@ -487,6 +595,11 @@ ALL_SCHEMAS = {
     "list_mcp_tools": LIST_MCP_TOOLS_SCHEMA,
     "call_mcp_tool": CALL_MCP_TOOL_SCHEMA,
     "get_mcp_status": GET_MCP_STATUS_SCHEMA,
+    # Multimodal Tools
+    "understand_image": UNDERSTAND_IMAGE_SCHEMA,
+    "understand_video": UNDERSTAND_VIDEO_SCHEMA,
+    "understand_ui_design": UNDERSTAND_UI_DESIGN_SCHEMA,
+    "analyze_image_consistency": ANALYZE_IMAGE_CONSISTENCY_SCHEMA,
 }
 
 
