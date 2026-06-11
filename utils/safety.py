@@ -1102,6 +1102,49 @@ class SafetyGuard:
         result.update(kwargs)
         return result
 
+    def _protect_quoted_pipes(self, command: str) -> str:
+        """将引号内的 | 替换为哨兵字符，避免 _split_pipeline 误判为 shell 管道"""
+        result = []
+        i = 0
+        while i < len(command):
+            ch = command[i]
+            if ch == "'":
+                result.append(ch)
+                i += 1
+                while i < len(command):
+                    c = command[i]
+                    if c == "'":
+                        result.append(c)
+                        break
+                    elif c == '|':
+                        result.append('\x01')
+                    else:
+                        result.append(c)
+                    i += 1
+                i += 1
+            elif ch == '"':
+                result.append(ch)
+                i += 1
+                while i < len(command):
+                    c = command[i]
+                    if c == '\\' and i + 1 < len(command):
+                        result.append(c)
+                        i += 1
+                        result.append(command[i])
+                    elif c == '"':
+                        result.append(c)
+                        break
+                    elif c == '|':
+                        result.append('\x01')
+                    else:
+                        result.append(c)
+                    i += 1
+                i += 1
+            else:
+                result.append(ch)
+                i += 1
+        return ''.join(result)
+
     def _split_pipeline(self, parts: List[str]) -> List[List[str]]:
         """将 token 列表按管道/分隔符拆分为多个命令段
 
@@ -1491,6 +1534,7 @@ class SafetyGuard:
                     )
 
         # 解析命令
+        command = self._protect_quoted_pipes(command)
         try:
             try:
                 parts = shlex.split(command)

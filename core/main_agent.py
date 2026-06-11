@@ -346,6 +346,30 @@ class MainAgent(BaseAgent):
 
         print(t("skills.registered_tools", count=len(enabled_list)))
 
+    @staticmethod
+    def _is_retryable_model_error(e: Exception) -> bool:
+        try:
+            import httpx
+            if isinstance(e, (
+                httpx.RemoteProtocolError, httpx.ReadError,
+                httpx.ConnectError, httpx.TimeoutException,
+            )):
+                return True
+        except ImportError:
+            pass
+        try:
+            import openai as oai
+            if isinstance(e, (
+                oai.APIConnectionError, oai.APITimeoutError,
+                oai.InternalServerError, oai.RateLimitError,
+            )):
+                return True
+            if isinstance(e, oai.APIStatusError):
+                return getattr(e, 'status_code', 0) >= 500
+        except ImportError:
+            pass
+        return False
+
     def _create_model_caller(self, model_config: Dict):
         """创建模型调 with 器（支持流式输出、多网关、原生 Function Calling）"""
 
@@ -366,140 +390,149 @@ class MainAgent(BaseAgent):
             except Exception:
                 native_tools = None
 
-            try:
-                # 使 with 提供的配置创建客户端
-                api_key = (
-                    model_config.get("api_key")
-                    or os.getenv("LLM_API_KEY")
-                    or os.getenv("OPENAI_API_KEY")
-                )
-                base_url = (
-                    model_config.get("base_url")
-                    or os.getenv("LLM_API_URL")
-                    or os.getenv("OPENAI_BASE_URL")
-                )
-                model_name = (
-                    model_config.get("name")
-                    or os.getenv("LLM_MODEL_NAME", "deepseek-chat")
-                    or "deepseek-chat"
-                )
-                gateway = model_config.get("gateway", "openai")
+            # 重试机制：网络瞬断、协议错误、5xx等自动重试
+            _max_retries = 3
+            _last_exc = None
+            for _retry in range(_max_retries):
+                try:
+                    # 使 with 提供的配置创建客户端
+                    api_key = (
+                        model_config.get("api_key")
+                        or os.getenv("LLM_API_KEY")
+                        or os.getenv("OPENAI_API_KEY")
+                    )
+                    base_url = (
+                        model_config.get("base_url")
+                        or os.getenv("LLM_API_URL")
+                        or os.getenv("OPENAI_BASE_URL")
+                    )
+                    model_name = (
+                        model_config.get("name")
+                        or os.getenv("LLM_MODEL_NAME", "deepseek-chat")
+                        or "deepseek-chat"
+                    )
+                    gateway = model_config.get("gateway", "openai")
 
-                if not api_key:
-                    # API Key 未设置，抛出异常让 react_loop 显示错误
-                    error_msg = "❌ API Key not configured! Please configure the API Key in client Settings, or run 'aacode init' to set it up."
-                    print(error_msg)
-                    raise RuntimeError(error_msg)
+                    if not api_key:
+                        # API Key 未设置，抛出异常让 react_loop 显示错误
+                        error_msg = "❌ API Key not configured! Please configure the API Key in client Settings, or run 'aacode init' to set it up."
+                        print(error_msg)
+                        raise RuntimeError(error_msg)
 
-                # 确保base_url不为None，根据模型名称和网关类型设置默认URL
-                if not base_url:
-                    model_lower = model_name.lower() if model_name else ""
+                    # 确保base_url不为None，根据模型名称和网关类型设置默认URL
+                    if not base_url:
+                        model_lower = model_name.lower() if model_name else ""
+                        if gateway == "anthropic":
+                            # 根据模型选择正确的Anthropic兼容端点
+                            if "minimax" in model_lower:
+                                base_url = "https://api.minimax.chat/anthropic"
+                            elif "deepseek" in model_lower:
+                                base_url = "https://api.deepseek.com/anthropic"
+                            elif "kimi" in model_lower or "moonshot" in model_lower:
+                                base_url = "https://api.moonshot.cn/anthropic"
+                            elif "claude" in model_lower:
+                                base_url = "https://api.anthropic.com"
+                            else:
+                                base_url = "https://api.anthropic.com"
+                        else:
+                            if "minimax" in model_lower:
+                                base_url = "https://api.minimax.chat/v1"
+                            elif "deepseek" in model_lower:
+                                base_url = "https://api.deepseek.com/v1"
+                            elif "kimi" in model_lower or "moonshot" in model_lower:
+                                base_url = "https://api.moonshot.cn/v1"
+                            elif "claude" in model_lower:
+                                base_url = "https://api.openai.com/v1"
+                            else:
+                                base_url = "https://api.openai.com/v1"
+
+                    # 根据网关类型创建客户端
                     if gateway == "anthropic":
-                        # 根据模型选择正确的Anthropic兼容端点
-                        if "minimax" in model_lower:
-                            base_url = "https://api.minimax.chat/anthropic"
-                        elif "deepseek" in model_lower:
-                            base_url = "https://api.deepseek.com/anthropic"
-                        elif "kimi" in model_lower or "moonshot" in model_lower:
-                            base_url = "https://api.moonshot.cn/anthropic"
-                        elif "claude" in model_lower:
-                            base_url = "https://api.anthropic.com"
-                        else:
-                            base_url = "https://api.anthropic.com"
+                        return await self._call_anthropic_api(
+                            api_key, base_url, model_name, messages, model_config,
+                            tools=native_tools,
+                        )
                     else:
-                        if "minimax" in model_lower:
-                            base_url = "https://api.minimax.chat/v1"
-                        elif "deepseek" in model_lower:
-                            base_url = "https://api.deepseek.com/v1"
-                        elif "kimi" in model_lower or "moonshot" in model_lower:
-                            base_url = "https://api.moonshot.cn/v1"
-                        elif "claude" in model_lower:
-                            base_url = "https://api.openai.com/v1"
-                        else:
-                            base_url = "https://api.openai.com/v1"
+                        return await self._call_openai_api(
+                            api_key, base_url, model_name, messages, model_config,
+                            tools=native_tools,
+                        )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as _inner:
+                    _last_exc = _inner
+                    if _retry + 1 < _max_retries and self._is_retryable_model_error(_inner):
+                        _delay = 2 ** _retry
+                        print(f"⚠️  Model API error (attempt {_retry+1}/{_max_retries}), retrying in {_delay}s: [{type(_inner).__name__}] {_inner}")
+                        await asyncio.sleep(_delay)
+                    else:
+                        break
 
-                # 根据网关类型创建客户端
-                if gateway == "anthropic":
-                    return await self._call_anthropic_api(
-                        api_key, base_url, model_name, messages, model_config,
-                        tools=native_tools,
-                    )
-                else:
-                    return await self._call_openai_api(
-                        api_key, base_url, model_name, messages, model_config,
-                        tools=native_tools,
-                    )
+            e = _last_exc
+            error_msg = f"Model call failed: [{type(e).__name__}] {str(e)}"
+            print(f"\n❌ {error_msg}")
 
-            except Exception as e:
-                # 详细的错误信息
-                error_msg = f"Model call failed: {str(e)}"
-                print(f"\n❌ {error_msg}")
+            # 检查是否为认证错误
+            error_str = str(e).lower()
+            if (
+                "401" in error_str
+                or "authentication" in error_str
+                or "invalid api key" in error_str
+            ):
+                print("\n🔑 API authentication failed! Check:")
+                print("1. Is API key correct")
+                print("2. Is LLM_API_KEY env var set")
+                print("3. Does API key have proper permissions")
+                print("4. Is API service available")
+                print("\n💡 Suggestions:")
+                print("- Run `export LLM_API_KEY=your_api_key`")
+                print("- Check if API key is expired or revoked")
+                print("- Verify API endpoint is correct")
+                raise RuntimeError(f"API authentication failed: {error_msg}")
 
-                # 检查是否为认证错误
-                error_str = str(e).lower()
-                if (
-                    "401" in error_str
-                    or "authentication" in error_str
-                    or "invalid api key" in error_str
-                ):
-                    print("\n🔑 API authentication failed! Check:")
-                    print("1. Is API key correct")
-                    print("2. Is LLM_API_KEY env var set")
-                    print("3. Does API key have proper permissions")
-                    print("4. Is API service available")
-                    print("\n💡 Suggestions:")
-                    print("- Run `export LLM_API_KEY=your_api_key`")
-                    print("- Check if API key is expired or revoked")
-                    print("- Verify API endpoint is correct")
-                    # 抛出异常，停止execute
-                    raise RuntimeError(f"API authentication failed: {error_msg}")
+            # 检查是否为网络错误
+            elif (
+                "connection" in error_str
+                or "timeout" in error_str
+                or "network" in error_str
+            ):
+                print("\n🌐 Network connection failed! Check:")
+                print("1. Is network working")
+                print("2. Is API endpoint reachable")
+                print("3. Firewall or proxy settings")
+                print("\n💡 Suggestions:")
+                print("- Check network connection")
+                print("- Verify API service URL is correct")
+                print("- Try `curl` to test API endpoint")
+                raise RuntimeError(f"Network connection failed: {error_msg}")
 
-                # 检查是否为网络错误
-                elif (
-                    "connection" in error_str
-                    or "timeout" in error_str
-                    or "network" in error_str
-                ):
-                    print("\n🌐 Network connection failed! Check:")
-                    print("1. Is network working")
-                    print("2. Is API endpoint reachable")
-                    print("3. Firewall or proxy settings")
-                    print("\n💡 Suggestions:")
-                    print("- Check network connection")
-                    print("- Verify API service URL is correct")
-                    print("- Try `curl` to test API endpoint")
-                    # 抛出异常，停止execute
-                    raise RuntimeError(f"Network connection failed: {error_msg}")
+            # 检查是否为配额错误
+            elif (
+                "quota" in error_str
+                or "limit" in error_str
+                or "rate limit" in error_str
+            ):
+                print("\n📊 API quota or limit error! Check:")
+                print("1. Is API quota exhausted")
+                print("2. Is rate limit reached")
+                print("3. Is account balance sufficient")
+                print("\n💡 Suggestions:")
+                print("- Check API usage")
+                print("- Wait for quota reset")
+                print("- Upgrade API plan")
+                raise RuntimeError(f"API quota error: {error_msg}")
 
-                # 检查是否为配额错误
-                elif (
-                    "quota" in error_str
-                    or "limit" in error_str
-                    or "rate limit" in error_str
-                ):
-                    print("\n📊 API quota or limit error! Check:")
-                    print("1. Is API quota exhausted")
-                    print("2. Is rate limit reached")
-                    print("3. Is account balance sufficient")
-                    print("\n💡 Suggestions:")
-                    print("- Check API usage")
-                    print("- Wait for quota reset")
-                    print("- Upgrade API plan")
-                    # 抛出异常，停止execute
-                    raise RuntimeError(f"API quota error: {error_msg}")
-
-                # 其他错误，提供通用建议
-                else:
-                    print("\n⚠️  Model call error! Check:")
-                    print("1. API service status")
-                    print("2. Is model name correct")
-                    print("3. Are request parameters valid")
-                    print("\n💡 Suggestions:")
-                    print("- Check error details")
-                    print("- Check API documentation")
-                    print("- Contact technical support")
-                    # 抛出异常，停止execute
-                    raise RuntimeError(f"Model call error: {error_msg}")
+            # 其他错误，提供通用建议
+            else:
+                print("\n⚠️  Model call error! Check:")
+                print("1. API service status")
+                print("2. Is model name correct")
+                print("3. Are request parameters valid")
+                print("\n💡 Suggestions:")
+                print("- Check error details")
+                print("- Check API documentation")
+                print("- Contact technical support")
+                raise RuntimeError(f"Model call error: {error_msg}")
 
         return model_caller
 
