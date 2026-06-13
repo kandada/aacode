@@ -17,14 +17,14 @@ class MockModel:
     def __init__(self):
         self.responses = {
             "default": [
-                '我需要分析这个任务并制定计划。\n\nAction: list_files\nAction Input: {"pattern": "*"}',
-                'Let me first check the project structure, then create the appropriate files.\n\nAction: write_file\nAction Input: {"path": "hello.py", "content": "print(\'Hello, World!\')"}',
+                '我需要分析这个任务并制定计划。\n\nAction: run_shell\nAction Input: {"command": "ls"}',
+                'Let me first check the project structure, then create the appropriate files.\n\nAction: run_shell\nAction Input: {"command": "cat > hello.py << \'EOF\'\\nprint(\'Hello, World!\')\\nEOF"}',
                 "Task completed.\n\n",
                 '我需要运行这个程序来验证。\n\nAction: run_shell\nAction Input: {"command": "python3 hello.py"}',
                 "Program ran successfully, task completed.\n\n",
             ],
             "create_file": [
-                '我将创建一个hello world程序。\n\nAction: write_file\nAction Input: {"path": "hello.py", "content": "#!/usr/bin/env python3\\nprint(\'Hello, World!\')"}'
+                '我将创建一个hello world程序。\n\nAction: run_shell\nAction Input: {"command": "cat > hello.py << \'EOF\'\\n#!/usr/bin/env python3\\nprint(\'Hello, World!\')\\nEOF"}'
             ],
             "run_file": [
                 '让我运行这个程序。\n\nAction: run_shell\nAction Input: {"command": "python3 hello.py"}'

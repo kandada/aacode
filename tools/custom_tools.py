@@ -16,12 +16,14 @@ class CustomTools(AtomicTools):
 
     async def analyze_code(self, file_path: str) -> Dict[str, Any]:
         """code analysis工具"""
+        import os
+
         # 读取文件
-        result = await self.read_file(file_path)
+        result = await self.run_shell(f'cat "{file_path}"')
         if not result.get("success"):
             return result
 
-        code = result["content"]
+        code = result.get("stdout", "")
 
         # executecode analysis
         analysis_code = f"""
