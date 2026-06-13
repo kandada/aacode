@@ -1734,13 +1734,19 @@ class SafetyGuard:
 
             # 特殊检查：rm命令（智能检查）
             if cmd_name == "rm":
-                # 检查是否有-rf等危险选项
-                has_dangerous_option = False
+                # 检查是否有递归选项（-r/-R/--recursive 才是危险操作）
+                has_recursive = False
+                has_force = False
                 dangerous_targets = []
 
                 for i, part in enumerate(parts):
-                    if part.startswith("-") and any(c in part for c in "rf"):
-                        has_dangerous_option = True
+                    if part.startswith("-"):
+                        if any(c in part for c in "rR"):
+                            has_recursive = True
+                        if "f" in part:
+                            has_force = True
+                    elif part == "--recursive":
+                        has_recursive = True
                     # 检查删除目标
                     elif i > 0 and not part.startswith("-"):
                         # 这是要删除的目标
@@ -1796,34 +1802,35 @@ class SafetyGuard:
                                 # 路径解析失败，保守起见视为危险
                                 dangerous_targets.append(target_path)
 
-                # 如果有危险选项
-                if has_dangerous_option:
+                # 只有递归删除才需要特殊检查
+                if has_recursive:
                     # 如果尝试删除项目外的文件，拒绝
                     if dangerous_targets:
                         return {
                             "allowed": False,
-                            "reason": f"rm -rf cannot delete files outside project directory: {', '.join(dangerous_targets)}",
-                            "suggestion": "rm -rf can only be used within the project directory",
+                            "reason": f"rm -r cannot delete files outside project directory: {', '.join(dangerous_targets)}",
+                            "suggestion": "rm -r can only be used within the project directory",
                         }
 
-                    # 在项目目录内使用 rm -rf
+                    # 在项目目录内使用 rm -r
                     # 如果是交互模式且要求确认，则询问用户
+                    flags_desc = "rm -rf" if has_force else "rm -r"
                     if ask_confirmation and self.interactive:
                         # 提取要删除的目标
                         targets = [p for p in parts[1:] if not p.startswith("-")]
                         target_desc = ", ".join(targets) if targets else "files"
 
                         if not self._ask_user_confirmation(
-                            command, f"rm -rf recursive deletion, will delete: {target_desc}"
+                            command, f"{flags_desc} recursive deletion, will delete: {target_desc}"
                         ):
                             return {"allowed": False, "reason": "User cancelled operation"}
-                        print("✅ User confirmed rm -rf operation")
-                        return {"allowed": True, "reason": "rm -rf operation (user confirmed)"}
+                        print(f"✅ User confirmed {flags_desc} operation")
+                        return {"allowed": True, "reason": f"{flags_desc} operation (user confirmed)"}
                     else:
                         # 非交互模式或不需要确认，直接允许（项目内）
-                        return {"allowed": True, "reason": "rm -rf operation (within project directory)"}
+                        return {"allowed": True, "reason": f"rm -r operation (within project directory)"}
 
-                # 普通rm命令，允许
+                # 普通rm命令（无递归选项），允许
                 return {"allowed": True, "reason": "rm command (safe)"}
 
             # 特殊检查：sudo命令（允许但需要确认）
@@ -1916,15 +1923,32 @@ class SafetyGuard:
                                         "reason": "chmod 777 operation (within project)",
                                     }
 
-                    # 项目内的权限修改，在交互模式下询问确认
-                    if ask_confirmation and self.interactive:
-                        if not self._ask_user_confirmation(
-                            command, f"{cmd_name} permission modification"
-                        ):
-                            return {"allowed": False, "reason": "User cancelled operation"}
-                        return {"allowed": True, "reason": f"{cmd_name} operation (user confirmed)"}
+                    # 项目内的权限修改，仅对危险操作询问确认
+                    if cmd_name == "chmod":
+                        # 检查是否是递归操作 (-R)
+                        has_recursive = any(
+                            p.startswith("-") and "R" in p
+                            for p in parts
+                        )
+                        if has_recursive:
+                            if ask_confirmation and self.interactive:
+                                if not self._ask_user_confirmation(
+                                    command, "chmod -R recursive permission modification"
+                                ):
+                                    return {"allowed": False, "reason": "User cancelled operation"}
+                                return {"allowed": True, "reason": "chmod -R operation (user confirmed)"}
+                            return {"allowed": True, "reason": "chmod -R operation (within project)"}
+                        # 普通 chmod（如 +x, 644 等），直接允许
+                        return {"allowed": True, "reason": "chmod operation (within project)"}
                     else:
-                        return {"allowed": True, "reason": f"{cmd_name} operation (within project)"}
+                        # chown 需要确认（所有权变更影响较大）
+                        if ask_confirmation and self.interactive:
+                            if not self._ask_user_confirmation(
+                                command, "chown ownership modification"
+                            ):
+                                return {"allowed": False, "reason": "User cancelled operation"}
+                            return {"allowed": True, "reason": "chown operation (user confirmed)"}
+                        return {"allowed": True, "reason": "chown operation (within project)"}
                 else:
                     # 宽松模式：允许项目外路径，但 chmod 777 仍需确认
                     if len(parts) > 1 and cmd_name == "chmod":

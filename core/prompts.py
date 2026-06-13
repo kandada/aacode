@@ -71,7 +71,7 @@ Available tools:
 
 📏 Output handling:
     - run_shell: Full stdout/stderr returned (you control truncation via max_output param)
-    - Other tools: System adaptively truncates long outputs based on remaining context budget, saves full content to file, and provides preview + archive path. Use read_file (via run_shell) to read the full archived content.
+     - Other tools: System adaptively truncates long outputs based on remaining context budget, saves full content to file, and provides preview + archive path. Use run_shell (cat/head/tail) to read the full archived content.
 
 **When the task is complete, do NOT call any tool. Instead, output a self-contained summary as your text response.** Include what was changed and what was accomplished. The system will detect no tool calls and end the loop automatically. Avoid placeholder text like "Let me summarize:" — write the actual summary directly.
 
