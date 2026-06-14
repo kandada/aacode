@@ -83,6 +83,50 @@ def split_into_rounds(messages: List[Dict]) -> List[List[Dict]]:
     return rounds
 
 
+def _find_latest_real_user_round(rounds: List[List[Dict]]) -> Optional[int]:
+    """找到最近一条真正用户消息所在的 round 索引（排除系统注入的伪 user 消息）。"""
+    for i in range(len(rounds) - 1, -1, -1):
+        for msg in rounds[i]:
+            if msg.get("role") == "user" and not str(msg.get("content", "")).startswith("[System]"):
+                return i
+    return None
+
+
+def _build_fallback_compact_view(
+    encoding,
+    rounds: List[List[Dict]],
+    protect_first_rounds: int,
+    keep_last_rounds: int,
+    cached_summary: Optional[str],
+) -> Tuple[List[Dict], bool, int]:
+    """旧版压缩逻辑：protect_first + summary + keep_last。用于无 user 消息的退化场景。"""
+    result: List[Dict] = []
+
+    for r in rounds[:protect_first_rounds]:
+        result.extend(r)
+
+    if cached_summary:
+        summary_content = cached_summary
+    else:
+        middle_count = len(rounds) - protect_first_rounds - keep_last_rounds
+        compact_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        summary_content = (
+            f"## Context Summary\n\n"
+            f"**Compaction Time**: {compact_time}\n\n"
+            f"*Intermediate {max(0, middle_count)} rounds were omitted to stay within the context limit.*\n\n"
+            f"Please continue based on the most recent context below."
+        )
+
+    result.append({"role": "system", "content": summary_content})
+
+    for r in rounds[-keep_last_rounds:]:
+        result.extend(r)
+
+    validate_tool_call_integrity(result)
+    token_count = estimate_tokens(encoding, result)
+    return result, True, token_count
+
+
 def build_compact_view(
     encoding,
     messages: List[Dict],
@@ -98,17 +142,18 @@ def build_compact_view(
     核心原则：
     - 不修改原始 messages 列表
     - 只在 round 边界处切割，确保 tool_calls/tool_messages 完整性
-    - 保留 system prompt + 前 N round + 摘要 + 后 N round
-    - 保护最近一条 user 消息所在轮（避免模型丢失当前任务描述）
+    - 找到最新一条真实用户消息（排除系统注入的伪 user），**该消息及其之后的所有轮次绝不压缩**
+    - 仅在用户消息之前的轮次进行压缩：保留前 N 轮 + AI 摘要
+    - 持久化的全量消息和内存中的全量消息均不受影响
 
     Args:
         encoding: tiktoken encoding 对象
         messages: 全量消息列表
         max_tokens: 模型最大上下文长度
-        protect_first_rounds: 保护前 N 个 round
-        keep_last_rounds: 保留后 N 个 round
+        protect_first_rounds: 用户消息之前，保留前 N 个 round
+        keep_last_rounds: protect_latest_user_round=False 退化时，保留后 N 个 round
         cached_summary: 预生成的中间轮次摘要（None 表示尚未生成）
-        protect_latest_user_round: 是否保护最近 user 消息所在轮，避免当前任务描述被压缩
+        protect_latest_user_round: 是否保护最近真实 user 消息及之后所有轮次
 
     Returns:
         (compact_view, was_compacted, token_count): 压缩后的消息列表, 是否实际压缩, token 数
@@ -121,55 +166,48 @@ def build_compact_view(
 
     rounds = split_into_rounds(messages)
 
-    if len(rounds) <= protect_first_rounds + keep_last_rounds:
-        result = list(messages)
-        return result, False, estimate_tokens(encoding, result)
-
-    latest_user_round_idx: Optional[int] = None
     if protect_latest_user_round:
-        for i in range(len(rounds) - 1, -1, -1):
-            for msg in rounds[i]:
-                if msg.get("role") == "user":
-                    latest_user_round_idx = i
-                    break
-            if latest_user_round_idx is not None:
-                break
-
-    result: List[Dict] = []
-
-    for r in rounds[:protect_first_rounds]:
-        result.extend(r)
-
-    user_round_in_middle = (
-        protect_latest_user_round
-        and latest_user_round_idx is not None
-        and latest_user_round_idx >= protect_first_rounds
-        and latest_user_round_idx < len(rounds) - keep_last_rounds
-    )
-    if user_round_in_middle:
-        result.extend(rounds[latest_user_round_idx])
-
-    if cached_summary:
-        summary_content = cached_summary
+        latest_user_round_idx = _find_latest_real_user_round(rounds)
     else:
-        middle_count = len(rounds) - protect_first_rounds - keep_last_rounds
-        compact_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        summary_content = (
-            f"## Context Summary\n\n"
-            f"**Compaction Time**: {compact_time}\n\n"
-            f"*Intermediate {middle_count} rounds were omitted to stay within the context limit.*\n\n"
-            f"Please continue based on the most recent context below and the task description above."
+        latest_user_round_idx = None
+
+    if latest_user_round_idx is None:
+        if len(rounds) <= protect_first_rounds + keep_last_rounds:
+            result = list(messages)
+            return result, False, estimate_tokens(encoding, result)
+        return _build_fallback_compact_view(
+            encoding, rounds, protect_first_rounds, keep_last_rounds, cached_summary
         )
 
-    result.append({"role": "system", "content": summary_content})
+    pre_user_rounds = rounds[:latest_user_round_idx]
+    post_user_rounds = rounds[latest_user_round_idx:]
 
-    for r in rounds[-keep_last_rounds:]:
+    keep_first = min(protect_first_rounds, len(pre_user_rounds))
+
+    result: List[Dict] = []
+    for i in range(keep_first):
+        result.extend(pre_user_rounds[i])
+
+    skipped = len(pre_user_rounds) - keep_first
+    if skipped > 0:
+        if cached_summary:
+            result.append({"role": "system", "content": cached_summary})
+        else:
+            compact_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            summary_content = (
+                f"## Context Summary\n\n"
+                f"**Compaction Time**: {compact_time}\n\n"
+                f"*{skipped} earlier rounds were omitted to stay within the context limit.*\n\n"
+                f"Please continue based on the most recent context below."
+            )
+            result.append({"role": "system", "content": summary_content})
+
+    for r in post_user_rounds:
         result.extend(r)
 
     validate_tool_call_integrity(result)
-
     token_count = estimate_tokens(encoding, result)
-    return result, True, token_count
+    return result, skipped > 0, token_count
 
 
 def validate_tool_call_integrity(messages: List[Dict]) -> None:
