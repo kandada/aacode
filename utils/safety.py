@@ -1159,6 +1159,7 @@ class SafetyGuard:
 
         heredoc_stack = []  # 栈：跟踪嵌套的 heredoc 结束标记
         subshell_depth = 0  # $(...) 嵌套深度计数器
+        exec_depth = 0  # find -exec/-execdir 嵌套深度计数器
 
         i = 0
         while i < len(parts):
@@ -1203,6 +1204,16 @@ class SafetyGuard:
             if heredoc_stack and part == heredoc_stack[-1]:
                 heredoc_stack.pop()
                 current.append(part)
+                i += 1
+                continue
+
+            # 检测 find -exec/-execdir 上下文：; 是 -exec 的终止符而非 shell 命令分隔符
+            if part == "-exec" or part == "-execdir":
+                exec_depth += 1
+            if exec_depth > 0:
+                current.append(part)
+                if part == ";" or part == "+":
+                    exec_depth -= 1
                 i += 1
                 continue
 

@@ -374,17 +374,8 @@ class SessionManager:
         if not self.current_session_id:
             return False
 
-        # 检查token限制
-        new_tokens = self._count_tokens(content)
-        current_tokens = self._get_total_tokens()
-
-        if current_tokens + new_tokens > self.max_tokens:
-            await self._compact_context()
-            current_tokens = self._get_total_tokens()
-            if current_tokens + new_tokens > self.max_tokens:
-                return False
-
         # 添加消息
+        new_tokens = self._count_tokens(content)
         message = SessionMessage(
             role=role,
             content=content,
@@ -470,30 +461,17 @@ class SessionManager:
         return "\n".join(history_lines)
 
     async def _compact_context(self):
-        """压缩上下文，保持在token限制内"""
-        if len(self.current_messages) <= 4:  # 保留系统消息和最少对话
-            return
+        """检查上下文 token 使用量，记录警告但不修改持久化数据。
 
-        # 保留 system 消息：包含 LLM 生成的压缩摘要（必须保留，不可复现），
-        # 以及旧版数据可能残留的占位 system（无害，由 get_messages(include_system=False) 过滤）
-        system_msgs = [msg for msg in self.current_messages if msg.role == "system"]
-        recent_msgs = self.current_messages[-3:]  # 保留最近3条消息
-
-        # 生成摘要
-        old_msgs = self.current_messages[:-3]
-        if old_msgs:
-            compact_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            summary = f"The previous conversation contained {len(old_msgs)} messages, mainly discussing programming-related tasks."
-            summary_msg = SessionMessage(
-                role="system",
-                content=f"Context summary (compressed at: {compact_time}): {summary}",
-                timestamp=datetime.now().isoformat(timespec='seconds'),
-                tokens=self._count_tokens(summary),
+        持久化的全量消息不可破坏，真正的压缩由 react_loop._build_compact_view
+        在传入模型时执行（round-aware 压缩视图）。
+        """
+        current_tokens = self._get_total_tokens()
+        if current_tokens > self.max_tokens * 0.8:
+            print(
+                f"⚠️ Session token count ({current_tokens}) approaching limit ({self.max_tokens}). "
+                f"Full data preserved; model-input compression handled by react_loop."
             )
-
-            self.current_messages = system_msgs + [summary_msg] + recent_msgs
-        else:
-            self.current_messages = system_msgs + recent_msgs
 
     async def _save_session(self):
         """保存当前会话（单轨：messages 数组包含全部结构化字段）"""
