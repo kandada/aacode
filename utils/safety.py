@@ -575,6 +575,11 @@ class SafetyGuard:
             "function",
             "[",
             "[[",
+            "(",
+            ")",
+            "((",
+            "))",
+            "<<<",
             "declare",
             "typeset",
             "local",
@@ -1034,6 +1039,19 @@ class SafetyGuard:
             if cmd_name.startswith(base_cmd):
                 return base_cmd
 
+        # 去除进程替换 (<(...) 或 >(...)) 中 shlex 合并到 token 尾部的 )
+        # 去除子 shell 分组 (...) 中 shlex 合并到 token 头部的 (
+        # 只剥离多余的括号，保留单独的 (、)、((、)) 等 shell 关键字
+        if cmd_name.startswith('(') and len(cmd_name) > 1:
+            cmd_name = cmd_name[1:]
+        if cmd_name.endswith(')') and len(cmd_name) > 1:
+            cmd_name = cmd_name[:-1]
+
+        # 去除版本/工具链后缀: gcc-12 → gcc, openssl@3 → openssl, docker-compose-v1 → docker-compose
+        _ver_match = _re.match(r'^(.+?)[\-@]v?\d+(\.\d+)*$', cmd_name)
+        if _ver_match:
+            cmd_name = _ver_match.group(1)
+
         return cmd_name.lower()
 
     def _is_project_executable(self, cmd_path: str) -> bool:
@@ -1148,22 +1166,43 @@ class SafetyGuard:
     def _split_pipeline(self, parts: List[str]) -> List[List[str]]:
         """将 token 列表按管道/分隔符拆分为多个命令段
 
-        分隔符: |, &&, ||, ;
+        分隔符: |, ||, &&, |&, ;
         每个段是一个独立的命令，可以单独检查安全性。
-        不拆分 heredoc (<<) 内容中的 | 字符。
-        不拆分 $(...) 命令替换内的管道符号。
+        不拆分 heredoc (<<) 内容中的分隔符。
+        不拆分 $(...) 命令替换内的分隔符。
+        不拆分 <(...) / >(...) 进程替换内的分隔符。
+        不拆分 [[...]] 测试表达式内的 && / ||（shell 逻辑运算符）。
+        不拆分 ((...)) 算术表达式内的 && / ||（C 风格逻辑运算符）。
         """
-        separators = {"|", "&&", "||", ";"}
+        separators = {"|", "||", "&&", "|&", ";"}
         segments = []
         current = []
 
         heredoc_stack = []  # 栈：跟踪嵌套的 heredoc 结束标记
         subshell_depth = 0  # $(...) 嵌套深度计数器
         exec_depth = 0  # find -exec/-execdir 嵌套深度计数器
+        bracket_depth = 0  # [[...]] 测试表达式深度计数器
+        arith_depth = 0  # ((...)) 算术表达式深度计数器
+        procsub_depth = 0  # <(...) / >(...) 进程替换深度计数器
+        group_depth = 0  # ( ... ) 子 shell 分组深度计数器
 
         i = 0
         while i < len(parts):
             part = parts[i]
+
+            # 检测 [[...]] 测试表达式上下文：内部 &&/|| 是逻辑运算符，非 shell 分隔符
+            if part == '[[':
+                bracket_depth += 1
+            elif part == ']]':
+                if bracket_depth > 0:
+                    bracket_depth -= 1
+
+            # 检测 ((...)) 算术表达式上下文：内部 &&/|| 是 C 风格逻辑运算符，非 shell 分隔符
+            # 独立 token: ((, )) ；合并 token: ((i=0;, i++)) 等
+            if part == '((' or part.startswith('(('):
+                arith_depth += 1
+            if arith_depth > 0 and (part == '))' or part.endswith('))')):
+                arith_depth -= 1
 
             # 检测 $( ... ) 命令替换开始（分离 token：$ 后跟 (）
             if part == '$' and i + 1 < len(parts) and parts[i + 1] == '(':
@@ -1187,17 +1226,63 @@ class SafetyGuard:
                 if trailing_close > 0:
                     subshell_depth = max(0, subshell_depth - trailing_close)
 
-            # 检测 heredoc 开始: << DELIM
+            # 检测 <(...) / >(...) 进程替换上下文：shlex 可能合并成 <(cmd 或单独 token
+            # 独立 token: <(, >(, )
+            # 合并 token: <(ls, sort), >(cmd) 等
+            if part == '<(' or part == '>(':
+                procsub_depth += 1
+            # 合并 token：<(word) 或 >(word)
+            procsub_open = part.count('<(') + part.count('>(')
+            if procsub_open > 0:
+                procsub_depth += procsub_open
+            # 关闭 ) 独立 token
+            if procsub_depth > 0 and part == ')':
+                procsub_depth = max(0, procsub_depth - 1)
+            # 关闭 ) 在合并 token 尾部（如 sort)）
+            if procsub_depth > 0:
+                trailing_close = len(part) - len(part.rstrip(')'))
+                if trailing_close > 0:
+                    procsub_depth = max(0, procsub_depth - trailing_close)
+
+            # 检测 ( ... ) 子 shell 分组上下文
+            # 不是 $(, <(, >(, (( 构造，shlex 可能合并成 (cmd 或单独 token
+            if part.startswith('(') and not part.startswith('((') \
+               and not part.startswith('$(') and not part.startswith('<(') \
+               and not part.startswith('>('):
+                group_depth += 1
+            if group_depth > 0:
+                if part == ')':
+                    group_depth = max(0, group_depth - 1)
+                elif part.endswith(')') and not part.endswith('))'):
+                    trailing_close = len(part) - len(part.rstrip(')'))
+                    group_depth = max(0, group_depth - trailing_close)
+
+            # 检测 heredoc 开始: << DELIM 或 <<- DELIM（允许前导 tab）
+            # shlex 可能将 <<- 与定界符合并为一个 token（如 <<-EOF），也可能分开
+            heredoc_delim = None
             if part == "<<" and i + 1 < len(parts):
                 delim_token = parts[i + 1]
-                delim_raw = delim_token
+                heredoc_delim = delim_token
+                current.append(part)
+                current.append(delim_token)
+                i += 2
+            elif part.startswith("<<-") and len(part) > 3:
+                heredoc_delim = part[3:]
+                current.append(part)
+                i += 1
+            elif part == "<<-" and i + 1 < len(parts):
+                delim_token = parts[i + 1]
+                heredoc_delim = delim_token
+                current.append(part)
+                current.append(delim_token)
+                i += 2
+
+            if heredoc_delim:
+                delim_raw = heredoc_delim
                 if (delim_raw.startswith("'") and delim_raw.endswith("'")) or \
                    (delim_raw.startswith('"') and delim_raw.endswith('"')):
                     delim_raw = delim_raw[1:-1]
                 heredoc_stack.append(delim_raw)
-                current.append(part)
-                current.append(delim_token)
-                i += 2
                 continue
 
             # 检测 heredoc 结束：匹配最内层结束标记
@@ -1217,8 +1302,10 @@ class SafetyGuard:
                 i += 1
                 continue
 
-            # 管道拆分（仅在非 heredoc 内且非 $(...) 内时）
-            if not heredoc_stack and subshell_depth == 0 and part in separators:
+            # 管道拆分（仅在非 heredoc、非 $()/<>()、非 [[]]、(())、() 内时）
+            if not heredoc_stack and subshell_depth == 0 and procsub_depth == 0 \
+               and bracket_depth == 0 and arith_depth == 0 and group_depth == 0 \
+               and part in separators:
                 if current:
                     segments.append(current)
                     current = []
@@ -1250,8 +1337,9 @@ class SafetyGuard:
         """Split multi-line command by newlines, respecting heredoc boundaries
         and multi-line quoted strings (e.g. python3 -c \"...\").
 
-        In shell, newlines are equivalent to ';' but only outside heredocs
-        and outside multi-line quoted strings.
+        In shell, newlines are equivalent to ';' but only outside heredocs,
+        outside multi-line quoted strings, and outside compound commands
+        (for/do/done, if/then/fi, while/do/done, case/in/esac, brace groups).
         """
         lines = command.split('\n')
         result = []
@@ -1259,6 +1347,33 @@ class SafetyGuard:
         heredoc_delims = []  # queue of heredoc closing delimiters
         in_dq = False  # inside double-quoted string
         in_sq = False  # inside single-quoted string
+        compound_depth = 0  # 复合命令嵌套深度 (for/if/case/brace)
+
+        def _check_compound(line_text: str, check_open: bool, check_close: bool) -> None:
+            """Track compound command boundaries."""
+            nonlocal compound_depth
+            s = line_text.strip()
+            if not s:
+                return
+            if check_close and compound_depth > 0:
+                first_word = s.split()[0] if s.split() else ''
+                if first_word in ('done', 'fi', 'esac'):
+                    compound_depth -= 1
+                elif s.rstrip().endswith('}'):
+                    compound_depth -= 1
+                elif ';' in s:
+                    first_part = s.split(';')[0].strip().split()[0] if s.split(';')[0].strip() else ''
+                    if first_part in ('done', 'fi', 'esac'):
+                        compound_depth -= 1
+            if check_open:
+                if re.search(r'\b(?:for|while|until|select)\b.*\bdo\b\s*$', s):
+                    compound_depth += 1
+                elif re.search(r'\b(?:if|elif)\b.*\bthen\b\s*$', s):
+                    compound_depth += 1
+                elif re.search(r'\bcase\b.*\bin\b\s*$', s):
+                    compound_depth += 1
+                elif re.search(r'\{\s*$', s):
+                    compound_depth += 1
 
         def _update_quote_state(line_text: str) -> None:
             """Update in_dq/in_sq based on line content."""
@@ -1276,7 +1391,8 @@ class SafetyGuard:
                 i += 1
 
         for line in lines:
-            if not line.strip():
+            stripped = line.strip()
+            if not stripped:
                 continue
 
             if heredoc_delims:
@@ -1293,8 +1409,10 @@ class SafetyGuard:
                 for m in re.finditer(r'<<-?\s*[\'"]?(\w+)[\'"]?', line):
                     heredoc_delims.append(m.group(1))
                 if not heredoc_delims:
-                    result.append('\n'.join(current))
-                    current = []
+                    _check_compound(line, check_open=False, check_close=True)
+                    if compound_depth == 0:
+                        result.append('\n'.join(current))
+                        current = []
                 continue
 
             _update_quote_state(line)
@@ -1308,8 +1426,11 @@ class SafetyGuard:
                 continue
 
             if not heredoc_delims:
-                result.append('\n'.join(current))
-                current = []
+                _check_compound(line, check_open=True, check_close=True)
+                if compound_depth == 0:
+                    result.append('\n'.join(current))
+                    current = []
+                # else: 在复合命令内部，继续累积行
 
         if current:
             result.append('\n'.join(current))
@@ -1376,7 +1497,7 @@ class SafetyGuard:
         # Shell 控制流关键字：纯语法结构，无直接文件操作，视为安全
         shell_keywords = {
             "for", "if", "while", "until", "case", "select", "function",
-            "[", "[[", "{", "}", "declare", "typeset", "local", "let", "readonly",
+            "[", "[[", "(", ")", "((", "))", "<<<", "{", "}", "declare", "typeset", "local", "let", "readonly",
             "done", "esac", "fi", "then", "else", "elif", "do", "in",
             ":", "true", "false",
         }
@@ -1568,7 +1689,7 @@ class SafetyGuard:
             if len(segments) > 1:
                 final_risk = self.RISK_SAFE
                 for segment_parts in segments:
-                    segment_cmd = " ".join(segment_parts)
+                    segment_cmd = " ".join(shlex.quote(p) for p in segment_parts)
                     result = self.check_command(segment_cmd, ask_confirmation, _skip_newline_split=True)
                     if not result["allowed"]:
                         return result
@@ -1693,6 +1814,43 @@ class SafetyGuard:
                 cmd_path = parts[1]
                 parts = parts[1:]
 
+            # 处理重定向符号前置模式: > file cmd, 2>/dev/null cmd, <<< "str" cmd 等
+            # 重定向符号（独立或与文件路径合并）不是命令，应跳过找到实际命令
+            # 独立操作符需要跳过操作符+目标共 2 个 token；合并操作符只需跳过 1 个 token
+            _redir_standalone_skip2 = {"<", ">", ">>", "<<", "<<<", ">|"}
+            _redir_merged_skip1 = re.compile(r'^[0-9]*[<>]|&[<>]|<>|<&|>&|>\||<<-')
+            while parts:
+                if cmd_path in _redir_standalone_skip2:
+                    if len(parts) > 2:
+                        cmd_path = parts[2]
+                        parts = parts[2:]
+                    else:
+                        return self._build_result(
+                            allowed=True,
+                            reason="Redirection without command",
+                            risk_level=self.RISK_SAFE,
+                        )
+                elif _redir_merged_skip1.match(cmd_path):
+                    if len(parts) > 1:
+                        cmd_path = parts[1]
+                        parts = parts[1:]
+                    else:
+                        return self._build_result(
+                            allowed=True,
+                            reason="Redirection only (no command)",
+                            risk_level=self.RISK_SAFE,
+                        )
+                elif cmd_path in self.allowed_commands:
+                    break
+                elif re.match(r'^[|&;]+$', cmd_path):
+                    return self._build_result(
+                        allowed=True,
+                        reason="Shell separator after redirections",
+                        risk_level=self.RISK_SAFE,
+                    )
+                else:
+                    break
+
             # 提取命令名称（智能处理路径）
             cmd_name = self._extract_command_name(cmd_path)
 
@@ -1720,6 +1878,22 @@ class SafetyGuard:
                             risk_level=self.RISK_SAFE,
                         )
 
+            # 识别复合命令内的语法片段（不是实际命令），直接放行
+            # case 分支标签如 01)、a)、*.txt) 等：) 不是合法命令名字符
+            # 已剥离 ) 后剩纯数字如 01 也是 case 标签，不是命令
+            if cmd_path.endswith(')') and len(cmd_path) > 1:
+                return self._build_result(
+                    allowed=True,
+                    reason="Case pattern (syntax fragment, not a command)",
+                    risk_level=self.RISK_SAFE,
+                )
+            if re.match(r'^\d+$', cmd_path):
+                return self._build_result(
+                    allowed=True,
+                    reason="Numeric case pattern (syntax fragment, not a command)",
+                    risk_level=self.RISK_SAFE,
+                )
+
             # 检查是否在白名单中
             if cmd_name not in self.allowed_commands:
                 return self._build_result(
@@ -1732,7 +1906,7 @@ class SafetyGuard:
             # Shell 控制流关键字：跳过后续特殊检查和路径检查，直接放行
             shell_keywords = {
                 "for", "if", "while", "until", "case", "select", "function",
-                "[", "[[", "{", "}", "declare", "typeset", "local", "let", "readonly",
+                "[", "[[", "(", ")", "((", "))", "<<<", "{", "}", "declare", "typeset", "local", "let", "readonly",
                 "done", "esac", "fi", "then", "else", "elif", "do", "in",
                 ":", "true", "false",
             }
