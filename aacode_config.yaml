@@ -12,7 +12,8 @@ context:
   compact_keep_messages: 50          # 缩减后保留的消息数
   compact_keep_rounds: 10            # 缩减后保留的对话轮数（最近N轮）
   compact_summary_steps: 10         # 摘要包含的步骤数
-  compact_protect_first_rounds: 3   # 保护前N轮（任务规划、初始理解）
+  compact_protect_first_rounds: 1   # 保护前N轮（只保留 system prompt，其余由 AI 摘要承载）
+  compact_protect_user_rounds: 2    # 保护最新N条用户消息及附带消息（≥2，确保最新上下文完整）
 
 # 输出处理配置（自适应截断 — 基于剩余上下文预算）
 output:

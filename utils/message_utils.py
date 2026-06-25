@@ -4,6 +4,8 @@
 提供：
 - estimate_tokens: 增强的 token 估算（含 tool_calls 等结构化字段）
 - split_into_rounds: 按 round 拆分消息列表（尊重 tool_calls/tool_messages 边界）
+- _find_latest_real_user_round: 找到最近一条真正用户消息所在的 round（排除伪 user）
+- _find_last_n_real_user_round: 找到从末尾数第 N 条真正用户消息所在的 round
 - build_compact_view: 构建 round-aware 的压缩视图（不修改原列表）
 - validate_tool_call_integrity: 验证 tool_calls/tool_messages 配对完整性
 """
@@ -92,6 +94,32 @@ def _find_latest_real_user_round(rounds: List[List[Dict]]) -> Optional[int]:
     return None
 
 
+def _find_last_n_real_user_round(rounds: List[List[Dict]], n: int = 2) -> Optional[int]:
+    """找到从末尾数第 n 条真正用户消息所在的 round 索引（排除系统注入的伪 user 消息）。
+
+    保护边界 = 该 round 及之后所有消息均完整保留。
+    n=1 等价于 _find_latest_real_user_round；n=2 保护最后 2 条用户消息。
+
+    Args:
+        rounds: 按 round 拆分的消息列表
+        n: 从末尾往前数第 n 条真实用户消息
+
+    Returns:
+        第 n 条用户消息所在 round 的索引；不足 n 条时返回最早用户消息的索引；无用户返回 None
+    """
+    real_user_indices = []
+    for i, r in enumerate(rounds):
+        for msg in r:
+            if msg.get("role") == "user" and not str(msg.get("content", "")).startswith("[System]"):
+                real_user_indices.append(i)
+                break
+    if not real_user_indices:
+        return None
+    if len(real_user_indices) >= n:
+        return real_user_indices[-n]
+    return real_user_indices[0]
+
+
 def _build_fallback_compact_view(
     encoding,
     rounds: List[List[Dict]],
@@ -131,10 +159,11 @@ def build_compact_view(
     encoding,
     messages: List[Dict],
     max_tokens: int,
-    protect_first_rounds: int = 3,
+    protect_first_rounds: int = 1,
     keep_last_rounds: int = 10,
     cached_summary: Optional[str] = None,
     protect_latest_user_round: bool = True,
+    protect_last_user_rounds: int = 2,
 ) -> Tuple[List[Dict], bool, int]:
     """
     构建可传入模型的 round-aware 压缩视图。
@@ -142,7 +171,7 @@ def build_compact_view(
     核心原则：
     - 不修改原始 messages 列表
     - 只在 round 边界处切割，确保 tool_calls/tool_messages 完整性
-    - 找到最新一条真实用户消息（排除系统注入的伪 user），**该消息及其之后的所有轮次绝不压缩**
+    - 找到末尾数第 N 条真实用户消息（排除系统注入的伪 user），**该消息及其之后的所有轮次绝不压缩**
     - 仅在用户消息之前的轮次进行压缩：保留前 N 轮 + AI 摘要
     - 持久化的全量消息和内存中的全量消息均不受影响
 
@@ -153,7 +182,8 @@ def build_compact_view(
         protect_first_rounds: 用户消息之前，保留前 N 个 round
         keep_last_rounds: protect_latest_user_round=False 退化时，保留后 N 个 round
         cached_summary: 预生成的中间轮次摘要（None 表示尚未生成）
-        protect_latest_user_round: 是否保护最近真实 user 消息及之后所有轮次
+        protect_latest_user_round: 是否启用用户消息保护
+        protect_last_user_rounds: 保护末尾数第 N 条用户消息及之后所有轮次（默认 2）
 
     Returns:
         (compact_view, was_compacted, token_count): 压缩后的消息列表, 是否实际压缩, token 数
@@ -166,8 +196,8 @@ def build_compact_view(
 
     rounds = split_into_rounds(messages)
 
-    if protect_latest_user_round:
-        latest_user_round_idx = _find_latest_real_user_round(rounds)
+    if protect_latest_user_round and protect_last_user_rounds > 0:
+        latest_user_round_idx = _find_last_n_real_user_round(rounds, protect_last_user_rounds)
     else:
         latest_user_round_idx = None
 

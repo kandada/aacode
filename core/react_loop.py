@@ -31,7 +31,7 @@ from aacode.utils.message_utils import (
     estimate_tokens as _util_estimate_tokens,
     split_into_rounds,
     build_compact_view,
-    _find_latest_real_user_round,
+    _find_last_n_real_user_round,
 )
 
 
@@ -105,6 +105,7 @@ class AsyncReActLoop:
         # 上下文压缩摘要缓存
         self._compact_summary: Optional[str] = None
         self._compact_summary_msg_count: int = 0
+        self._post_compact_tokens: int = 0  # 压缩后的 compact view token 基准值
 
         # Stale loop detection: tracks fetch_url results per domain to detect
         # when the model repeatedly hits pages that return no readable content
@@ -556,7 +557,7 @@ During each thought, naturally plan:
                     execution_time=asyncio.get_event_loop().time() - iteration_start,
                 )
 
-            # 智能上下文缩减检查（基于传入模型的压缩视图 token 数，而非全量消息）
+            # 智能上下文缩减检查（基于传入模型的压缩视图 token 数）
             effective_msgs, was_compacted, compact_view_tokens = self._build_compact_view(messages)
             trigger_tokens_raw = (
                 self.context_config.compact_trigger_tokens
@@ -570,17 +571,16 @@ During each thought, naturally plan:
             )
             trigger_tokens = min(trigger_tokens_raw, context_max)
 
-            # 当压缩视图也超过触发阈值时，需要重新生成摘要（更激进地丢弃中间轮次）
             if compact_view_tokens > trigger_tokens:
-                print(f"📊 Compact view tokens: {compact_view_tokens}, trigger threshold: {trigger_tokens}")
                 msg_count_changed = len(messages) - self._compact_summary_msg_count
                 if msg_count_changed > 20 or self._compact_summary is None:
+                    print(f"📊 Compact view tokens: {compact_view_tokens}, trigger threshold: {trigger_tokens}")
                     await self._compact_context(messages)
-                if self.logger:
-                    await self.logger.log_context_update(
-                        update_type="compact",
-                        content=f"Context compaction executed after iteration {iteration + 1} (compact_view_tokens: {compact_view_tokens})",
-                    )
+                    if self.logger:
+                        await self.logger.log_context_update(
+                            update_type="compact",
+                            content=f"Context compaction executed after iteration {iteration + 1} (compact_view_tokens: {compact_view_tokens})",
+                        )
 
         total_time = asyncio.get_event_loop().time() - start_time
         if self.logger:
@@ -1216,7 +1216,7 @@ During each thought, naturally plan:
         protect_first = (
             self.context_config.compact_protect_first_rounds
             if self.context_config
-            else 3
+            else 1
         )
         keep_last = (
             self.context_config.compact_keep_rounds
@@ -1228,6 +1228,11 @@ During each thought, naturally plan:
             if self.context_config
             else 131072
         )
+        protect_last_user = (
+            self.context_config.compact_protect_user_rounds
+            if self.context_config
+            else 2
+        )
         return build_compact_view(
             encoding=self.encoding,
             messages=messages,
@@ -1235,12 +1240,13 @@ During each thought, naturally plan:
             protect_first_rounds=protect_first,
             keep_last_rounds=keep_last,
             cached_summary=self._compact_summary,
+            protect_last_user_rounds=protect_last_user,
         )
 
     async def _compact_context(self, messages: List[Dict]):
         """上下文缩减 - 智能版：生成 AI 摘要并缓存，不修改全量 messages
 
-        仅在最新用户消息之前的历史轮次中生成摘要，用户消息及其之后的所有轮次不参与压缩。
+        仅在最后 N 条用户消息之前的历史轮次中生成摘要，后 N 条用户消息及其之后的所有轮次不参与压缩。
         """
         print("📦 Executing smart context compaction...")
 
@@ -1249,7 +1255,7 @@ During each thought, naturally plan:
         protect_first_rounds = (
             self.context_config.compact_protect_first_rounds
             if self.context_config
-            else 3
+            else 1
         )
         keep_last_rounds = (
             self.context_config.compact_keep_rounds
@@ -1259,12 +1265,17 @@ During each thought, naturally plan:
         summary_steps = (
             self.context_config.compact_summary_steps if self.context_config else 10
         )
+        protect_last_user_rounds = (
+            self.context_config.compact_protect_user_rounds
+            if self.context_config
+            else 2
+        )
 
         # 使用 round 感知拆分，确保不会切断 tool_calls/tool_messages 配对
         rounds = split_into_rounds(messages)
 
-        # 找到最新真实用户消息所在轮，仅在用户消息之前的历史中生成摘要
-        latest_user_idx = _find_latest_real_user_round(rounds)
+        # 找到从末尾数第 N 条真实用户消息所在轮，仅在此之前的历史中生成摘要
+        latest_user_idx = _find_last_n_real_user_round(rounds, protect_last_user_rounds)
 
         if latest_user_idx is not None:
             pre_user_rounds = rounds[:latest_user_idx]
@@ -1330,8 +1341,22 @@ During each thought, naturally plan:
         # 验证：使用缓存摘要构建压缩视图，确认 tool_calls 完整性
         view, _, new_tokens = self._build_compact_view(messages)
         old_tokens = self._estimate_tokens(messages)
+        self._post_compact_tokens = new_tokens  # 记录压缩后基准值
 
-        print(f"✅ Smart context compaction done: full messages kept intact ({len(messages)} messages) | Summary cached for compact view | Token: {old_tokens} → {new_tokens} (compact view: {(old_tokens - new_tokens) / max(old_tokens, 1) * 100:.1f}% reduction) | Protected first {protect_first_rounds} pre-user rounds | Summarized {len(middle_rounds)} history rounds before latest user message")
+        trigger_tokens = (
+            self.context_config.compact_trigger_tokens
+            if self.context_config
+            else 8000
+        )
+        context_max = (
+            self.context_config.max_context_length
+            if self.context_config
+            else 131072
+        )
+        threshold = min(trigger_tokens, context_max)
+
+        status = "✅" if new_tokens <= threshold else "⚠️"
+        print(f"{status} Smart context compaction done: full messages kept intact ({len(messages)} messages) | Summary cached for compact view | Token: {old_tokens} → {new_tokens} (compact view: {(old_tokens - new_tokens) / max(old_tokens, 1) * 100:.1f}% reduction) | " + (f"Below trigger ({threshold})" if new_tokens <= threshold else f"Still above trigger ({threshold}), protected last {protect_last_user_rounds} user rounds may be large") + f" | Protected first {protect_first_rounds} pre-user rounds | Summarized {len(middle_rounds)} history rounds before latest user message")
 
     async def _compact_file_contents(self, messages: List[Dict]) -> List[Dict]:
         """
