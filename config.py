@@ -210,8 +210,7 @@ class ContextConfig:
     use_vector_store: bool = False
     # 新增：上下文缩减配置
     compact_trigger_tokens: int = 256000  # 触发缩减的token数阈值
-    compact_keep_messages: int = 50  # 缩减后保留的消息数
-    compact_keep_rounds: int = 10  # 缩减后保留的对话轮数（最近N轮）
+    compact_keep_rounds: int = 10  # 退化场景：缩减后保留的对话轮数（最近N轮）
     compact_summary_steps: int = 10  # 摘要包含的步骤数
     compact_protect_first_rounds: int = 1  # 保护前N轮（只保留 system prompt，其余由 AI 摘要承载）
     compact_protect_user_rounds: int = 2  # 保护最近N条用户消息及附带消息（确保最新上下文完整）
