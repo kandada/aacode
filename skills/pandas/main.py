@@ -28,8 +28,14 @@ async def run(code: str) -> Dict[str, Any]:
     try:
         sys.stdout = _TeeStream(old_stdout, captured)
 
-        import pandas as pd
-        import numpy as np
+        try:
+            import pandas as pd
+            import numpy as np
+        except ImportError as e:
+            return {
+                "success": False,
+                "error": f"{e.name} not installed. Install with: pip install 'aacode[datascience]'",
+            }
 
         exec_globals = {"pd": pd, "np": np}
         exec_locals: dict = {}

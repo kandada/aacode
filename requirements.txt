@@ -3,16 +3,8 @@ openai>=1.0.0
 anthropic>=0.25.0
 aiohttp>=3.9.0
 aiofiles>=23.0.0
-pydantic>=2.0.0
 pyyaml>=6.0
-
-# 数据科学（pandas/numpy skills）
-pandas>=2.0.0
-numpy>=1.24.0
-
-# 异步和工具
-asyncio-mqtt>=0.16.0  # 用于异步消息
-python-multipart>=0.0.6  # 文件上传
+platformdirs>=4.0.0
 
 # 开发工具
 pytest>=7.4.0
@@ -23,10 +15,17 @@ hypothesis>=6.0.0
 black>=23.0.0
 mypy>=1.5.0
 
-# 其他
-tiktoken
-platformdirs>=4.0.0
-ripgrep>=14.0.0
+# 可选：token 计数（tiktoken），安装失败不影响核心功能
+# 未安装时自动使用字符估算
+# tiktoken
+
+# 可选：ripgrep 快速搜索工具，安装失败不影响核心功能
+# 也可通过系统包管理器安装 rg 二进制 (brew/scoop/apt install ripgrep)
+# ripgrep>=14.0.0
+
+# 可选：数据科学 skills（pandas / numpy），安装失败不影响核心功能
+# pandas>=2.0.0
+# numpy>=1.24.0
 
 # 可选：浏览器自动化，配套的chromium浏览器环境安装会比较慢
 # playwright>=1.40.0

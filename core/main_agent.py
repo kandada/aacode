@@ -1160,12 +1160,10 @@ class MainAgent(BaseAgent):
                 summary.total_messages = len(self.session_manager.current_messages)
                 summary.total_tokens = self.session_manager._get_total_tokens()
 
-            # 降低磁盘写入频率：每 5 轮迭代 + 首轮才写盘，最终保存由 _finalize_session_save 保证
-            self._save_batch_counter = getattr(self, '_save_batch_counter', 0) + 1
-            if self._save_batch_counter <= 1 or self._save_batch_counter % 5 == 0:
-                await self.session_manager._save_session()
-                self.session_manager._save_sessions_index()
-                await self.session_manager._save_current_session_id()
+            # 每轮迭代立即写盘，确保客户端读取到的始终是最新数据
+            await self.session_manager._save_session()
+            self.session_manager._save_sessions_index()
+            await self.session_manager._save_current_session_id()
         except Exception as e:
             print(t("error.save_session", e=str(e)))
 
