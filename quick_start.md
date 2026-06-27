@@ -5,7 +5,7 @@
 ### 步骤1: 环境准备
 
 ```bash
-# 确保Python 3.8+已安装
+# 确保Python 3.10+已安装
 python3 --version
 
 # 克隆或下载项目
