@@ -104,8 +104,8 @@ class CodeTools:
                     }
 
                     if capture_output:
-                        result["stdout"] = stdout.decode("utf-8", errors="ignore")
-                        result["stderr"] = stderr.decode("utf-8", errors="ignore")
+                        result["stdout"] = stdout.decode("utf-8", errors="replace")
+                        result["stderr"] = stderr.decode("utf-8", errors="replace")
 
                     return result
 
@@ -178,7 +178,7 @@ class CodeTools:
                     process.communicate(), timeout=test_timeout
                 )
 
-                output = stdout.decode("utf-8", errors="ignore")
+                output = stdout.decode("utf-8", errors="replace")
 
                 # 解析测试结果
                 test_results = self._parse_pytest_output(output)
@@ -188,7 +188,7 @@ class CodeTools:
                     "returncode": process.returncode,
                     "output": output[-2000:],  # 只返回最后部分
                     "summary": test_results,
-                    "stderr": stderr.decode("utf-8", errors="ignore"),
+                    "stderr": stderr.decode("utf-8", errors="replace"),
                 }
 
             except asyncio.TimeoutError:

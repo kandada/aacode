@@ -2,7 +2,7 @@
 
 # 🤖 AACode - CLI Programming Agent
 
-[![Python Version](https://img.shields.io/badge/python-3.12+-blue.svg)](https://python.org)
+[![Python Version](https://img.shields.io/badge/python-3.10+-blue.svg)](https://python.org)
 
 > 🚀 **AI Programming CLI Agent based on DeepSeek** - A lightweight ReAct architecture that borrows and adopts advanced concepts from current popular Agents, 100% python.
 
@@ -73,8 +73,8 @@ If you prefer a graphical interface, try AACode Desktop:
 
 | Platform | Download                                                                                                |
 |----------|---------------------------------------------------------------------------------------------------------|
-| macOS (Apple Silicon) | [AACode_1.7.18_aarch64.dmg](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.7.18_aarch64.dmg) |
-| Windows | [AACode_1.7.18_x64-setup.exe](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.7.18_x64-setup.exe) |
+| macOS (Apple Silicon) | [AACode_1.7.19_aarch64.dmg](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.7.19_aarch64.dmg) |
+| Windows | [AACode_1.7.19_x64-setup.exe](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.7.19_x64-setup.exe) |
 
 > The desktop client still requires Python and dependencies. See 👉 [DESKTOP.md](DESKTOP.md) for full setup instructions.
 

@@ -84,7 +84,7 @@ class AtomicTools:
                     line = await stream.readline()
                     if not line:
                         break
-                    text = line.decode(errors="replace").rstrip()
+                    text = _smart_decode(line).rstrip()
                     print(f"{prefix}{text}", flush=True)
                     buf.append(text)
 

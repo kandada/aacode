@@ -105,7 +105,7 @@ TRANSLATIONS = {
 
     # ─── Init ───
     "init.start":                {"en": "🚀 Initializing AACode...", "zh": "🚀 初始化AACode程序..."},
-    "init.python_ver":           {"en": "❌ Python 3.8+ required", "zh": "❌ 需要Python 3.8或更高版本"},
+    "init.python_ver":           {"en": "❌ Python 3.10+ required", "zh": "❌ 需要Python 3.10或更高版本"},
     "init.done":                 {"en": "✅ Initialization complete!", "zh": "✅ 初始化完成！"},
     "init.complete_msg":         {"en": "Use: python aacode/main.py -p <project> 'task'", "zh": "使用: python aacode/main.py -p <项目> '任务'"},
 

@@ -2,7 +2,7 @@
 
 # 🤖 AACode - CLI编程Agent
 
-[![Python Version](https://img.shields.io/badge/python-3.12+-blue.svg)](https://python.org)
+[![Python Version](https://img.shields.io/badge/python-3.10+-blue.svg)](https://python.org)
 
 > 🚀 **基于DeepSeek的智能编程助手** - 借鉴和采用当前流行Agent的先进理念的轻量化ReAct架构
 
@@ -75,8 +75,8 @@ aacode run -p /your/project/path "your task"
 
 | 平台 | 下载                                                                                                      |
 |------|---------------------------------------------------------------------------------------------------------|
-| macOS (Apple Silicon) | [AACode_1.7.18_aarch64.dmg](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.7.18_aarch64.dmg) |
-| Windows | [AACode_1.7.18_x64-setup.exe](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.7.18_x64-setup.exe) |
+| macOS (Apple Silicon) | [AACode_1.7.19_aarch64.dmg](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.7.19_aarch64.dmg) |
+| Windows | [AACode_1.7.19_x64-setup.exe](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.7.19_x64-setup.exe) |
 
 > 桌面客户端仍需要 Python 环境和依赖库，详细安装步骤请参考 👉 [DESKTOP.md](DESKTOP.md)
 

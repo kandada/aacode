@@ -18,8 +18,8 @@ def init_project():
     print("🚀 Initializing AACode...")
 
     # 检查Python版本
-    if sys.version_info < (3, 8):
-        print("❌ Python 3.8+ required")
+    if sys.version_info < (3, 10):
+        print("❌ Python 3.10+ required")
         sys.exit(1)
 
     print(f"✅ Python version: {sys.version}")
