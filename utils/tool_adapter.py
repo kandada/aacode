@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+# Copyright (c) 2024-2026 xiefujin <490021684@qq.com>
+# Licensed under GNU GPLv3, see LICENSE file for full license terms.
+
 """
 工具 Schema → API 原生 Tool Calling 格式转换适配器
 

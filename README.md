@@ -298,6 +298,8 @@ Scan the QR code below to join our WeChat group and discuss with other developer
 
 ## 📄 License
 
+Copyright (c) 2024-2026 xiefujin 490021684@qq.com. All rights reserved.
+
 This project is initiated and developed by xiefujin (github: kandada, email: 490021684@qq.com) as the first version, licensed under GPL3.0. All derivative works must also be open source under GPL. [license][https://github.com/kandada/aacode/blob/main/LICENSE]
 
 ## 🙏 Acknowledgments
