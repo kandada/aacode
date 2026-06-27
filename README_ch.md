@@ -305,6 +305,8 @@ python3 main.py -p examples/app "为所有功能编写测试"
 
 ## 📄 许可证
 
+Copyright (c) 2024-2026 xiefujin 490021684@qq.com. All rights reserved.
+
 本项目为xiefujin（github: kandada，邮箱490021684@qq.com）发起并开发做出第一版，采用 GPL3.0 许可证，所有衍生作品必须同样以GPL开源。[license][https://github.com/kandada/aacode/blob/main/LICENSE]
 
 ## 🙏 致谢
