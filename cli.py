@@ -85,12 +85,8 @@ def run_main_async(args):
 def main():
     """CLI main entry point"""
     if len(sys.argv) < 2:
-        print("aacode - AI Coding Assistant")
-        print("\nUsage:")
-        print("  aacode init    Initialize configuration")
-        print("  aacode run     Run the program")
-        print("\nOr use: python -m aacode [init|run]")
-        sys.exit(1)
+        run_main_async([])
+        return 0
 
     command = sys.argv[1]
 
@@ -106,15 +102,16 @@ def main():
     elif command == "--help" or command == "-h":
         print("aacode - AI Coding Assistant")
         print("\nUsage:")
-        print("  aacode init    Initialize configuration")
-        print("  aacode run     Run the program")
-        print('\n  aacode run -p /path/to/project "task description"')
-        print("  aacode run --interactive")
+        print("  aacode init        Initialize configuration")
+        print("  aacode              进入交互会话模式（在当前目录）")
+        print("  aacode <task>       在当前目录执行任务")
+        print("  aacode run <task>   在当前目录执行任务")
+        print('\n  aacode -p /path/to/project "task description"')
+        print("  aacode --interactive")
+        print("\n提示: 建议用引号包裹任务描述，如 aacode \"write a hello world program\"")
 
     else:
-        print(f"Unknown command: {command}")
-        print("Use: aacode init | aacode run")
-        sys.exit(1)
+        run_main_async(sys.argv[1:])
 
     return 0
 
