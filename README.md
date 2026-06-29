@@ -54,7 +54,7 @@ python main.py --session session_20250128_123456_0 "Continue task"
 ```
 
 ### Or pip Installation (Recommended)
-After pip install, you can use the `aacode` command
+After pip install, you can use the `aacode` command. The default workspace is the **current directory** — no need to specify `-p` unless you want a different location. It's recommended to wrap your task in quotes.
 
 ```bash
 # Install
@@ -63,7 +63,16 @@ pip install aacode
 # Initialize configuration
 aacode init
 
-# Run
+# Enter interactive session mode (no task required)
+aacode
+
+# Run a single task in current directory
+aacode "your task"
+
+# Or explicitly with aacode run (same as above)
+aacode run "your task"
+
+# Specify a different project directory
 aacode run -p /your/project/path "your task"
 ```
 
@@ -73,8 +82,8 @@ If you prefer a graphical interface, try AACode Desktop:
 
 | Platform | Download                                                                                                |
 |----------|---------------------------------------------------------------------------------------------------------|
-| macOS (Apple Silicon) | [AACode_1.7.20_aarch64.dmg](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.7.20_aarch64.dmg) |
-| Windows | [AACode_1.7.20_x64-setup.exe](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.7.20_x64-setup.exe) |
+| macOS (Apple Silicon) | [AACode_1.7.21_aarch64.dmg](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.7.21_aarch64.dmg) |
+| Windows | [AACode_1.7.21_x64-setup.exe](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.7.21_x64-setup.exe) |
 
 > The desktop client still requires Python and dependencies. See 👉 [DESKTOP.md](DESKTOP.md) for full setup instructions.
 

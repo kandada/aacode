@@ -1360,7 +1360,7 @@ During each thought, naturally plan:
         threshold = min(trigger_tokens, context_max)
 
         status = "✅" if new_tokens <= threshold else "⚠️"
-        print(style(f"{status} Smart context compaction done: full messages kept intact ({len(messages)} messages) | Summary cached for compact view | Token: {old_tokens} → {new_tokens} (compact view: {(old_tokens - new_tokens) / max(old_tokens, 1) * 100:.1f}% reduction) | " + (f"Below trigger ({threshold})" if new_tokens <= threshold else f"Still above trigger ({threshold}), protected last {protect_last_user_rounds} user rounds may be large") + f" | Protected first {protect_first_rounds} pre-user rounds | Summarized {len(middle_rounds)} history rounds before latest user message", fg=GREEN if new_tokens <= threshold else AMBER))
+        print(style(f"{status} Smart context compaction done: full messages kept intact ({len(messages)} messages) | Summary cached for compact view | Token: {old_tokens} → {new_tokens} (compact view: {(old_tokens - new_tokens) / max(old_tokens, 1) * 100:.1f}% reduction) | " + (f"Below trigger ({threshold})" if new_tokens <= threshold else f"Still above trigger ({threshold}), protected last {protect_last_user_rounds} user rounds may be large") + f" | Protected first {protect_first_rounds} pre-user rounds | Summarized {len(middle_rounds)} history rounds before latest user message", fg=GREEN if new_tokens <= threshold else RED))
 
     async def _compact_file_contents(self, messages: List[Dict]) -> List[Dict]:
         """

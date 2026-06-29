@@ -56,7 +56,7 @@ python main.py --session session_20250128_123456_0 "继续任务"
 
 
 ### 或pip 安装（推荐）
-pip 安装后可使用aacode命令
+pip 安装后可使用aacode命令，默认工作目录为**当前目录**，无需指定 `-p` 即可直接使用。建议用引号包裹任务描述。
 
 ```bash
 # 安装
@@ -65,8 +65,17 @@ pip install aacode
 # 初始化配置
 aacode init
 
-# 运行
-aacode run -p /your/project/path "your task"
+# 进入交互会话模式（无需任务）
+aacode
+
+# 在当前目录执行单个任务
+aacode "你的任务"
+
+# 或明确使用 aacode run（等同于上面）
+aacode run "你的任务"
+
+# 指定其他项目目录
+aacode run -p /your/project/path "你的任务"
 ```
 
 ### 🖥️ 桌面客户端
@@ -75,8 +84,8 @@ aacode run -p /your/project/path "your task"
 
 | 平台 | 下载                                                                                                      |
 |------|---------------------------------------------------------------------------------------------------------|
-| macOS (Apple Silicon) | [AACode_1.7.20_aarch64.dmg](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.7.20_aarch64.dmg) |
-| Windows | [AACode_1.7.20_x64-setup.exe](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.7.20_x64-setup.exe) |
+| macOS (Apple Silicon) | [AACode_1.7.21_aarch64.dmg](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.7.21_aarch64.dmg) |
+| Windows | [AACode_1.7.21_x64-setup.exe](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.7.21_x64-setup.exe) |
 
 > 桌面客户端仍需要 Python 环境和依赖库，详细安装步骤请参考 👉 [DESKTOP.md](DESKTOP.md)
 

@@ -641,6 +641,8 @@ async def main():
 
     _setup_httpx_logging()
 
+    is_cli_mode = Path(sys.argv[0]).name == "aacode"
+
     parser = argparse.ArgumentParser(
         description="🤖 AI Coding Assistant - supports continuous dialogue and intelligent planning",
         formatter_class=argparse.RawTextHelpFormatter,
@@ -648,8 +650,9 @@ async def main():
     parser.add_argument(
         "-p",
         "--project",
-        default=f"projects/my_project_{int(time_module.time())}",
-        help="aacode workspace directory (stores logs, context, etc.), defaults to projects directory",
+        default="." if is_cli_mode else f"projects/my_project_{int(time_module.time())}",
+        help="aacode workspace directory (stores logs, context, etc.). "
+        "Defaults to current directory in CLI mode, or projects/my_project_<timestamp> in direct mode",
     )
     parser.add_argument(
         "-t",
@@ -692,13 +695,16 @@ async def main():
             task_parts = task_parts[1:]  # 剩余部分作为任务
             print(style(f"🎯 Detected target project: {target_project}", fg=BLUE))
 
-    # 如果命令 lines没给任务，就交互式询问
+    # 如果没有给任务，直接进入交互会话模式
     task = " ".join(task_parts).strip()
-    if not task:
-        task = input("Enter task: ").strip()
 
     # 创建AI编码助手实例
     coder = AICoder(args.project, target_project=target_project)
+
+    if not task:
+        project_dir = Path(args.project)
+        await continue_session(coder, project_dir)
+        return
 
     # Run任务
     try:
