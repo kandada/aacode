@@ -7,6 +7,7 @@ from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
 import json
 from aacode.i18n import t
+from aacode.utils.colors import style, BLUE
 
 
 @dataclass
@@ -176,5 +177,5 @@ Context:
     async def _notify_main_agent(self, task: AgentTask):
         """通知主Agent任务完成"""
         # 这里可以实现实际的通知机制
-        print(t("multi.task_done", id=task.id))
+        print(style(t("multi.task_done", id=task.id), fg=BLUE))
         print(t("multi.task_result", result=task.result))

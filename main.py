@@ -11,6 +11,7 @@ AI编码助手主入口
 
 import argparse
 import asyncio
+import logging
 import os
 import subprocess
 import sys
@@ -31,6 +32,7 @@ else:
     from .config import settings
 
 from aacode.i18n import t
+from aacode.utils.colors import style, RED, GREEN, BLUE, GRAY
 
 
 class AICoder:
@@ -57,7 +59,7 @@ class AICoder:
             self.target_project = Path(target_project).absolute()
             if not self.target_project.exists():
                 raise ValueError(f"Target project directory does not exist: {self.target_project}")
-            print(t("cli.target_project", path=self.target_project))
+            print(style(t("cli.target_project", path=self.target_project), fg=BLUE, bold=True))
         else:
             self.target_project = self.project_path
             print(t("cli.work_dir", path=self.project_path))
@@ -66,7 +68,7 @@ class AICoder:
         try:
             self.project_path.mkdir(parents=True, exist_ok=True)
         except PermissionError as e:
-            print(f"❌ Permission error: cannot create dir '{self.project_path}'")
+            print(style(f"❌ Permission error: cannot create dir '{self.project_path}'", fg=RED, bold=True))
             print(f"   Error info: {e}")
             print(f"   Check directory permissions or use a writable dir")
             raise
@@ -77,7 +79,7 @@ class AICoder:
             test_file.touch()
             test_file.unlink()
         except PermissionError as e:
-            print(f"❌ Permission error: no write access to '{self.project_path}'")
+            print(style(f"❌ Permission error: no write access to '{self.project_path}'", fg=RED, bold=True))
             print(f"   Error info: {e}")
             print(f"   Use 'chmod'  to modify permissions or choose another dir")
             raise
@@ -150,7 +152,7 @@ class AICoder:
                 from .utils.class_method_mapper import EnhancedClassMethodMapper
 
             self.class_method_mapper = EnhancedClassMethodMapper(self.target_project)
-            print(t("cli.mapper_init_ok"))
+            print(style(t("cli.mapper_init_ok"), fg=GREEN))
         except ImportError as e:
             print(t("cli.mapper_init_fail", e=str(e)))
             try:
@@ -161,7 +163,7 @@ class AICoder:
                     from .utils.class_method_mapper import ClassMethodMapper
 
                 self.class_method_mapper = ClassMethodMapper(self.target_project)
-                print(t("cli.mapper_basic_ok"))
+                print(style(t("cli.mapper_basic_ok"), fg=GREEN))
             except ImportError as e2:
                 print(t("cli.mapper_basic_fail", e=str(e2)))
                 self.class_method_mapper = None
@@ -180,7 +182,7 @@ class AICoder:
             return "Class mapper not initialized"
 
         try:
-            print(t("cli.analyze_start"))
+            print(style(t("cli.analyze_start"), fg=BLUE))
             summary = self.class_method_mapper.analyze_project()
 
             # 尝试使 with 增强版方法
@@ -190,7 +192,7 @@ class AICoder:
                 # Get 语言摘要  for提示
                 language_summary = self.class_method_mapper.get_language_summary()
 
-                print(f"✅ Project analysis complete:")
+                print(style("✅ Project analysis complete:", fg=GREEN))
                 if "multi_lang_analysis" in summary:
                     lang_stats = summary["multi_lang_analysis"]["languages"]
                     for lang, stats in lang_stats.items():
@@ -215,7 +217,7 @@ class AICoder:
                 map_file = self.class_method_mapper.save_class_method_map()
                 map_content = map_file.read_text(encoding="utf-8")
 
-                print(f"✅ Python project analysis complete:")
+                print(style("✅ Python project analysis complete:", fg=GREEN))
                 print(f"   - Classes: {summary.get('class_count', 0)}")
                 print(f"   - Functions: {summary.get('function_count', 0)}")
                 print(f"   - Files: {summary.get('file_count', 0)}")
@@ -225,7 +227,7 @@ class AICoder:
 
         except Exception as e:
             error_msg = f"Project structure analysis failed: {e}"
-            print(f"❌ {error_msg}")
+            print(style(f"❌ {error_msg}", fg=RED, bold=True))
             return error_msg
 
     def update_class_method_map(
@@ -236,7 +238,7 @@ class AICoder:
             return "Class mapper not initialized"
 
         try:
-            print("🔄 Updating class method mapping...")
+            print(style("🔄 Updating class method mapping...", fg=BLUE))
             # 处理None情况
             files_to_update = changed_files if changed_files is not None else []
 
@@ -268,7 +270,7 @@ class AICoder:
 
         except Exception as e:
             error_msg = f"Failed to update class method mapping: {e}"
-            print(f"❌ {error_msg}")
+            print(style(f"❌ {error_msg}", fg=RED, bold=True))
             return error_msg
 
     async def run(self, task: str, max_iterations: int = 30) -> Dict[str, Any]:
@@ -282,16 +284,16 @@ class AICoder:
         Returns:
             execute结果
         """
-        print(f"\n🎯 Starting task: {task}")
+        print(style(f"\n🎯 Starting task: {task}", fg=BLUE, bold=True))
         print(t("cli.aacode_work_dir", path=self.project_path))
         print(f"🎯 Target project dir: {self.target_project}")
         print(f"📝 Init instructions loaded ({len(self.init_instructions.split())} chars)")
 
         # 任务开始前分析项目结构
-        print(t("cli.analyze_pre_task"))
+        print(style(t("cli.analyze_pre_task"), fg=BLUE))
         analysis_result = self.analyze_project_structure()
         if "failed" not in analysis_result.lower():
-            print("✅ Project analysis complete, class-method map generated")
+            print(style("✅ Project analysis complete, class-method map generated", fg=GREEN))
         else:
             print("⚠️  Project analysis incomplete, but task will continue")
 
@@ -304,11 +306,11 @@ class AICoder:
         task_dir.mkdir(parents=True, exist_ok=True)
 
         # 创建to-do-list，并同步到上下文管理器
-        print("\n📋 Creating task todo list...")
+        print(style("\n📋 Creating task todo list...", fg=BLUE))
         todo_file = await self.todo_manager.create_todo_list(
             task, context_manager=self.context_manager
         )
-        print(f"✅ Todo created: {todo_file}")
+        print(style(f"✅ Todo created: {todo_file}", fg=GREEN))
 
         try:
             # Run主Agent，传递类方法映射信息
@@ -465,7 +467,7 @@ async def continue_session(coder, project_dir):
                     for file in project_dir.glob("*"):
                         if file.is_file() and file.name != ".env":
                             file.unlink()
-                    print("✅ Project directory cleared")
+                    print(style("✅ Project directory cleared", fg=GREEN))
                 continue
             elif user_input.lower() in ["continue"]:
                 # 处理"继续"命令
@@ -586,7 +588,7 @@ async def continue_session(coder, project_dir):
                             print(f"Session ID: {session_id}")
                             print(f"Use --session {session_id} to continue this session")
                 except Exception as e:
-                    print(f"\n❌ Task execution failed: {e}")
+                    print(style(f"\n❌ Task execution failed: {e}", fg=RED, bold=True))
                     print("💡 Tip: Check error messages, or enter a new task to retry")
 
                 continue
@@ -603,7 +605,7 @@ async def continue_session(coder, project_dir):
                 print("👋 Exit")
                 break
         except Exception as e:
-            print(f"\n❌ Execution error: {e}")
+            print(style(f"\n❌ Execution error: {e}", fg=RED, bold=True))
             import traceback
 
             traceback.print_exc()
@@ -611,9 +613,33 @@ async def continue_session(coder, project_dir):
             print("   Type 'help' for documentation")
 
 
+def _setup_httpx_logging():
+    """Configure httpx logger to output HTTP request logs in GRAY."""
+    httpx_logger = logging.getLogger("httpx")
+    httpx_logger.propagate = False
+    if httpx_logger.handlers:
+        return
+
+    class _GrayHandler(logging.StreamHandler):
+        def emit(self, record):
+            msg = self.format(record)
+            self.stream.write(style(msg, fg=GRAY) + self.terminator)
+            self.flush()
+
+    handler = _GrayHandler(sys.stderr)
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    ))
+    httpx_logger.addHandler(handler)
+    httpx_logger.setLevel(logging.INFO)
+
+
 async def main():
     """命令 lines主函数"""
     import time as time_module
+
+    _setup_httpx_logging()
 
     parser = argparse.ArgumentParser(
         description="🤖 AI Coding Assistant - supports continuous dialogue and intelligent planning",
@@ -664,7 +690,7 @@ async def main():
         if len(first_arg) < 200 and Path(first_arg).is_dir():
             target_project = first_arg
             task_parts = task_parts[1:]  # 剩余部分作为任务
-            print(f"🎯 Detected target project: {target_project}")
+            print(style(f"🎯 Detected target project: {target_project}", fg=BLUE))
 
     # 如果命令 lines没给任务，就交互式询问
     task = " ".join(task_parts).strip()

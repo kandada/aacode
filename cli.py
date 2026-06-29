@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from aacode.i18n import t
+from aacode.utils.colors import style, GREEN
 
 
 def is_git_clone_mode():
@@ -52,7 +53,7 @@ def run_init_pip():
 
     if not config_file.exists() and pkg_config.exists():
         shutil.copy(pkg_config, config_file)
-        print(t("cli.save_config", file=config_file))
+        print(style(t("cli.save_config", file=config_file), fg=GREEN))
 
     print(f"\n🔧 Please configure your API Key:")
     print(f"Set model.api_key in {config_file}")
@@ -63,7 +64,7 @@ def run_init_pip():
         env_file = config_dir / ".env"
         with open(env_file, "a", encoding="utf-8") as f:
             f.write(f"\nLLM_API_KEY={api_key}\n")
-        print(t("cli.save_env", file=env_file))
+        print(style(t("cli.save_env", file=env_file), fg=GREEN))
 
     print("\n✅ Initialization complete! Run 'aacode run' to start")
 
