@@ -30,6 +30,7 @@ else:
     from ..utils.tool_registry import get_global_registry
     from ..config import settings
 from aacode.i18n import t
+from aacode.utils.colors import style, RED, GREEN, BLUE
 from aacode.utils.message_utils import (
     estimate_tokens as _util_estimate_tokens,
     split_into_rounds,
@@ -166,7 +167,7 @@ class AsyncReActLoop:
         if self.logger:
             task_id = await self.logger.start_task(task_description)
 
-        print(f"🚀 Starting ReAct loop, max {self.max_iterations} iterations")
+        print(style(f"🚀 Starting ReAct loop, max {self.max_iterations} iterations", fg=BLUE))
 
         # 初始上下文
         self.current_context = await self.context_manager.get_context()
@@ -228,7 +229,7 @@ During each thought, naturally plan:
 
         for iteration in range(self.max_iterations):
             iteration_start = asyncio.get_event_loop().time()
-            print(f"\n🔄 Iteration {iteration + 1}/{self.max_iterations}")
+            print(style(f"\n🔄 Iteration {iteration + 1}/{self.max_iterations}", fg=BLUE, bold=True))
 
             # 记录本轮开始前的消息总数，用于增量持久化
             msg_count_before = len(messages)
@@ -310,7 +311,7 @@ During each thought, naturally plan:
                 if on_new_messages:
                     await on_new_messages(messages[msg_count_before:])
 
-                print(t("agent.task_done", default="✅ Task completed"))
+                print(style(t("agent.task_done", default="✅ Task completed"), fg=GREEN))
                 total_time = asyncio.get_event_loop().time() - start_time
                 if self.logger:
                     await self.logger.log_iteration(
@@ -368,7 +369,7 @@ During each thought, naturally plan:
 
             for i, action_item in enumerate(actions):
                 if sys.stdout.isatty():
-                    print(f"🛠️  Action {i + 1}/{len(actions)}: {action_item.action}")
+                    print(style(f"🛠️  Action {i + 1}/{len(actions)}: {action_item.action}", fg=BLUE))
                 action_start = asyncio.get_event_loop().time()
 
                 # 添加重试机制（使 with 配置的最大重试次数，来自 aacode_config.yaml）
@@ -450,7 +451,7 @@ During each thought, naturally plan:
                     max_display = 3000
                     if len(display_obs) > max_display:
                         display_obs = display_obs[:max_display] + f"\n... (truncated, {len(observation_for_display or observation)} chars total)"
-                    print(f"📋 Observation:\n{display_obs}", flush=True)
+                    print(f"{style('📋 Observation:', fg=BLUE, bold=True)}\n{display_obs}", flush=True)
                     # ─── 源头数据：发送完整原始内容给前端做 markdown 渲染 ───
                     # Rust 层 read_line() 逐行读取会：1) 丢弃空行  2) 拦截 {/[ 开头的 JSON 行
                     # 前端逐行拼接重组的内容可能丢失信息，与 Python 原始数据不一致
@@ -1251,7 +1252,7 @@ During each thought, naturally plan:
 
         仅在最后 N 条用户消息之前的历史轮次中生成摘要，后 N 条用户消息及其之后的所有轮次不参与压缩。
         """
-        print("📦 Executing smart context compaction...")
+        print(style("📦 Executing smart context compaction...", fg=BLUE))
 
         history_file = await self.context_manager.save_history(self.steps)
 
@@ -1283,19 +1284,19 @@ During each thought, naturally plan:
         if latest_user_idx is not None:
             pre_user_rounds = rounds[:latest_user_idx]
             if len(pre_user_rounds) <= protect_first_rounds:
-                print("✅ Pre-user rounds within threshold, no compaction needed")
+                print(style("✅ Pre-user rounds within threshold, no compaction needed", fg=GREEN))
                 return
             middle_rounds = pre_user_rounds[protect_first_rounds:]
         else:
             if len(rounds) <= protect_first_rounds + keep_last_rounds:
-                print("✅ Round count within threshold, no compaction needed")
+                print(style("✅ Round count within threshold, no compaction needed", fg=GREEN))
                 return
             middle_rounds = rounds[protect_first_rounds:-keep_last_rounds]
 
         middle_messages = [m for r in middle_rounds for m in r]
 
         if not middle_messages:
-            print("✅ No intermediate messages to compact")
+            print(style("✅ No intermediate messages to compact", fg=GREEN))
             return
 
         # 智能缩减文件内容：将大段文件内容保存到 .aacode
@@ -1359,7 +1360,7 @@ During each thought, naturally plan:
         threshold = min(trigger_tokens, context_max)
 
         status = "✅" if new_tokens <= threshold else "⚠️"
-        print(f"{status} Smart context compaction done: full messages kept intact ({len(messages)} messages) | Summary cached for compact view | Token: {old_tokens} → {new_tokens} (compact view: {(old_tokens - new_tokens) / max(old_tokens, 1) * 100:.1f}% reduction) | " + (f"Below trigger ({threshold})" if new_tokens <= threshold else f"Still above trigger ({threshold}), protected last {protect_last_user_rounds} user rounds may be large") + f" | Protected first {protect_first_rounds} pre-user rounds | Summarized {len(middle_rounds)} history rounds before latest user message")
+        print(style(f"{status} Smart context compaction done: full messages kept intact ({len(messages)} messages) | Summary cached for compact view | Token: {old_tokens} → {new_tokens} (compact view: {(old_tokens - new_tokens) / max(old_tokens, 1) * 100:.1f}% reduction) | " + (f"Below trigger ({threshold})" if new_tokens <= threshold else f"Still above trigger ({threshold}), protected last {protect_last_user_rounds} user rounds may be large") + f" | Protected first {protect_first_rounds} pre-user rounds | Summarized {len(middle_rounds)} history rounds before latest user message", fg=GREEN if new_tokens <= threshold else AMBER))
 
     async def _compact_file_contents(self, messages: List[Dict]) -> List[Dict]:
         """
@@ -2196,7 +2197,7 @@ Please return the three-part summary in JSON format:"""
                     )
                     if archive_match:
                         archive_file = archive_match.group(1)
-                        print(f"✅ Archive path match: action{i + 1}archived to  {archive_file}")
+                        print(style(f"✅ Archive path match: action{i + 1}archived to  {archive_file}", fg=GREEN))
                 else:
                     print(
                         f"⚠️  Archive path inconsistency: Action {i + 1} simplified version has archive path but full version may be missing"

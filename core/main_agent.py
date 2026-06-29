@@ -13,6 +13,7 @@ import re
 import sys
 import uuid
 from aacode.i18n import t
+from aacode.utils.colors import style, RED, GREEN, BLUE
 from aacode.utils.session_manager import SessionMessage
 from pathlib import Path
 from datetime import datetime
@@ -326,7 +327,7 @@ class MainAgent(BaseAgent):
             print(t("skills.none_found"))
             return
 
-        print(t("skills.discovered", count=len(discovered)))
+        print(style(t("skills.discovered", count=len(discovered)), fg=BLUE))
 
         for skill_name, skill_info in discovered.items():
             desc = (
@@ -339,15 +340,15 @@ class MainAgent(BaseAgent):
         # 自动启用所有发现的 skill
         enabled = list(discovered.keys())
         self.skills_manager.enable_skills(enabled)
-        print(t("skills.enabled_count", count=len(enabled)))
+        print(style(t("skills.enabled_count", count=len(enabled)), fg=GREEN))
         enabled_list = self.skills_manager.list_enabled_skills()
-        print(t("skills.enabled_list", count=len(enabled_list), list=', '.join(enabled_list)))
+        print(style(t("skills.enabled_list", count=len(enabled_list), list=', '.join(enabled_list)), fg=GREEN))
 
         # 预加载所有技能的完整信息（供 __info__ 和 execute 使用）
         for skill_name in enabled_list:
             self.skills_manager._load_full_instruction(skill_name)
 
-        print(t("skills.registered_tools", count=len(enabled_list)))
+        print(style(t("skills.registered_tools", count=len(enabled_list)), fg=GREEN))
 
     @staticmethod
     def _is_retryable_model_error(e: Exception) -> bool:
@@ -473,7 +474,7 @@ class MainAgent(BaseAgent):
 
             e = _last_exc
             error_msg = f"Model call failed: [{type(e).__name__}] {str(e)}"
-            print(f"\n❌ {error_msg}")
+            print(style(f"\n❌ {error_msg}", fg=RED, bold=True))
 
             # 检查是否为认证错误
             error_str = str(e).lower()
@@ -575,7 +576,7 @@ class MainAgent(BaseAgent):
 
         # 流式输出
         if _is_tty:
-            _stream_print(t("model.thinking"))
+            _stream_print(style(t("model.thinking"), fg=BLUE))
         full_response = ""
         tool_calls_accumulator: Dict[int, Dict[str, str]] = {}
         self._tool_call_progress: Dict[int, Dict] = {}
@@ -829,7 +830,7 @@ class MainAgent(BaseAgent):
 
         # Async 流式调 with 
         if _is_tty:
-            _stream_print(t("model.thinking"))
+            _stream_print(style(t("model.thinking"), fg=BLUE))
         response = ""
         thinking_content = ""
         tool_calls_list = []
@@ -857,7 +858,7 @@ class MainAgent(BaseAgent):
                             bt = getattr(block, 'type', '')
                             if bt == 'thinking':
                                 if not thinking_printed:
-                                    print("💭 Thinking process:", flush=True)
+                                    print(style("💭 Thinking process:", fg=BLUE), flush=True)
                                     thinking_printed = True
                             elif bt == 'text' and thinking_printed:
                                 thinking_printed = False
@@ -922,7 +923,7 @@ class MainAgent(BaseAgent):
                     bt = getattr(block, 'type', '')
                     if bt == 'thinking':
                         chunk = getattr(block, 'thinking', '')
-                        if chunk: print("💭 Thinking process:", flush=True); print(chunk, flush=True); thinking_content += chunk
+                        if chunk: print(style("💭 Thinking process:", fg=BLUE), flush=True); print(chunk, flush=True); thinking_content += chunk
                     elif bt == 'text':
                         chunk = getattr(block, 'text', '')
                         if chunk:
@@ -1110,7 +1111,7 @@ class MainAgent(BaseAgent):
                 registry.register(tools[func_name], schema)
                 registered_count += 1
 
-        print(t("tools.registered", count=registered_count))
+        print(style(t("tools.registered", count=registered_count), fg=GREEN))
 
         return tools
 
@@ -1207,7 +1208,7 @@ class MainAgent(BaseAgent):
         Returns:
             execute结果
         """
-        print(t("agent.start_task", task=task))
+        print(style(t("agent.start_task", task=task), fg=BLUE, bold=True))
         self.start_time = asyncio.get_event_loop().time()
         self._save_batch_counter = 0
 
@@ -1335,7 +1336,7 @@ mark_todo_completed(todo_id="t1") → precisely marked complete
             raise _task_error
         except Exception as e:
             _task_error = e
-            print(t("agent.react_loop_failed", e=str(e)))
+            print(style(t("agent.react_loop_failed", e=str(e)), fg=RED, bold=True))
             import traceback
             traceback.print_exc()
             try:
@@ -1410,7 +1411,7 @@ mark_todo_completed(todo_id="t1") → precisely marked complete
         """
         task_id = f"subtask_{len(self.tasks)}_{datetime.now().timestamp():.0f}"
 
-        print(t("subagent.task_start", id=task_description[:50]))
+        print(style(t("subagent.task_start", id=task_description[:50]), fg=BLUE))
 
         # 创建子任务记录
         self.tasks[task_id] = {
