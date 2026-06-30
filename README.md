@@ -226,16 +226,6 @@ Edit the `init.md` file and add project-specific rules:
 
 ## 🏗️ Architecture Design
 
-### Design Principles
-* **Less scaffolding, more trust in models** - Simple core logic, relying on model capabilities
-* **File-based context** - Dynamic discovery, Markdown files as primary storage
-* **Bash universal adapter** - Flexible system access through safety guardrails
-* **Smart context management** - Reduction strategies borrowed from Cursor and Manus
-* **Asynchronous design** - All blocking operations are asynchronous
-* **Layered tool system** — Atomic tools, management tools, Skills three-layer architecture
-
-### Core Components
-
 ```
 📁 Core Architecture
 ├── 🤖 MainAgent          # Main controller, task decomposition and coordination
@@ -265,21 +255,17 @@ Edit the `init.md` file and add project-specific rules:
 * **Sandbox isolation** - All operations performed in secure sandbox environment
 * **User confirmation mechanism** - Dangerous operations require user confirmation
 
-## 🛠️ Available Tools
+## 🎯 Core Capabilities
 
-### Atomic Tools
-* `run_shell` - Execute shell commands (safely)
-
-### To-Do List Tools
-* `delegate_task` - Delegate subtasks
-* `add_todo_item` - Add todo item
-* `update_todo_item` - Update todo item
-
-### Network Tools
-* `web_search` - Search web content (currently supports searXNG; requires self-deployment and configuration of SEARCHXNG_URL environment variable)
-* `browse_web` - Web browsing (future)
-
-### File Tools (such as incremental code updates, etc.)
+* **Shell Execution** — Safely execute any shell command as the universal adapter
+* **File Operations** — Read, write, and modify files in the project workspace
+* **Web Search & Fetch** — Search the web (SearXNG, Brave, Google, Bing, SerpAPI) and fetch URL content
+* **Task Management** — Todo lists with add/mark/update/summary, historical tracking
+* **Session Management** — Create, switch, continue, list, and delete conversation sessions
+* **Sub-Agent Delegation** — Delegate tasks to specialized sub-agents (code, test, research)
+* **Multimodal Understanding** — Analyze images, videos, and UI design drafts
+* **MCP Protocol** — Connect to external MCP servers for extended tool capabilities
+* **Extensible Skills** — Built-in skills for pandas, numpy, playwright; add custom skills via `aacode/skills/`
 
 ## 📈 Project Status
 
