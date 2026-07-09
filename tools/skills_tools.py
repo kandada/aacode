@@ -48,6 +48,8 @@ class SkillInfo:
     functions: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     # 新增：完整的SKILL.md内容
     full_md_content: str = ""
+    # 新增：标记为纯文档技能（无 .py 脚本）
+    is_document_skill: bool = False
 
 
 class SkillsManager:
@@ -134,8 +136,8 @@ class SkillsManager:
             return False
 
         # 读取完整的SKILL.md内容
-        skill_md = skill_dir / "SKILL.md"
-        if skill_md.exists():
+        skill_md = self._find_skill_md(skill_dir)
+        if skill_md:
             skill_info.full_md_content = self._read_full_skill_md(skill_md)
 
         # 加载完整技能信息
@@ -158,12 +160,36 @@ class SkillsManager:
 
         return False
 
+    def _find_skill_md(self, skill_dir: Path) -> Optional[Path]:
+        for f in skill_dir.iterdir():
+            if f.is_file() and f.name.lower() == "skill.md":
+                return f
+        return None
+
+    def _list_skill_resources(self, skill_dir: str) -> str:
+        skill_path = Path(skill_dir)
+        resources: list[str] = []
+        for entry in sorted(skill_path.iterdir()):
+            if entry.name.lower() == "skill.md":
+                continue
+            if entry.suffix == ".py":
+                continue
+            if entry.name.startswith(".") or entry.name.startswith("__"):
+                continue
+            if entry.is_dir():
+                resources.append(f"- `{entry.name}/` (directory)")
+            else:
+                resources.append(f"- `{entry.name}`")
+        if not resources:
+            return ""
+        return "## Available Resources\n" + "\n".join(resources)
+
     def _load_skill(self, skill_dir: Path) -> Optional[SkillInfo]:
         """加载单个skill（从 SKILL.md + .py 提取所有信息）"""
         skill_name = skill_dir.name
 
-        skill_md = skill_dir / "SKILL.md"
-        if not skill_md.exists():
+        skill_md = self._find_skill_md(skill_dir)
+        if not skill_md:
             return None
 
         md_info = self._parse_skill_md(skill_md)
@@ -175,7 +201,21 @@ class SkillsManager:
         ]
 
         if not impl_files:
-            return None
+            return SkillInfo(
+                name=skill_name,
+                description=md_info.get("description", ""),
+                module_path="",
+                function_name="",
+                parameters={},
+                examples=[],
+                skill_dir=str(skill_dir),
+                functions={},
+                display_name=skill_name.replace("_", " ").title(),
+                trigger_keywords=[],
+                usage_guide=md_info.get("full_content", ""),
+                full_md_content=md_info.get("full_content", ""),
+                is_document_skill=True,
+            )
 
         main_impl = impl_files[0]
 
@@ -439,6 +479,18 @@ class SkillsManager:
 
         # 确定要execute的函数
         target_func_name = func_name if func_name else skill_info.function_name
+
+        if skill_info.is_document_skill:
+            result_parts: list[str] = []
+            if kwargs:
+                result_parts.append(
+                    "Parameters were ignored (this is a document-only skill).\n"
+                )
+            result_parts.append(skill_info.full_md_content)
+            resource_list = self._list_skill_resources(skill_info.skill_dir)
+            if resource_list:
+                result_parts.append("\n\n" + resource_list)
+            return {"success": True, "result": "\n\n".join(result_parts)}
 
         # 验证函数是否存在
         if skill_info.functions and target_func_name not in skill_info.functions:

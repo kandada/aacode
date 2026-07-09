@@ -54,6 +54,8 @@ Available tools:
     - run_skills("pandas", {"code": "df.describe()"}) → Execute a skill
     For multi-function skills (e.g. playwright), pass "func" in params:
       run_skills("playwright", {"func": "browser_automation", "url": "https://example.com"})
+    For document skills (no Python script), run_skills returns an instruction guide —
+      follow its steps using run_shell or other tools; do NOT just recite the guide verbatim.
     Available skills:
       {skills_list}
 6. MCP tools
