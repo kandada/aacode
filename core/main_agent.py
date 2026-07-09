@@ -154,7 +154,7 @@ class MainAgent(BaseAgent):
         )
 
         # 注入项目目录信息到系统提示词
-        system_prompt += f"\n\n## Working Directory\nYour current working directory is: {project_path.absolute()}\nAll file operations should use paths relative to this directory."
+        system_prompt += f"\n\n## Working Directory\nYour current working directory is: {project_path.absolute()}\nAll file operations should use paths relative to this directory.\nUser skills directory: {self.skills_manager.user_skills_dir}"
 
         # 更新系统提示词
         self.system_prompt = system_prompt
@@ -280,12 +280,14 @@ class MainAgent(BaseAgent):
 
     def _run_skills_help(self) -> str:
         return (
-            "run_skills — 三种模式:\n\n"
-            "1. 列表: run_skills(\"__list__\")\n"
-            "2. 详情: run_skills(\"__info__\", {\"skill_name\": \"pandas\"})\n"
-            "3. 执行: run_skills(\"pandas\", {\"code\": \"df.describe()\"})\n\n"
-            "多函数 skill: 'func' 放在 params 中\n"
-            "  run_skills(\"playwright\", {\"func\": \"browser_automation\", \"url\": \"...\"})"
+            "run_skills — three modes:\n\n"
+            "1. List: run_skills(\"__list__\")\n"
+            "2. Info: run_skills(\"__info__\", {\"skill_name\": \"pandas\"})\n"
+            "3. Execute: run_skills(\"pandas\", {\"code\": \"df.describe()\"})\n\n"
+            "Multi-function skill: pass 'func' in params\n"
+            "  run_skills(\"playwright\", {\"func\": \"browser_automation\", \"url\": \"...\"})\n\n"
+            "Document skill (SKILL.md only, no script):\n"
+            "  __info__ to view description, execute returns the instruction guide — follow its steps with run_shell"
         )
 
     def _format_skills_list(self) -> str:
@@ -307,9 +309,8 @@ class MainAgent(BaseAgent):
             return f"Error: Skill '{target}' not found"
         self.skills_manager._load_full_instruction(target)
         info = self.skills_manager.loaded_skills[target]
-        md_path = Path(info.skill_dir) / "SKILL.md"
-        if md_path.exists():
-            return md_path.read_text(encoding="utf-8")
+        if info.full_md_content:
+            return info.full_md_content
         return f"Skill: {target}\nDescription: {info.description}"
 
     def _init_skills(self):
@@ -1503,7 +1504,7 @@ mark_todo_completed(todo_id="t1") → precisely marked complete
             Use the provided tools to complete your task."""
 
         # 注入项目目录信息到子代理系统提示词
-        project_path_str = f"\n\nYour current working directory is: {self.project_path.absolute()}\nAll file operations should use paths relative to this directory."
+        project_path_str = f"\n\nYour current working directory is: {self.project_path.absolute()}\nAll file operations should use paths relative to this directory.\nUser skills directory: {self.skills_manager.user_skills_dir}"
         system_prompt += project_path_str
 
         # 创建SubAgent
