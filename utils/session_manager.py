@@ -16,60 +16,8 @@ from typing import Dict, List, Any, Optional
 from pathlib import Path
 from datetime import datetime
 import uuid
-import requests
 from dataclasses import dataclass
 from aacode.i18n import t
-
-TIKTOKEN_MIRRORS = [
-    "https://raw.githubusercontent.com/openai/tiktoken/main/tiktoken/bpe/cl100k_base.tiktoken",
-    "https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken",
-    "https://raw.fastgit.org/openai/tiktoken/raw/main/tiktoken/bpe/cl100k_base.tiktoken",
-    "https://gitclone.com/github.com/openai/tiktoken/raw/main/tiktoken/bpe/cl100k_base.tiktoken",
-    "https://github.moeyy.xyz/https://raw.githubusercontent.com/openai/tiktoken/main/tiktoken/bpe/cl100k_base.tiktoken",
-    "https://ghproxy.net/https://raw.githubusercontent.com/openai/tiktoken/main/tiktoken/bpe/cl100k_base.tiktoken",
-    "https://mirror.ghproxy.com/https://raw.githubusercontent.com/openai/tiktoken/main/tiktoken/bpe/cl100k_base.tiktoken",
-    "https://ghproxy.com/https://raw.githubusercontent.com/openai/tiktoken/main/tiktoken/bpe/cl100k_base.tiktoken",
-]
-
-TIKTOKEN_HASH = "223921b76ee99bde995b7ff738513eef100fb51d18c93597a113bcffe865b2a7"
-
-
-def _download_tiktoken_file() -> Optional[str]:
-    """尝试从多个镜像下载 tiktoken 文件"""
-    import tempfile
-    import hashlib
-
-    cache_dir = os.path.join(tempfile.gettempdir(), "data-gym-cache")
-    os.makedirs(cache_dir, exist_ok=True)
-    cache_path = os.path.join(cache_dir, "cl100k_base.tiktoken")
-
-    if os.path.exists(cache_path):
-        with open(cache_path, "rb") as f:
-            data = f.read()
-        if hashlib.sha256(data).hexdigest() == TIKTOKEN_HASH:
-            return cache_path
-
-    for url in TIKTOKEN_MIRRORS:
-        try:
-            print(f"🔄 Attempting to download tiktoken from mirror: {url[:60]}...")
-            resp = requests.get(url, timeout=10)
-            resp.raise_for_status()
-            data = resp.content
-
-            actual_hash = hashlib.sha256(data).hexdigest()
-            if actual_hash != TIKTOKEN_HASH:
-                print(f"⚠️ Hash mismatch, skipping")
-                continue
-
-            with open(cache_path, "wb") as f:
-                f.write(data)
-            print(f"✅ tiktoken download successful: {cache_path}")
-            return cache_path
-        except Exception as e:
-            print(f"❌ Download failed: {e}")
-            continue
-
-    return None
 
 
 def _load_tiktoken_encoding():
