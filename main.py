@@ -671,8 +671,16 @@ async def main():
 
     args = parser.parse_args()
 
-    # 加载环境变量配置
+    # 加载环境变量配置：优先当前目录 .env，其次 com.aacode 配置目录下的 .env
     env_file = Path(".env")
+    if not env_file.exists():
+        try:
+            import platformdirs
+            fallback_env = Path(platformdirs.user_config_dir("com.aacode", roaming=True)) / ".env"
+            if fallback_env.exists():
+                env_file = fallback_env
+        except Exception:
+            pass
     if env_file.exists():
         with open(env_file, "r", encoding="utf-8") as f:
             for line in f:
