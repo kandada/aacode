@@ -88,7 +88,7 @@ aacode run -p /your/project/path "你的任务"
 | Windows | [AACode_1.7.24_x64-setup.exe](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.7.24_x64-setup.exe) |
 | Android | [aacode-v1.7.24-arm64.apk](https://github.com/kandada/aacode/raw/main/mobile_app/aacode-v1.7.24-arm64.apk) |
 
-> 桌面客户端仍需要 Python 环境和依赖库，详细安装步骤请参考 👉 [DESKTOP.md](DESKTOP.md)
+> 桌面客户端仍需要 Python 环境和依赖库（手机App则不需要），详细安装步骤请参考 👉 [DESKTOP.md](DESKTOP.md)
 
 
 ## 🔧 配置说明
