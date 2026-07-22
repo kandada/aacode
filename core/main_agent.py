@@ -233,6 +233,7 @@ class MainAgent(BaseAgent):
             return self._format_skill_detail(params)
 
         # ---- 模式3: 执行 skill ----
+        self._prune_stale_skills()
         if sname not in self.skills_manager.loaded_skills:
             return f"Error: Skill '{skill_name}' not found"
         if sname not in self.skills_manager.enabled_skills:
@@ -290,7 +291,17 @@ class MainAgent(BaseAgent):
             "  __info__ to view description, execute returns the instruction guide — follow its steps with run_shell"
         )
 
+    def _prune_stale_skills(self):
+        """清理磁盘上不再存在的 stale skill 缓存"""
+        stale = [n for n in self.skills_manager.loaded_skills
+                 if not Path(self.skills_manager.loaded_skills[n].skill_dir).exists()]
+        for n in stale:
+            self.skills_manager.loaded_skills.pop(n, None)
+            if n in self.skills_manager.enabled_skills:
+                self.skills_manager.enabled_skills.remove(n)
+
     def _format_skills_list(self) -> str:
+        self._prune_stale_skills()
         enabled = self.skills_manager.list_enabled_skills()
         if not enabled:
             return "暂无可用技能"
@@ -302,6 +313,7 @@ class MainAgent(BaseAgent):
         return "\n".join(lines)
 
     def _format_skill_detail(self, params: dict) -> str:
+        self._prune_stale_skills()
         target = params.get("skill_name") or params.get("name") or ""
         if not target:
             return "Error: skill_name is required for __info__ mode"

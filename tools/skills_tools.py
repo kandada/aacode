@@ -315,10 +315,19 @@ class SkillsManager:
 
         current_section = None
         section_lines: list[str] = []
+        in_code_block = False
 
         for line in lines:
             stripped = line.strip()
-            if stripped.startswith("## "):
+            # Fenced code blocks may legitimately contain "## ..." lines
+            # (e.g. skill templates inside skill_creator) — never treat
+            # those as section headings.
+            if stripped.startswith("```"):
+                in_code_block = not in_code_block
+                if current_section:
+                    section_lines.append(line)
+                continue
+            if not in_code_block and stripped.startswith("## "):
                 if current_section and section_lines:
                     self._store_section(result, current_section, section_lines)
                 current_section = stripped[3:].strip().lower()
