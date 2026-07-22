@@ -10,17 +10,18 @@ Meta-skill: how to create, update and optimize skills. Follow this guide wheneve
 ## Example
 run_skills("skill_creator")
 
-## Skill storage layout (two locations)
+## Skill storage
 
-1. Project skills — specific to the current project:
-   `<project>/skills/<skill_name>/SKILL.md`
-2. User skills — reusable across all projects:
-   - macOS:   `~/Library/Application Support/com.aacode/skills/<skill_name>/SKILL.md`
-   - Linux:   `~/.config/com.aacode/skills/<skill_name>/SKILL.md`
-   - Windows: `%APPDATA%\com.aacode\skills\<skill_name>\SKILL.md`
+All user skills live in ONE place only — the user skills directory. Skills
+placed here are available across all projects and persist across app updates.
 
-Default to the PROJECT location unless the user says the skill should be
-available everywhere ("全局" / "所有项目" / "reusable across projects").
+- macOS:   `~/Library/Application Support/com.aacode/skills/<skill_name>/SKILL.md`
+- Linux:   `~/.config/com.aacode/skills/<skill_name>/SKILL.md`
+- Windows: `%APPDATA%\com.aacode\skills\<skill_name>\SKILL.md`
+
+Preset skills (playwright, pandas, numpy, book_writer, skill_creator) are
+bundled with AACode and managed separately. Do NOT create or modify files in
+the preset skills directory; they are overwritten on update.
 
 ## Two kinds of skills
 
@@ -63,21 +64,19 @@ https://example.com/api
 1. Check for name conflicts first: run_skills("__list__") — if the name
    already exists, DO NOT overwrite it unless the user explicitly asked to
    modify/optimize that exact skill. Otherwise pick a different name.
-2. Write the file (heredoc keeps formatting intact):
+2. Write the file to the user skills directory (use the appropriate path for
+   the current OS):
 
 ```
-mkdir -p skills/my_skill && cat > skills/my_skill/SKILL.md <<'EOF'
-# my_skill
-
-## Description
+# macOS / Linux:
+mkdir -p ~/Library/Application\ Support/com.aacode/skills/my_skill && \
+  cat > ~/Library/Application\ Support/com.aacode/skills/my_skill/SKILL.md <<'EOF'
 ...
-
-## Parameters
-- ...
-
-## Example
-run_skills("my_skill", {...})
 EOF
+
+# Or let run_shell handle the path:
+run_shell("mkdir -p '~/Library/Application Support/com.aacode/skills/my_skill'")
+run_shell("cat > '~/Library/Application Support/com.aacode/skills/my_skill/SKILL.md' <<'EOF'\n# my_skill\n\n## Description\n...\nEOF")
 ```
 
 3. Verify: run_skills("__info__", {"skill_name": "my_skill"}) — confirm the
