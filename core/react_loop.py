@@ -2166,20 +2166,20 @@ Please return the three-part summary in JSON format:"""
         # 2. 检查token使 with 情况
         current_tokens = self._estimate_tokens(messages)
         if current_tokens > 5000:  # 警告阈值
-            # 显示消息分布（含 tool 角色）
-            system_tokens = self._estimate_tokens(
-                [msg for msg in messages if msg.get("role") == "system"]
-            )
-            user_tokens = self._estimate_tokens(
-                [msg for msg in messages if msg.get("role") == "user"]
-            )
-            assistant_tokens = self._estimate_tokens(
-                [msg for msg in messages if msg.get("role") == "assistant"]
-            )
-            tool_tokens = self._estimate_tokens(
-                [msg for msg in messages if msg.get("role") == "tool"]
-            )
-            print(f"📊 Context monitor: ~{current_tokens} tokens |  System: {system_tokens} |  User: {user_tokens} | Assistant: {assistant_tokens} | Tool: {tool_tokens}")
+            sys_ct, usr_ct, asst_ct, tool_ct = 0, 0, 0, 0
+            for msg in messages:
+                content = str(msg.get("content", ""))
+                role = msg.get("role", "")
+                n = len(content) // 4
+                if role == "system":
+                    sys_ct += n
+                elif role == "user":
+                    usr_ct += n
+                elif role == "assistant":
+                    asst_ct += n
+                elif role == "tool":
+                    tool_ct += n
+            print(f"📊 Context monitor: ~{current_tokens} tokens |  System: {sys_ct} |  User: {usr_ct} | Assistant: {asst_ct} | Tool: {tool_ct}")
 
         # 3. 检查归档路径是否保留（简化版本中）
         for i, obs_display in enumerate(all_observations_for_display):

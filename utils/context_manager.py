@@ -212,19 +212,28 @@ class ContextManager:
 
             cmd = f"find . -type f \\( -name '*.py' -o -name '*.md' -o -name '*.txt' -o -name '*.json' -o -name '*.yaml' -o -name '*.yml' -o -name '*.csv' -o -name '*.xlsx' -o -name '*.pdf' \\) | grep -v '.aacode' | head -{max_files}"
 
-            process = await asyncio.wait_for(
-                asyncio.create_subprocess_shell(
-                    cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    cwd=self.project_path,
-                ),
-                timeout=file_search_timeout,
+            process = await asyncio.create_subprocess_shell(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=self.project_path,
             )
 
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=file_search_timeout
-            )
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(), timeout=file_search_timeout
+                )
+            except asyncio.TimeoutError:
+                process.terminate()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=5.0)
+                except Exception:
+                    try:
+                        process.kill()
+                        await asyncio.wait_for(process.wait(), timeout=2.0)
+                    except Exception:
+                        pass
+                raise
 
             if process.returncode == 0 and stdout:
                 files = stdout.decode(errors="ignore").strip().split("\n")

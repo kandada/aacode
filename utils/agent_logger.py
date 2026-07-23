@@ -111,7 +111,6 @@ class AgentLogger:
             "messages_count": len(messages),
             "response_time_ms": response_time * 1000,
             "response_length": len(response),
-            "messages": messages,  # 保存完整对话上下文
             "response": response,
         }
 
@@ -131,12 +130,16 @@ class AgentLogger:
         if not self.file_handle:
             return
 
+        result_str = str(result) if result is not None else None
+        if result_str and len(result_str) > 2000:
+            result_str = result_str[:2000] + "...(truncated)"
+
         log_entry = {
             "type": "tool_call",
             "timestamp": datetime.now().isoformat(),
             "tool_name": tool_name,
             "tool_input": tool_input,
-            "result": str(result) if result is not None else None,
+            "result": result_str,
             "result_type": type(result).__name__,
             "execution_time_ms": execution_time * 1000,
             "success": success,
@@ -226,7 +229,6 @@ class AgentLogger:
             file_handle = self.file_handle
             if file_handle:
                 await file_handle.write(log_line)
-                await file_handle.flush()
         except Exception as e:
             print(f"⚠️  Log write failed: {e}")
 
