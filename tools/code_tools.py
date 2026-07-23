@@ -111,6 +111,14 @@ class CodeTools:
 
                 except asyncio.TimeoutError:
                     process.terminate()
+                    try:
+                        await asyncio.wait_for(process.wait(), timeout=5.0)
+                    except Exception:
+                        try:
+                            process.kill()
+                            await asyncio.wait_for(process.wait(), timeout=2.0)
+                        except Exception:
+                            pass
                     return {
                         "error": f"Code execution timeout ({timeout_float}s)",
                         "file": str(temp_file.relative_to(self.project_path)),
@@ -193,6 +201,14 @@ class CodeTools:
 
             except asyncio.TimeoutError:
                 process.terminate()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=5.0)
+                except Exception:
+                    try:
+                        process.kill()
+                        await asyncio.wait_for(process.wait(), timeout=2.0)
+                    except Exception:
+                        pass
                 return {"error": "Test execution timeout", "success": False}
 
         except Exception as e:

@@ -393,19 +393,17 @@ class MainAgent(BaseAgent):
         from aacode.utils.tool_adapter import to_openai_tools, to_anthropic_tools
         from aacode.utils.tool_schemas import get_all_schemas
 
+        _all_schemas = get_all_schemas()
+        _openai_tools = None
+        _anthropic_tools = None
+        if _all_schemas:
+            _openai_tools = to_openai_tools(_all_schemas)
+            _anthropic_tools = to_anthropic_tools(_all_schemas)
+
         async def model_caller(messages: List[Dict]) -> Dict[str, Any]:
             """调 with 模型，返回 {"text": str, "tool_calls": list}"""
-            native_tools = None
-            try:
-                all_schemas = get_all_schemas()
-                if all_schemas:
-                    gateway = model_config.get("gateway", "openai")
-                    if gateway == "anthropic":
-                        native_tools = to_anthropic_tools(all_schemas)
-                    else:
-                        native_tools = to_openai_tools(all_schemas)
-            except Exception:
-                native_tools = None
+            gateway = model_config.get("gateway", "openai")
+            native_tools = _anthropic_tools if gateway == "anthropic" else _openai_tools
 
             # 重试机制：网络瞬断、协议错误、5xx等自动重试
             _max_retries = 3
