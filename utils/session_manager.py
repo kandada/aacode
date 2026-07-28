@@ -327,6 +327,8 @@ class SessionManager:
 
         # 添加消息
         new_tokens = self._count_tokens(content)
+        if reasoning_content:
+            new_tokens += self._count_tokens(reasoning_content)
         message = SessionMessage(
             role=role,
             content=content,

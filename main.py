@@ -95,16 +95,18 @@ class AICoder:
         )
         # 上下文管理器使 with aacode工作目录（存放日志等）
         self.context_manager = ContextManager(self.project_path)
+
+        # 加载项目initialized指令（需在 MainAgent 之前，作为构造参数传入）
+        self._load_init_instructions()
+
         # 主Agent使 with 目标项目目录（实际操作目录）
         self.main_agent = MainAgent(
             project_path=self.target_project,
             context_manager=self.context_manager,
             safety_guard=self.safety_guard,
             model_config=model_config or settings.DEFAULT_MODEL,
+            init_instructions=self.init_instructions,
         )
-
-        # 加载项目initialized指令
-        self._load_init_instructions()
 
         # initialized类方法映射器
         self._init_class_method_mapper()
@@ -313,13 +315,11 @@ class AICoder:
         print(style(f"✅ Todo created: {todo_file}", fg=GREEN))
 
         try:
-            # Run主Agent，传递类方法映射信息
+            # Run主Agent
             result = await self.main_agent.execute(
                 task=task,
-                init_instructions=self.init_instructions,
                 task_dir=task_dir,
                 max_iterations=max_iterations,
-                project_analysis=analysis_result,
                 todo_manager=self.todo_manager,  # 传递todo管理器
             )
             return result

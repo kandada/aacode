@@ -121,6 +121,7 @@ class MainAgent(BaseAgent):
         context_manager: Any,
         safety_guard: Any,
         model_config: Dict,
+        init_instructions: str = "",
         **kwargs,
     ):
 
@@ -155,6 +156,36 @@ class MainAgent(BaseAgent):
 
         # 注入项目目录信息到系统提示词
         system_prompt += f"\n\n## Working Directory\nYour current working directory is: {project_path.absolute()}\nAll file operations should use paths relative to this directory.\nUser skills directory: {self.skills_manager.user_skills_dir}"
+
+        # 自动读取 init.md（如果调用方未传入 init_instructions）
+        if not init_instructions or not init_instructions.strip():
+            init_file = project_path / "init.md"
+            if init_file.exists():
+                try:
+                    init_instructions = init_file.read_text(encoding="utf-8", errors="ignore")
+                except Exception:
+                    pass
+
+        # 注入 init.md 内容（项目指导原则，静态）
+        if init_instructions and init_instructions.strip():
+            system_prompt += f"\n\n## Project Init Instructions (init.md)\n{init_instructions}"
+
+        # 注入 Todo 使用说明（静态）
+        system_prompt += """
+
+📋 Task Todo List
+For simple tasks like just answering a user question, there's no need to create or update a todo list. Check relevant files and analyze quickly before answering.
+For complex tasks, please use the todo task list.
+
+Notes:
+1. add_todo_item will return a todo_id (e.g., t1, t2), please remember it
+2. When marking complete, prefer mark_todo_completed(todo_id="t1"), which is precise and reliable
+3. If new task steps are needed, add new Todo items
+4. If the task plan changes, update existing Todo items
+
+Example:
+add_todo_item(description="Implement authentication API") → returns todo_id: "t1"
+mark_todo_completed(todo_id="t1") → precisely marked complete"""
 
         # 更新系统提示词
         self.system_prompt = system_prompt
@@ -1142,7 +1173,7 @@ class MainAgent(BaseAgent):
                         call_id_to_name[tc.get("id", "")] = func.get("name", "")
 
             for msg in new_msgs:
-                if msg["role"] not in ("assistant", "tool"):
+                if msg["role"] not in ("assistant", "tool", "system"):
                     continue
                 content = msg.get("content", "")
                 reasoning_content = msg.get("reasoning_content")
@@ -1161,7 +1192,7 @@ class MainAgent(BaseAgent):
                     role=msg["role"],
                     content=content,
                     timestamp=datetime.now().isoformat(timespec='seconds'),
-                    tokens=len(content) // 4,  # est tokens, session tracking only
+                    tokens=(len(content) + len(reasoning_content or "")) // 4,
                     tool_calls=tool_calls,
                     tool_call_id=msg.get("tool_call_id"),
                     reasoning_content=reasoning_content,
@@ -1199,10 +1230,8 @@ class MainAgent(BaseAgent):
     async def execute(
         self,
         task: str,
-        init_instructions: str = "",
         task_dir: Optional[Path] = None,
         max_iterations: int = 20,
-        project_analysis: str = "",
         todo_manager: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """
@@ -1210,10 +1239,8 @@ class MainAgent(BaseAgent):
 
         Args:
             task: 任务描述
-            init_instructions: initialized指令
             task_dir: 任务目录
             max_iterations: 最大迭代次数
-            project_analysis: 项目分析结果（类方法映射）
             todo_manager: to-do-list管理器
 
         Returns:
@@ -1241,51 +1268,27 @@ class MainAgent(BaseAgent):
             if todo_manager.current_todo_file:
                 todo_manager.set_session_todo(session_id, todo_manager.current_todo_file)
 
-        # 更新系统提示，包含项目分析结果
-        analysis_section = ""
-        if project_analysis and "failed" not in project_analysis.lower():
-            analysis_section = (
-                f"\n\nProject structure analysis (class-method mapping):\n{project_analysis[:1500]}..."
-            )
-            print(t("context.analysis_integrated"))
+        # ─── 构建动态上下文消息（作为独立 system 消息追加，不嵌入 system prompt）───
+        dynamic_system_msgs = []
 
-        # 构建 task todo section，与系统提示合并为完整 prompt
-        todo_section = ""
         if todo_manager:
             try:
                 todo_summary = await todo_manager.get_todo_summary(session_id=session_id)
                 if "error" not in todo_summary:
-                    todo_section = f"""
-
-📋 Task Todo List
-For simple tasks like just answering a user question, there's no need to create or update a todo list. Check relevant files and analyze quickly before answering.
-For complex tasks, please use the todo task list:
-- Todo files: {todo_summary.get("todo_file", "Unknown")}
-- Total items: {todo_summary.get("total_todos", 0)} 
-- Completed: {todo_summary.get("completed_todos", 0)}
-- Pending: {todo_summary.get("pending_todos", 0)}
-- Completion rate: {todo_summary.get("completion_rate", 0):.1f}%
-
-Notes:
-1. add_todo_item will return a todo_id (e.g., t1, t2), please remember it
-2. When marking complete, prefer mark_todo_completed(todo_id="t1"), which is precise and reliable
-3. If new task steps are needed, add new Todo items
-4. If the task plan changes, update existing Todo items
-
-Example:
-add_todo_item(description="Implement authentication API") → returns todo_id: "t1"
-mark_todo_completed(todo_id="t1") → precisely marked complete
-
-"""
+                    todo_content = (
+                        f"Todo files: {todo_summary.get('todo_file', 'Unknown')}\n"
+                        f"Total items: {todo_summary.get('total_todos', 0)}, "
+                        f"Completed: {todo_summary.get('completed_todos', 0)}, "
+                        f"Pending: {todo_summary.get('pending_todos', 0)}, "
+                        f"Completion rate: {todo_summary.get('completion_rate', 0):.1f}%"
+                    )
+                    dynamic_system_msgs.append({"role": "system", "content": todo_content})
             except Exception as e:
                 print(f"⚠️  Failed to get todo summarized: {e}")
 
-        full_system_prompt = f"""{self.system_prompt}{analysis_section}\n\nProject init instructions:\n{init_instructions}{todo_section}"""
+        # system prompt 保持静态（不含动态 todo/analysis/init_instructions）
+        full_system_prompt = self.system_prompt
         self.conversation_history[0]["content"] = full_system_prompt
-        # 不再将 system prompt 同步到 session_manager.current_messages。
-        # system prompt 完全由代码规则确定，无需持久化到 session JSON。
-        # 兼容性：旧版 session JSON 中 current_messages[0] 可能是占位 system，
-        # 由下方 get_messages(include_system=False) 过滤，不会传入 LLM。
 
         # 添加任务描述
         self.conversation_history.append(
@@ -1295,8 +1298,8 @@ mark_todo_completed(todo_id="t1") → precisely marked complete
             }
         )
 
-        # ─── 先获取历史消息（不含本轮 user 消息，避免传给 LLM 造成重复） ──
-        history_messages = await self.session_manager.get_messages(include_system=False)
+        # ─── 获取历史消息（含动态 system 消息，用于跨任务缓存前缀匹配）───
+        history_messages = await self.session_manager.get_messages(include_system=True)
 
         # ─── 会话恢复保护：检测上次会话是否中断在工具执行中途 ───
         if history_messages and history_messages[-1].get("role") == "tool":
@@ -1311,7 +1314,7 @@ mark_todo_completed(todo_id="t1") → precisely marked complete
                 "content": recovery_hint,
             })
 
-        # ─── 再保存 user 任务消息（在 react_loop 之前，确保取消也不会丢失） ──
+        # ─── 保存 user 任务消息（在 react_loop 之前，确保取消也不会丢失）───
         has_user_msg = (
             len(self.session_manager.current_messages) > 0
             and self.session_manager.current_messages[-1].role == "user"
@@ -1320,7 +1323,11 @@ mark_todo_completed(todo_id="t1") → precisely marked complete
         if not has_user_msg:
             await self.session_manager.add_message("user", task)
 
-        # ─── 运 linesReAct循环（增量持久化：每轮迭代立即保存消息） ──
+        # ─── 保存动态上下文系统消息到 session（持久化，后续任务可复用前缀）───
+        for dsm in dynamic_system_msgs:
+            await self.session_manager.add_message("system", dsm["content"])
+
+        # ─── 运 linesReAct循环（增量持久化：每轮迭代立即保存消息）───
         _task_error = None
         result = None
         try:
@@ -1329,6 +1336,7 @@ mark_todo_completed(todo_id="t1") → precisely marked complete
                 task_description=task,
                 todo_manager=todo_manager,
                 history_messages=history_messages if history_messages else None,
+                dynamic_system_messages=dynamic_system_msgs,
                 on_new_messages=self._save_iteration_messages,
                 session_id=session_id,
             )
