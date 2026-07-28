@@ -222,18 +222,15 @@ def build_compact_view(
         result.extend(pre_user_rounds[i])
 
     skipped = len(pre_user_rounds) - keep_first
-    if skipped > 0:
-        if cached_summary:
-            result.append({"role": "system", "content": cached_summary})
-        else:
-            compact_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            summary_content = (
-                f"## Context Summary\n\n"
-                f"**Compaction Time**: {compact_time}\n\n"
-                f"*{skipped} earlier rounds were omitted to stay within the context limit.*\n\n"
-                f"Please continue based on the most recent context below."
-            )
-            result.append({"role": "system", "content": summary_content})
+    if skipped > 0 and not cached_summary:
+        compact_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        summary_content = (
+            f"## Context Summary\n\n"
+            f"**Compaction Time**: {compact_time}\n\n"
+            f"*{skipped} earlier rounds were omitted to stay within the context limit.*\n\n"
+            f"Please continue based on the most recent context below."
+        )
+        result.append({"role": "system", "content": summary_content})
 
     for r in post_user_rounds:
         result.extend(r)

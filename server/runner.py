@@ -51,11 +51,21 @@ class AICoderRunner:
             safety_guard = SafetyGuard(work_dir)
             context_manager = ContextManager(self.project_path)
 
+            # 读取 init.md（项目指导原则），作为静态 system prompt 的一部分
+            init_instructions = ""
+            init_file = work_dir / "init.md"
+            if init_file.exists():
+                try:
+                    init_instructions = init_file.read_text(encoding="utf-8", errors="ignore")
+                except Exception:
+                    pass
+
             agent = MainAgent(
                 project_path=work_dir,
                 context_manager=context_manager,
                 safety_guard=safety_guard,
                 model_config=settings.DEFAULT_MODEL,
+                init_instructions=init_instructions,
             )
 
             if session_id:

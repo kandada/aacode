@@ -137,6 +137,7 @@ class AsyncReActLoop:
         task_description: str,
         todo_manager: Optional[Any] = None,
         history_messages: Optional[List[Dict]] = None,
+        dynamic_system_messages: Optional[List[Dict]] = None,
         on_new_messages: Optional[Callable[[List[Dict]], Awaitable[None]]] = None,
         session_id: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -144,10 +145,11 @@ class AsyncReActLoop:
         运 linesReAct循环
 
         Args:
-            initial_prompt: 完整系统提示（调用方已组装好 todo/planning 等全部上下文）
+            initial_prompt: 静态系统提示（不含动态 todo/analysis 等上下文）
             task_description: 任务描述
             todo_manager: to-do-list管理器（用于运行中错误时追加 todo 项，不影响初始 prompt）
-            history_messages: 同一会话的历史对话消息（  for多轮任务上下文衔接）
+            history_messages: 同一会话的历史对话消息（含动态 system 消息，用于多轮任务上下文衔接）
+            dynamic_system_messages: 本轮任务的动态上下文 system 消息（追加在 user task 之后）
             session_id: 当前会话ID（用于多会话并发时的 todo 隔离）
 
         Returns:
@@ -169,12 +171,8 @@ class AsyncReActLoop:
 
         print(style(f"🚀 Starting ReAct loop, max {self.max_iterations} iterations", fg=BLUE))
 
-        # 初始上下文
-        self.current_context = await self.context_manager.get_context()
-
-        # initial_prompt 已由调用方（main_agent.execute）组装完整：
-        # SYSTEM_PROMPT + skills + working_dir + analysis + init_instructions + todo_section
-        # 此处仅追加静态的 Planning in Thought 指令（也适用于 sub_agent）
+        # initial_prompt 已是静态 system prompt（不含动态 todo/analysis/context）
+        # dynamic_system_messages 由调用方作为独立消息传入
         messages = [
             {
                 "role": "system",
@@ -191,11 +189,6 @@ During each thought, naturally plan:
         ]
 
         # ─── 多轮任务上下文衔接 ───────────────────────────────────
-        # 同一会话中，第二轮及后续任务需要看到之前的对话历史
-        # history_messages 来自 session_manager，包含之前所有轮次的 user/assistant/tool 消息
-        # 插入到 system prompt 之后、当前任务之前，让模型了解之前做了什么
-        # ⚠️ 保留 tool 消息，否则前序任务的工具执行结果在多轮后会逐步丢失
-        # ⚠️ token 超限时会由 _compact_context 自动压缩，不需要在这里截断
         if history_messages:
             for msg in history_messages:
                 role = msg.get("role", "")
@@ -221,9 +214,17 @@ During each thought, naturally plan:
         messages.append(
             {
                 "role": "user",
-                "content": f"Task: {task_description}\n\nCurrent context:\n{self.current_context}\n\nUse native function calls (tool_calls) to execute tools. Do NOT output JSON/text-formatted tool call information in your response — the system handles tool execution automatically via the API's tool_calls mechanism and returns results as tool role messages.",
+                "content": f"Task: {task_description}\n\nUse native function calls (tool_calls) to execute tools. Do NOT output JSON/text-formatted tool call information in your response — the system handles tool execution automatically via the API's tool_calls mechanism and returns results as tool role messages.",
             },
         )
+
+        # ─── 追加动态上下文 system 消息（todo/analysis/init_instructions）───
+        if dynamic_system_messages:
+            for dsm in dynamic_system_messages:
+                messages.append({
+                    "role": "system",
+                    "content": dsm["content"],
+                })
 
         start_time = asyncio.get_event_loop().time()
 
@@ -579,7 +580,11 @@ During each thought, naturally plan:
                 msg_count_changed = len(messages) - self._compact_summary_msg_count
                 if msg_count_changed > 20 or self._compact_summary is None:
                     print(f"📊 Compact view tokens: {compact_view_tokens}, trigger threshold: {trigger_tokens}")
+                    msg_before_compact = len(messages)
                     await self._compact_context(messages)
+                    # 持久化压缩摘要（_compact_context 追加了 system 消息到末尾）
+                    if on_new_messages and len(messages) > msg_before_compact:
+                        await on_new_messages(messages[msg_before_compact:])
                     if self.logger:
                         await self.logger.log_context_update(
                             update_type="compact",
@@ -1341,6 +1346,10 @@ During each thought, naturally plan:
 - Avoid duplicating already completed work"""
 
         self._compact_summary_msg_count = len(messages)
+
+        # ─── 追加压缩摘要到全量 messages 末尾（持久化，跨任务缓存前缀可命中）───
+        compact_msg = {"role": "system", "content": self._compact_summary}
+        messages.append(compact_msg)
 
         # 验证：使用缓存摘要构建压缩视图，确认 tool_calls 完整性
         view, _, new_tokens = self._build_compact_view(messages)
