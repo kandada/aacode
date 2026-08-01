@@ -564,17 +564,11 @@ During each thought, naturally plan:
 
             # 智能上下文缩减检查（基于传入模型的压缩视图 token 数）
             effective_msgs, was_compacted, compact_view_tokens = self._build_compact_view(messages)
-            trigger_tokens_raw = (
+            trigger_tokens = (
                 self.context_config.compact_trigger_tokens
                 if self.context_config
                 else 8000
             )
-            context_max = (
-                self.context_config.max_context_length
-                if self.context_config
-                else 131072
-            )
-            trigger_tokens = min(trigger_tokens_raw, context_max)
 
             if compact_view_tokens > trigger_tokens:
                 msg_count_changed = len(messages) - self._compact_summary_msg_count
@@ -1356,17 +1350,11 @@ During each thought, naturally plan:
         old_tokens = self._estimate_tokens(messages)
         self._post_compact_tokens = new_tokens  # 记录压缩后基准值
 
-        trigger_tokens = (
+        threshold = (
             self.context_config.compact_trigger_tokens
             if self.context_config
             else 8000
         )
-        context_max = (
-            self.context_config.max_context_length
-            if self.context_config
-            else 131072
-        )
-        threshold = min(trigger_tokens, context_max)
 
         status = "✅" if new_tokens <= threshold else "⚠️"
         print(style(f"{status} Smart context compaction done: full messages kept intact ({len(messages)} messages) | Summary cached for compact view | Token: {old_tokens} → {new_tokens} (compact view: {(old_tokens - new_tokens) / max(old_tokens, 1) * 100:.1f}% reduction) | " + (f"Below trigger ({threshold})" if new_tokens <= threshold else f"Still above trigger ({threshold}), protected last {protect_last_user_rounds} user rounds may be large") + f" | Protected first {protect_first_rounds} pre-user rounds | Summarized {len(middle_rounds)} history rounds before latest user message", fg=GREEN if new_tokens <= threshold else RED))
@@ -2177,9 +2165,8 @@ Please return the three-part summary in JSON format:"""
         if current_tokens > 5000:  # 警告阈值
             sys_ct, usr_ct, asst_ct, tool_ct = 0, 0, 0, 0
             for msg in messages:
-                content = str(msg.get("content", ""))
                 role = msg.get("role", "")
-                n = len(content) // 4
+                n = self._estimate_tokens([msg])
                 if role == "system":
                     sys_ct += n
                 elif role == "user":

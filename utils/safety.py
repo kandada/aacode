@@ -38,6 +38,7 @@ class SafetyGuard:
         self.project_root = str(project_path)
         self.interactive = interactive  # 是否启用交互式确认
         self.dangerous_command_action = dangerous_command_action  # reject, ask, log
+        self._path_cache: Dict[str, Optional[str]] = {}  # 缓存 shutil.which 结果
         self.restrict_to_project = restrict_to_project
 
         # 危险命令模式（注意：rm -rf 已移到特殊检查中，允许在项目目录内使用）
@@ -1093,6 +1094,15 @@ class SafetyGuard:
 
         return False
 
+    def _exists_on_path(self, cmd_name: str) -> Optional[str]:
+        """检查命令是否存在于系统 PATH 中（带缓存）"""
+        if cmd_name in self._path_cache:
+            return self._path_cache[cmd_name]
+        import shutil
+        found = shutil.which(cmd_name)
+        self._path_cache[cmd_name] = found
+        return found
+
     def _build_result(
         self,
         allowed: bool,
@@ -1262,25 +1272,23 @@ class SafetyGuard:
                     trailing_close = len(part) - len(part.rstrip(')'))
                     group_depth = max(0, group_depth - trailing_close)
 
-            # 检测 heredoc 开始: << DELIM 或 <<- DELIM（允许前导 tab）
-            # shlex 可能将 <<- 与定界符合并为一个 token（如 <<-EOF），也可能分开
+            # 检测 heredoc 开始: << DELIM 或 <<- DELIM
+            # shlex 可能拆分（<<, DELIM）或合并（<<DELIM, <<-DELIM, <<'DELIM'）
             heredoc_delim = None
-            if part == "<<" and i + 1 < len(parts):
-                delim_token = parts[i + 1]
-                heredoc_delim = delim_token
-                current.append(part)
-                current.append(delim_token)
-                i += 2
-            elif part.startswith("<<-") and len(part) > 3:
-                heredoc_delim = part[3:]
-                current.append(part)
-                i += 1
-            elif part == "<<-" and i + 1 < len(parts):
-                delim_token = parts[i + 1]
-                heredoc_delim = delim_token
-                current.append(part)
-                current.append(delim_token)
-                i += 2
+            if part.startswith("<<") and not part.startswith("<<<"):
+                if part in ("<<", "<<-") and i + 1 < len(parts):
+                    # 独立 operator token，定界符在下一个 token
+                    delim_token = parts[i + 1]
+                    current.append(part)
+                    current.append(delim_token)
+                    i += 2
+                    heredoc_delim = delim_token
+                elif len(part) > 2:
+                    # 合并 token: <<DELIM 或 <<-DELIM 或 <<'DELIM'
+                    op_len = 3 if part.startswith("<<-") else 2
+                    heredoc_delim = part[op_len:]
+                    current.append(part)
+                    i += 1
 
             if heredoc_delim:
                 delim_raw = heredoc_delim
@@ -1901,12 +1909,17 @@ class SafetyGuard:
 
             # 检查是否在白名单中
             if cmd_name not in self.allowed_commands:
-                return self._build_result(
-                    allowed=False,
-                    reason=f"Command not in whitelist: {cmd_name}",
-                    risk_level=self.RISK_UNKNOWN,
-                    suggestion=f"Available commands: {', '.join(sorted(list(self.allowed_commands)))}",
-                )
+                # 兜底：检查系统 PATH 上是否存在此命令
+                found = self._exists_on_path(cmd_name)
+                if found:
+                    print(f"⚠️  Command '{cmd_name}' not in whitelist but found on PATH ({found}), allowing")
+                else:
+                    return self._build_result(
+                        allowed=False,
+                        reason=f"Command not in whitelist: {cmd_name}",
+                        risk_level=self.RISK_UNKNOWN,
+                        suggestion=f"Available commands: {', '.join(sorted(list(self.allowed_commands)))}",
+                    )
 
             # Shell 控制流关键字：跳过后续特殊检查和路径检查，直接放行
             shell_keywords = {

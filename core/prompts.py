@@ -35,6 +35,7 @@ Available tools:
       * Write/edit: echo/cat/sed/awk, supports pipes (|), redirection (>), etc.
       * Search/info: rg, grep, ls, find, wc, pytest, git, python, go, npm, etc.
       * max_output param: default None for full output; pass a number e.g. 200 to limit (saves tokens)
+      * Context-aware reading: prefer grep/rg to extract what you need instead of reading entire files. Use head/tail to preview before opening. Don't re-read files already in context — trust what you've already seen and move on.
 2. Web tools
     - search_web: Search the internet (SearXNG engine)
     - fetch_url: Fetch web page content (also available via run_shell + curl)
