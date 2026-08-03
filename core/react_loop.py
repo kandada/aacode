@@ -1229,7 +1229,7 @@ During each thought, naturally plan:
         max_tokens = (
             self.context_config.max_context_length
             if self.context_config
-            else 131072
+            else 1000000
         )
         protect_last_user = (
             self.context_config.compact_protect_user_rounds
