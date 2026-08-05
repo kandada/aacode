@@ -13,6 +13,7 @@ import asyncio
 import os
 import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -27,7 +28,7 @@ class AtomicTools:
         self.safety_guard = safety_guard
 
     async def run_shell(
-        self, command: str, timeout: int = 120, stdin_input: str = None, max_output: int = None, **kwargs
+        self, command: str, timeout: int = 120, stdin_input: str = None, max_output: int = None, stop_on_exit: bool = False, **kwargs
     ) -> Dict[str, Any]:
         """
         执行shell命令(带安全护栏)
@@ -37,6 +38,7 @@ class AtomicTools:
             timeout: 超时时间（秒）
             stdin_input: 传给程序的标准输入内容（可选）。程序有 input() 时使用，多行用 \\n 分隔
             max_output: 限制返回的输出最大字符数。默认None（不限制），传数字如200可限制输出
+            stop_on_exit: 主进程退出后是否不等子进程管道立即返回。默认False。命令会spawn长期子进程时（如open Simulator）可设True防挂死
 
         Note: **kwargs 用于接收并忽略模型可能传入的额外参数
         """
@@ -97,6 +99,13 @@ class AtomicTools:
                 except UnicodeDecodeError:
                     return data.decode("gbk", errors="replace")
 
+            async def _poll_process_exit(proc, t):
+                deadline = time.monotonic() + t
+                while proc.returncode is None:
+                    if time.monotonic() > deadline:
+                        raise asyncio.TimeoutError()
+                    await asyncio.sleep(0.01)
+
             try:
                 if stdin_input:
                     stdout, stderr = await asyncio.wait_for(
@@ -114,8 +123,19 @@ class AtomicTools:
                     stderr_reader = asyncio.create_task(
                         _stream_lines(process.stderr, "╰ ", stderr_buf)
                     )
-                    await asyncio.wait_for(process.wait(), timeout=timeout)
-                    await asyncio.gather(stdout_reader, stderr_reader)
+                    await _poll_process_exit(process, timeout)
+                    if stop_on_exit:
+                        try:
+                            await asyncio.wait_for(
+                                asyncio.gather(stdout_reader, stderr_reader),
+                                timeout=0.5,
+                            )
+                        except asyncio.TimeoutError:
+                            stdout_reader.cancel()
+                            stderr_reader.cancel()
+                            await asyncio.gather(stdout_reader, stderr_reader, return_exceptions=True)
+                    else:
+                        await asyncio.gather(stdout_reader, stderr_reader)
                     stdout_text = "\n".join(stdout_buf)
                     stderr_text = "\n".join(stderr_buf)
 
@@ -167,11 +187,11 @@ class AtomicTools:
                     )
                 # Reap the process (avoid zombies)
                 try:
-                    await asyncio.wait_for(process.wait(), timeout=5.0)
+                    await _poll_process_exit(process, 5.0)
                 except Exception:
                     try:
                         process.kill()
-                        await asyncio.wait_for(process.wait(), timeout=2.0)
+                        await _poll_process_exit(process, 2.0)
                     except Exception:
                         pass
                 return {

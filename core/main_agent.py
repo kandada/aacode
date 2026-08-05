@@ -1246,7 +1246,8 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
         Returns:
             execute结果
         """
-        print(style(t("agent.start_task", task=task), fg=BLUE, bold=True))
+        display_task = task[:15] + "..." if len(task) > 15 else task
+        print(style(t("agent.start_task", task=display_task), fg=BLUE, bold=True))
         self.start_time = asyncio.get_event_loop().time()
         self._save_batch_counter = 0
 

@@ -54,6 +54,15 @@ RUN_SHELL_SCHEMA = ToolSchema(
             example=None,
             aliases=["max_chars", "limit", "output_limit"],
         ),
+        ToolParameter(
+            name="stop_on_exit",
+            type=bool,
+            required=False,
+            default=False,
+            description="If true, stop waiting for stdout/stderr immediately after the main process exits, instead of waiting for all child processes to close their pipes. Use when the command spawns long-running children (e.g. open Simulator, start server) to prevent the tool from hanging. Default is False (wait for all output).",
+            example=True,
+            aliases=["detach", "no_wait_children"],
+        ),
     ],
     examples=[
         {"command": "ls -la", "description": "List all files in current directory (including hidden files)"},

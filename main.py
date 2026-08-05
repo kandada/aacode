@@ -286,7 +286,8 @@ class AICoder:
         Returns:
             execute结果
         """
-        print(style(f"\n🎯 Starting task: {task}", fg=BLUE, bold=True))
+        display_task = task[:15] + "..." if len(task) > 15 else task
+        print(style(f"\n🎯 Starting task: {display_task}", fg=BLUE, bold=True))
         print(t("cli.aacode_work_dir", path=self.project_path))
         print(f"🎯 Target project dir: {self.target_project}")
         print(f"📝 Init instructions loaded ({len(self.init_instructions.split())} chars)")
@@ -567,7 +568,8 @@ async def continue_session(coder, project_dir):
                         user_input = input("> ").strip()
 
                 # execute task
-                print(f"\n🎯 Starting execution: {user_input}")
+                display_input = user_input[:15] + "..." if len(user_input) > 15 else user_input
+                print(f"\n🎯 Starting execution: {display_input}")
                 print("Preparing...")
 
                 try:
