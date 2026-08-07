@@ -227,7 +227,7 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
     _LIST_MODES = {None, "", "__list__", "list", "--list", "-l", "/list", "ls"}
     _INFO_MODES = {"__info__", "info", "--info", "-i", "/info"}
 
-    async def _run_skills(self, skill_name: str = None, params: dict = None) -> str:
+    async def _run_skills(self, skill_name: str = None, params: dict = None, timeout: int = None) -> str:
         """
         统一技能入口，三种模式：
 
@@ -237,6 +237,8 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
 
           多函数 skill 在 params 中传 "func":
             run_skills("playwright", {"func":"browser_automation", "url":"..."})
+
+        timeout: 技能执行超时（秒），不指定时走配置 tool_default
         """
         if not hasattr(self, 'skills_manager'):
             return "Error: Skills manager not initialized"
@@ -273,11 +275,16 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
         func_name = params.pop("func", None)
         # 注入项目路径，让 skill 函数用正确的工作目录解析相对路径
         params.setdefault("_project_path", str(self.skills_manager.project_path.absolute()))
+
+        # 解析超时时间：模型指定 > 配置 tool_default
+        if timeout is None:
+            timeout = getattr(getattr(settings, 'timeout', None), 'tool_default', 300)
         try:
 
-            result = await self.skills_manager.execute_skill(
+            exec_coro = self.skills_manager.execute_skill(
                 sname, func_name=func_name, **params
             )
+            result = await asyncio.wait_for(exec_coro, timeout=timeout)
             if isinstance(result, dict):
                 if result.get("success"):
                     result_str = str(result.get("result", result))
@@ -305,6 +312,8 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
 
             return result_str
 
+        except asyncio.TimeoutError:
+            return f"Skill execution timeout ({timeout}s). The skill took too long to respond."
         except Exception as e:
             return f"Error executing skill '{skill_name}': {str(e)}"
 
@@ -987,6 +996,17 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
             if clean_resp.startswith('Thought:'):
                 clean_resp = clean_resp[len('Thought:'):].lstrip()
             response = clean_resp
+
+        # ─── 工具调用信息输出（流结束后统一打印，避免与 content token 交叉导致 segment 错位） ──
+        if not _is_tty and tool_calls_list:
+            import json as _json
+            for tc in tool_calls_list:
+                name = tc["name"]
+                args = tc["arguments"]
+                if isinstance(args, dict):
+                    args = _json.dumps(args, ensure_ascii=False)
+                print(_json.dumps({"type": "tool_progress", "state": "done", "name": name}), flush=True)
+                print(f"🛠️ Action: {name}\x00Action Input: {args}", flush=True)
 
         print()
         return {

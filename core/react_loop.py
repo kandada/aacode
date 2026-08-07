@@ -1046,9 +1046,9 @@ During each thought, naturally plan:
 
             hb_task: asyncio.Task | None = None
             action_start = time.time()
-            # run_shell 自己管超时，框架不做二次兜底
+            # run_shell / run_skills 自己管超时，框架不做二次兜底
             timeout_cfg = getattr(settings, "timeout", None)
-            tool_timeout = timeout_cfg.tool_default if timeout_cfg and action != "run_shell" else None
+            tool_timeout = timeout_cfg.tool_default if timeout_cfg and action not in ("run_shell", "run_skills") else None
             hb_task = asyncio.create_task(_heartbeat(action, action_start, tool_timeout or 600))
             try:
                 coro = (

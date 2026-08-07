@@ -19,15 +19,16 @@ else:
 
 RUN_SHELL_SCHEMA = ToolSchema(
     name="run_shell",
-    description="Execute a shell command - the universal Swiss Army knife! The tool always returns success=True; check returncode to determine success/failure. Full stdout and stderr are returned for you to process. Common uses: read files (cat/tail), write files (echo/cat), search (grep/ls/find), development (python/pytest/git). Supports pipes and redirection. Filenames with spaces or special characters must be quoted (e.g. cat \"my file.md\").",
+    description="Execute a shell command - the universal Swiss Army knife! The tool always returns success=True; check returncode to determine success/failure. Full stdout and stderr are returned for you to process. Common uses: read files (cat/tail), write files (echo/cat), search (grep/ls/find), development (python/pytest/git). Supports pipes and redirection. Filenames with spaces or special characters must be quoted (e.g. cat \"my file.md\").\n\nLifecycle actions for long-running processes (simulators, servers):\n- action=\"exec\" (default): run synchronously and return full output\n- action=\"spawn\": start in background, returns process_id immediately\n- action=\"check\": query status of a spawned process (running/exited)\n- action=\"read\": read latest output from a spawned process\n- action=\"write\": send stdin input to a spawned process\n- action=\"kill\": terminate a spawned process",
     parameters=[
         ToolParameter(
             name="command",
             type=str,
             required=True,
-            description="The shell command to execute (supports pipes, redirection, and other shell features)",
+            default="",
+            description="The shell command to execute (supports pipes, redirection, and other shell features). Required for action=\"exec\" and action=\"spawn\". Not needed for action=\"check\"/\"read\"/\"kill\".",
             example='python -c "import sys; print(sys.version)"',
-            aliases=["cmd", "shell", "script", "exec"],
+            aliases=["cmd", "shell", "script", "exec_cmd"],
         ),
         ToolParameter(
             name="timeout",
@@ -42,7 +43,7 @@ RUN_SHELL_SCHEMA = ToolSchema(
             name="stdin_input",
             type=str,
             required=False,
-            description="Standard input content to pass to the program. Use when the program calls input() and waits for user input. Separate multiple lines with \\n. If not provided, the program's stdin is empty (input() will raise EOFError immediately).",
+            description="Standard input content to pass to the program. For action=\"exec\": one-shot stdin before execution. For action=\"write\": send input to a running spawned process. Separate multiple lines with \\n.",
             example="5\\n3\\n",
             aliases=["input", "stdin"],
         ),
@@ -50,7 +51,7 @@ RUN_SHELL_SCHEMA = ToolSchema(
             name="max_output",
             type=int,
             required=False,
-            description="Limit the output character count. Default is None (no limit). Pass a number like 200 to restrict.",
+            description="Limit the output character count (for action=\"exec\"). Default is None (no limit). Pass a number like 200 to restrict.",
             example=None,
             aliases=["max_chars", "limit", "output_limit"],
         ),
@@ -62,6 +63,48 @@ RUN_SHELL_SCHEMA = ToolSchema(
             description="If true, stop waiting for stdout/stderr immediately after the main process exits, instead of waiting for all child processes to close their pipes. Use when the command spawns long-running children (e.g. open Simulator, start server) to prevent the tool from hanging. Default is False (wait for all output).",
             example=True,
             aliases=["detach", "no_wait_children"],
+        ),
+        ToolParameter(
+            name="action",
+            type=str,
+            required=False,
+            default="exec",
+            description="Operation mode: \"exec\" (default, synchronous execute), \"spawn\" (start background process, return process_id), \"check\" (query process status), \"read\" (read process output), \"write\" (send stdin to process), \"kill\" (terminate process).",
+            example="spawn",
+            aliases=["mode", "op"],
+        ),
+        ToolParameter(
+            name="process_id",
+            type=str,
+            required=False,
+            description="The process ID returned by action=\"spawn\". Required for action=\"check\"/\"read\"/\"write\"/\"kill\".",
+            example="a1b2c3d4e5f6",
+            aliases=["pid", "id"],
+        ),
+        ToolParameter(
+            name="max_lines",
+            type=int,
+            required=False,
+            description="Ring buffer size: keep only the last N lines of output (prevents OOM on long-running processes). For action=\"exec\": limits captured output lines. For action=\"spawn\": sets background buffer size. For action=\"read\": returns only last N lines.",
+            example=500,
+            aliases=["tail_lines", "buffer_size"],
+        ),
+        ToolParameter(
+            name="idle_timeout",
+            type=int,
+            required=False,
+            description="Kill the process if no output is received for this many seconds. Useful for detecting hung processes. Works with both action=\"exec\" and action=\"spawn\".",
+            example=60,
+            aliases=["idle_limit", "no_output_timeout"],
+        ),
+        ToolParameter(
+            name="use_pty",
+            type=bool,
+            required=False,
+            default=False,
+            description="Use a pseudo-terminal (PTY) instead of pipes. Required for interactive tools (simulators, REPLs, SSH) that buffer output differently with pipes. Only works on Linux/macOS.",
+            example=True,
+            aliases=["pty", "tty"],
         ),
     ],
     examples=[
@@ -148,13 +191,43 @@ RUN_SHELL_SCHEMA = ToolSchema(
             "description": "Monitor Python processes every second",
         },
     ],
-    returns="""Returns a dictionary with the following fields:
-- success (bool): Whether the tool executed successfully (always True unless the tool itself threw an exception)
+    returns="""Returns a dictionary. Fields vary by action:
+
+action="exec" (synchronous):
+- success (bool): Whether the tool executed (always True unless tool exception)
 - returncode (int): Command exit code (0=success, non-zero=failure)
 - stdout (str): Standard output
 - stderr (str): Error output
 - command (str): The executed command
-- working_directory (str): Working directory""",
+- working_directory (str): Working directory
+
+action="spawn":
+- success (bool): True
+- process_id (str): Unique ID for check/read/write/kill
+- initial_stdout (str): First batch of output
+- mode (str): "pty" if use_pty=True, else "pipe"
+
+action="check":
+- success (bool): True
+- process_id (str): The process ID
+- running (bool): Whether the process is still running
+- returncode (int or null): Exit code if exited, null if running
+
+action="read":
+- success (bool): True
+- process_id (str): The process ID
+- stdout (str): Recent output lines
+- stderr (str): Recent error lines
+- running (bool): Whether the process is still running
+
+action="write":
+- success (bool): True
+- process_id (str): The process ID
+
+action="kill":
+- success (bool): True
+- process_id (str): The process ID
+- returncode (int): Final exit code""",
 )
 
 
@@ -188,6 +261,14 @@ Use __list__ to see available skills first, then __info__ to get parameter detai
             example={"code": "df.describe()"},
             aliases=["arguments", "args", "kwargs"],
         ),
+        ToolParameter(
+            name="timeout",
+            type=int,
+            required=False,
+            description="Skill execution timeout in seconds. Increase for long-running skills (e.g. browser automation, large data processing). Uses config default if not specified.",
+            example=120,
+            aliases=["time_limit", "max_time"],
+        ),
     ],
     examples=[
         {
@@ -207,6 +288,7 @@ Use __list__ to see available skills first, then __info__ to get parameter detai
         {
             "skill_name": "playwright",
             "params": {"func": "browser_automation", "url": "https://example.com"},
+            "timeout": 120,
             "description": "Use Playwright to automate browser (multi-function skill)",
         },
         {
