@@ -1674,11 +1674,21 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
         except Exception as e:
             return {"error": f"Delete session failed: {str(e)}"}
 
-    async def get_conversation_history(self, max_length: int = 10) -> Dict[str, Any]:
-        """Get 对话历史"""
+    async def get_conversation_history(
+        self,
+        session_id: str = None,
+        range_from: int = 0,
+        range_to: int = None,
+        max_content_chars: int = 100,
+    ) -> Dict[str, Any]:
+        """获取对话历史消息"""
         try:
-            history = await self.session_manager.get_conversation_history(max_length)
-            return {"success": True, "history": history}
+            return await self.session_manager.get_conversation_history(
+                session_id=session_id,
+                range_from=range_from,
+                range_to=range_to,
+                max_content_chars=max_content_chars,
+            )
         except Exception as e:
             return {"error": f"Get conversation history failed: {str(e)}"}
 

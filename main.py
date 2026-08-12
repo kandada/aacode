@@ -300,14 +300,6 @@ class AICoder:
         else:
             print("⚠️  Project analysis incomplete, but task will continue")
 
-        # 创建任务目录
-        task_dir = (
-            self.project_path
-            / ".aacode"
-            / f"task_{int(asyncio.get_event_loop().time())}"
-        )
-        task_dir.mkdir(parents=True, exist_ok=True)
-
         # 创建to-do-list，并同步到上下文管理器
         print(style("\n📋 Creating task todo list...", fg=BLUE))
         todo_file = await self.todo_manager.create_todo_list(
@@ -319,7 +311,7 @@ class AICoder:
             # Run主Agent
             result = await self.main_agent.execute(
                 task=task,
-                task_dir=task_dir,
+                task_dir=None,
                 max_iterations=max_iterations,
                 todo_manager=self.todo_manager,  # 传递todo管理器
             )

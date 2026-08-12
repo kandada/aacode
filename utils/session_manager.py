@@ -383,7 +383,7 @@ class SessionManager:
             # 2. 过滤 LLM 生成的压缩摘要 system（仅在需要完整上下文时 include_system=True）
             if not include_system and msg.role == "system":
                 continue
-            entry = {"role": msg.role, "content": msg.content}
+            entry = {"role": msg.role, "content": msg.content, "timestamp": msg.timestamp}
             if msg.tool_calls:
                 entry["tool_calls"] = msg.tool_calls
             if msg.tool_call_id:
@@ -394,24 +394,62 @@ class SessionManager:
 
         return messages
 
-    async def get_conversation_history(self, max_length: int = 10) -> str:
-        """获取对话历史（用于显示给用户）"""
-        if not self.current_messages:
-            return ""
+    async def get_conversation_history(
+        self,
+        session_id: str = None,
+        range_from: int = 0,
+        range_to: int = None,
+        max_content_chars: int = 100,
+    ) -> dict:
+        """获取会话历史消息（结构化返回，供工具调用）
 
-        recent_messages = self.current_messages[-max_length:]
-        history_lines = []
+        返回每条消息的 role / content / timestamp / tool_calls /
+        tool_call_id / reasoning_content。
+        超过 max_content_chars 的字段统一截断为 "前N字…(总长度 chars total)"。
+        max_content_chars=0 表示不截断。
+        """
+        messages = await self.get_messages(session_id=session_id)
+        if not messages:
+            return {"success": True, "session_id": session_id, "total_messages": 0, "history": []}
 
-        for msg in recent_messages:
-            if msg.role == "system":
-                continue
-            role_name = "User" if msg.role == "user" else "Assistant"
-            content_preview = (
-                msg.content[:100] + "..." if len(msg.content) > 100 else msg.content
-            )
-            history_lines.append(f"{role_name}: {content_preview}")
+        total = len(messages)
+        to = min(range_to if range_to is not None else total, total)
+        fr = min(range_from, to)
+        sliced = messages[fr:to]
 
-        return "\n".join(history_lines)
+        def _truncate(s: str) -> str:
+            if max_content_chars <= 0 or len(s) <= max_content_chars:
+                return s
+            return f"{s[:max_content_chars]}…({len(s)} chars total)"
+
+        history = []
+        for m in sliced:
+            entry = {
+                "role": m.get("role", ""),
+                "content": _truncate(m.get("content", "")),
+                "timestamp": m.get("timestamp", ""),
+            }
+            if m.get("tool_calls"):
+                tcs = []
+                for tc in m["tool_calls"]:
+                    tcs.append({
+                        "id": tc.get("id", ""),
+                        "name": tc.get("name", tc.get("function", {}).get("name", "")),
+                        "arguments": _truncate(tc.get("arguments", "") or tc.get("function", {}).get("arguments", "")),
+                    })
+                entry["tool_calls"] = tcs
+            if m.get("tool_call_id"):
+                entry["tool_call_id"] = m["tool_call_id"]
+            if m.get("reasoning_content"):
+                entry["reasoning_content"] = _truncate(m["reasoning_content"])
+            history.append(entry)
+
+        return {
+            "success": True,
+            "session_id": session_id or self.current_session_id,
+            "total_messages": total,
+            "history": history,
+        }
 
     async def _compact_context(self):
         """检查上下文 token 使用量，记录警告但不修改持久化数据。

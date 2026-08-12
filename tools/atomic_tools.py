@@ -47,6 +47,15 @@ class AtomicTools:
         self.project_path = project_path
         self.safety_guard = safety_guard
         self._background_processes: Dict[str, dict] = {}
+        try:
+            if __package__ in (None, ""):
+                from config import settings
+            else:
+                from ..config import settings
+            from .diff_hook import DiffHook
+            self._diff_hook = DiffHook(settings.diff_hook, project_path)
+        except Exception:
+            self._diff_hook = None
 
     async def run_shell(
         self, command: str = None, timeout: Optional[int] = None, stdin_input: str = None,
@@ -127,6 +136,9 @@ class AtomicTools:
 
         print(f"\U0001f527 Executing command: {command}")
 
+        if self._diff_hook:
+            self._diff_hook.pre_exec(command)
+
         pty_info = None
         if use_pty and os.name != "nt":
             pty_info = self._create_pty()
@@ -135,9 +147,11 @@ class AtomicTools:
                 use_pty = False
 
         if use_pty and pty_info:
-            return await self._exec_with_pty(command, timeout, stdin_input,
-                                             max_output, max_lines,
-                                             idle_timeout, pty_info)
+            result = await self._exec_with_pty(command, timeout, stdin_input,
+                                               max_output, max_lines,
+                                               idle_timeout, pty_info)
+            await self._attach_changes(result)
+            return result
 
         stdin_mode = asyncio.subprocess.PIPE if stdin_input else asyncio.subprocess.DEVNULL
 
@@ -163,7 +177,7 @@ class AtomicTools:
             stderr_text, stderr_truncated = self._apply_max_output(
                 stderr_text, max_output, "stderr")
 
-            return {
+            result = {
                 "success": True,
                 "returncode": process.returncode,
                 "stdout": stdout_text,
@@ -174,16 +188,20 @@ class AtomicTools:
                 "command": command,
                 "working_directory": str(self.project_path),
             }
+            await self._attach_changes(result)
+            return result
         except asyncio.TimeoutError:
             process.terminate()
             await self._reap_process(process, 5.0)
-            return {
+            result = {
                 "success": True,
                 "error": f"Command execution timeout ({timeout}s)",
                 "timeout": True,
                 "command": command,
                 "working_directory": str(self.project_path),
             }
+            await self._attach_changes(result)
+            return result
 
     async def _exec_with_stdin(self, process, stdin_input, timeout):
         """执行带 stdin_input 的命令"""
@@ -628,6 +646,22 @@ class AtomicTools:
             "returncode": returncode,
             "command": bg["command"],
         }
+
+    # ─── diff hook ───────────────────────────────────────────
+
+    async def _attach_changes(self, result: Dict[str, Any]):
+        """附加文件变更信息到返回结果（透明注入，最多等3秒）"""
+        if not self._diff_hook:
+            return
+        try:
+            changes = await asyncio.wait_for(
+                asyncio.to_thread(self._diff_hook.post_exec),
+                timeout=3.0,
+            )
+            if changes and changes.get("total_files", 0) > 0:
+                result["_changes"] = changes
+        except (asyncio.TimeoutError, Exception):
+            pass
 
     # ─── helpers ────────────────────────────────────────────────
 

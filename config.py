@@ -282,6 +282,38 @@ class LimitsConfig:
 
 
 @dataclass
+class DiffHookConfig:
+    """隐式 diff 钩子配置 — 在 run_shell 执行后自动检测文件变更并反馈"""
+
+    enabled: bool = False
+    small_change_threshold: int = 10          # ≤N 行 → diff；>N 行 → diff_preview
+    max_tracked_files: int = 50               # 关注文件集合上限（LRU）
+    max_diff_lines: int = 60                  # diff 最大行数（超限截断）
+    max_total_changes_lines: int = 200        # 批量反馈总行数上限
+    fs_scan_max_files: int = 5000             # 策略B 文件系统扫描硬上限
+    fs_scan_dir_entry_threshold: int = 1000   # 策略B 目录条目数阈值（超过则跳过子树）
+    watched_extensions: tuple = (
+        ".py", ".js", ".ts", ".jsx", ".tsx",
+        ".go", ".rs", ".java", ".c", ".cpp",
+        ".h", ".hpp", ".yaml", ".yml", ".json",
+        ".toml", ".md", ".txt", ".sh", ".bash",
+        ".html", ".css", ".scss", ".less",
+    )
+    fs_ignore_dirs: tuple = (
+        ".git", ".aacode", "node_modules", "__pycache__",
+        ".venv", "venv", ".tox", "dist", "build",
+        ".egg-info", ".mypy_cache", ".pytest_cache",
+        ".idea", ".vscode", ".ruff_cache", ".direnv",
+    )
+
+    def __post_init__(self):
+        if isinstance(self.watched_extensions, list):
+            self.watched_extensions = tuple(self.watched_extensions)
+        if isinstance(self.fs_ignore_dirs, list):
+            self.fs_ignore_dirs = tuple(self.fs_ignore_dirs)
+
+
+@dataclass
 class SkillsConfig:
     """Skills配置"""
 
@@ -407,6 +439,7 @@ class Settings:
         self.limits = LimitsConfig()  # 限制配置
         self.skills = SkillsConfig()  # Skills配置
         self.multimodal = MultimodalConfig()  # 多模态配置
+        self.diff_hook = DiffHookConfig()  # diff 钩子配置
         self.language: str = "en"    # 语言 en / zh
 
         # 从文件加载配置
@@ -493,6 +526,7 @@ class Settings:
             "mcp": asdict(self.mcp),
             "skills": asdict(self.skills),
             "multimodal": asdict(self.multimodal),
+            "diff_hook": asdict(self.diff_hook),
         }
 
         try:
@@ -576,6 +610,14 @@ class Settings:
                     for key, value in values.items():
                         if hasattr(self.skills, key):
                             setattr(self.skills, key, value)
+            elif section == "diff_hook":
+                # 处理diff_hook配置
+                if isinstance(values, dict):
+                    for key, value in values.items():
+                        if hasattr(self.diff_hook, key):
+                            setattr(self.diff_hook, key, value)
+                    if hasattr(self.diff_hook, "__post_init__"):
+                        self.diff_hook.__post_init__()
 
             if section == "multimodal":
                 # 处理多模态配置
@@ -697,6 +739,7 @@ class Settings:
             "limits": asdict(self.limits),
             "skills": asdict(self.skills),
             "multimodal": asdict(self.multimodal),
+            "diff_hook": asdict(self.diff_hook),
         }
 
 

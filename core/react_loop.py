@@ -448,17 +448,17 @@ During each thought, naturally plan:
                 # 实时打印 Observation（供客户端显示）
                 display_obs = observation_for_display or observation or ""
                 if display_obs:
-                    # 截断过长的输出，避免刷屏
-                    max_display = 3000
-                    if len(display_obs) > max_display:
-                        display_obs = display_obs[:max_display] + f"\n... (truncated, {len(observation_for_display or observation)} chars total)"
+                    # 仅在没有 observation_for_display 时才做安全截断
+                    # （_format_observation_for_display 已负责显示截断+标记，不重复截断）
+                    if not observation_for_display and len(display_obs) > 3000:
+                        display_obs = display_obs[:3000] + f"\n... (truncated, {len(observation)} chars total)"
                     print(f"{style('📋 Observation:', fg=BLUE, bold=True)}\n{display_obs}", flush=True)
                     # ─── 源头数据：发送完整原始内容给前端做 markdown 渲染 ───
                     # Rust 层 read_line() 逐行读取会：1) 丢弃空行  2) 拦截 {/[ 开头的 JSON 行
                     # 前端逐行拼接重组的内容可能丢失信息，与 Python 原始数据不一致
                     # 因此必须在 Python 侧发送 seg_content，前端渲染时使用此原始数据而非 Rust 重组数据
                     if not sys.stdout.isatty():
-                        _full_obs = (observation_for_display or observation or "")
+                        _full_obs = (observation or observation_for_display or "")
                         import json as _json
                         print(_json.dumps({"type": "seg_content", "seg": "observation", "content": _full_obs}), flush=True)
 
