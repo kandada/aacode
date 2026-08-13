@@ -408,7 +408,7 @@ class SessionManager:
         超过 max_content_chars 的字段统一截断为 "前N字…(总长度 chars total)"。
         max_content_chars=0 表示不截断。
         """
-        messages = await self.get_messages(session_id=session_id)
+        messages = await self.get_messages(session_id=session_id, include_system=False)
         if not messages:
             return {"success": True, "session_id": session_id, "total_messages": 0, "history": []}
 
