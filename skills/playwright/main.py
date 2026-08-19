@@ -346,11 +346,17 @@ def _get_browser_version(executable_path: str) -> Optional[str]:
     try:
         if _get_platform() == PlatformType.WINDOWS:
             # Windows使 with wmicGet 版本
+            no_window = (
+                {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)}
+                if os.name == "nt"
+                else {}
+            )
             result = subprocess.run(
                 ["wmic", "datafile", "where", f"name='{executable_path.replace('/', '\\\\')}'", "get", "Version"],
                 capture_output=True,
                 text=True,
-                timeout=5
+                timeout=5,
+                **no_window,
             )
             if result.returncode == 0:
                 lines = result.stdout.strip().split('\n')
@@ -362,7 +368,7 @@ def _get_browser_version(executable_path: str) -> Optional[str]:
                 [executable_path, "--version"],
                 capture_output=True,
                 text=True,
-                timeout=5
+                timeout=5,
             )
             if result.returncode == 0:
                 # 提取版本号

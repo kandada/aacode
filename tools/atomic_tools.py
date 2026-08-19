@@ -21,6 +21,13 @@ from typing import Dict, Any, List, Optional
 from aacode.i18n import t
 
 
+def _no_window_kwargs() -> dict:
+    """Windows 下隐藏子进程控制台窗口（避免 cmd.exe 弹窗闪烁），其他平台无操作"""
+    if os.name == "nt":
+        return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)}
+    return {}
+
+
 def _smart_decode(data: bytes) -> str:
     """Decode bytes to string, trying UTF-8 first then GBK on Windows."""
     if os.name != "nt":
@@ -162,6 +169,7 @@ class AtomicTools:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env={**os.environ, "PYTHONUNBUFFERED": "1"},
+            **_no_window_kwargs(),
         )
 
         try:
@@ -367,6 +375,7 @@ class AtomicTools:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env={**os.environ, "PYTHONUNBUFFERED": "1"},
+            **_no_window_kwargs(),
         )
 
         maxlen = max_lines if max_lines else 10000

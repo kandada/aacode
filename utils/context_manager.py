@@ -9,6 +9,7 @@
 """
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 from typing import Dict, Any, List
@@ -198,7 +199,8 @@ class ContextManager:
         if important_dirs:
             context_parts.append(f"## Important Directories and Documents\n" + "\n".join(important_dirs))
 
-        # 6. 使用bash万能适配器获取项目结构 - 增强错误处理和超时保护
+        # 6. 获取项目结构 - Windows 直接使用纯 Python 扫描
+        #    （find|grep|head 是 bash 语法，Windows cmd.exe 不支持且会弹窗闪烁）
         try:
             # 使用配置的超时时间和文件数量限制
             if __package__ in (None, ""):
@@ -210,41 +212,8 @@ class ContextManager:
             max_files = getattr(settings.limits, "max_context_files", 50)
             prioritize = getattr(settings.limits, "prioritize_file_types", True)
 
-            cmd = f"find . -type f \\( -name '*.py' -o -name '*.md' -o -name '*.txt' -o -name '*.json' -o -name '*.yaml' -o -name '*.yml' -o -name '*.csv' -o -name '*.xlsx' -o -name '*.pdf' \\) | grep -v '.aacode' | head -{max_files}"
-
-            process = await asyncio.create_subprocess_shell(
-                cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=self.project_path,
-            )
-
-            try:
-                stdout, stderr = await asyncio.wait_for(
-                    process.communicate(), timeout=file_search_timeout
-                )
-            except asyncio.TimeoutError:
-                process.terminate()
-                try:
-                    await asyncio.wait_for(process.wait(), timeout=5.0)
-                except Exception:
-                    try:
-                        process.kill()
-                        await asyncio.wait_for(process.wait(), timeout=2.0)
-                    except Exception:
-                        pass
-                raise
-
-            if process.returncode == 0 and stdout:
-                files = stdout.decode(errors="ignore").strip().split("\n")
-                file_list = [
-                    f[2:] if f.startswith("./") else f for f in files if f.strip()
-                ]
-
-                # 智能优先级排序（如果启用）
-                if prioritize and file_list:
-                    file_list = self._prioritize_files(file_list)
-
+            if os.name == "nt":
+                file_list = self._scan_files_python(max_files, prioritize)
                 if file_list:
                     total_files = len(file_list)
                     if total_files >= max_files:
@@ -258,7 +227,55 @@ class ContextManager:
                 else:
                     context_parts.append("## Project File Structure\nProject directory is empty")
             else:
-                context_parts.append("## Project File Structure\nProject directory is empty or unreadable")
+                cmd = f"find . -type f \\( -name '*.py' -o -name '*.md' -o -name '*.txt' -o -name '*.json' -o -name '*.yaml' -o -name '*.yml' -o -name '*.csv' -o -name '*.xlsx' -o -name '*.pdf' \\) | grep -v '.aacode' | head -{max_files}"
+
+                process = await asyncio.create_subprocess_shell(
+                    cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=self.project_path,
+                )
+
+                try:
+                    stdout, stderr = await asyncio.wait_for(
+                        process.communicate(), timeout=file_search_timeout
+                    )
+                except asyncio.TimeoutError:
+                    process.terminate()
+                    try:
+                        await asyncio.wait_for(process.wait(), timeout=5.0)
+                    except Exception:
+                        try:
+                            process.kill()
+                            await asyncio.wait_for(process.wait(), timeout=2.0)
+                        except Exception:
+                            pass
+                    raise
+
+                if process.returncode == 0 and stdout:
+                    files = stdout.decode(errors="ignore").strip().split("\n")
+                    file_list = [
+                        f[2:] if f.startswith("./") else f for f in files if f.strip()
+                    ]
+
+                    # 智能优先级排序（如果启用）
+                    if prioritize and file_list:
+                        file_list = self._prioritize_files(file_list)
+
+                    if file_list:
+                        total_files = len(file_list)
+                        if total_files >= max_files:
+                            context_parts.append(
+                                f"## Project File Structure\n(showing first {max_files} files, ~{max_files}+ total)\n{chr(10).join(file_list)}"
+                            )
+                        else:
+                            context_parts.append(
+                                f"## Project File Structure\n{chr(10).join(file_list)}"
+                            )
+                    else:
+                        context_parts.append("## Project File Structure\nProject directory is empty")
+                else:
+                    context_parts.append("## Project File Structure\nProject directory is empty or unreadable")
         except asyncio.TimeoutError:
             context_parts.append("## Project File Structure\nTimed out, project may be large")
         except FileNotFoundError:
@@ -272,30 +289,7 @@ class ContextManager:
                 max_files = getattr(settings.limits, "max_context_files", 50)
                 prioritize = getattr(settings.limits, "prioritize_file_types", True)
 
-                file_list = []
-                for ext in [
-                    ".py",
-                    ".md",
-                    ".txt",
-                    ".json",
-                    ".yaml",
-                    ".yml",
-                    ".csv",
-                    ".xlsx",
-                    ".pdf",
-                ]:
-                    for file in self.project_path.rglob(f"*{ext}"):
-                        if ".aacode" not in str(file):
-                            rel_path = file.relative_to(self.project_path)
-                            file_list.append(str(rel_path))
-                            if len(file_list) >= max_files:
-                                break
-                    if len(file_list) >= max_files:
-                        break
-
-                # 智能优先级排序（如果启用）
-                if prioritize and file_list:
-                    file_list = self._prioritize_files(file_list)
+                file_list = self._scan_files_python(max_files, prioritize)
 
                 if file_list:
                     total_files = len(file_list)
@@ -557,3 +551,34 @@ class ContextManager:
         # 按优先级和文件名排序
         sorted_list = sorted(file_list, key=lambda f: (get_priority(f), f))
         return sorted_list
+
+    def _scan_files_python(self, max_files: int, prioritize: bool) -> List[str]:
+        """纯 Python 扫描项目文件（跨平台，替代 Windows 上不可用的 find|grep|head）"""
+        file_list = []
+        for ext in [
+            ".py",
+            ".md",
+            ".txt",
+            ".json",
+            ".yaml",
+            ".yml",
+            ".csv",
+            ".xlsx",
+            ".pdf",
+        ]:
+            for file in self.project_path.rglob(f"*{ext}"):
+                if not file.is_file():
+                    continue
+                if ".aacode" in str(file):
+                    continue
+                rel_path = file.relative_to(self.project_path)
+                file_list.append(str(rel_path))
+                if len(file_list) >= max_files:
+                    break
+            if len(file_list) >= max_files:
+                break
+
+        if prioritize and file_list:
+            file_list = self._prioritize_files(file_list)
+
+        return file_list

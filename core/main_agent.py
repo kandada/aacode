@@ -13,8 +13,15 @@ import re
 import sys
 import uuid
 from aacode.i18n import t
+from aacode.utils.anthropic_thinking import (
+    THINKING_MODE_ADAPTIVE,
+    is_thinking_mode_rejected,
+    next_thinking_mode,
+    thinking_kwargs_for_mode,
+)
 from aacode.utils.colors import style, RED, GREEN, BLUE
 from aacode.utils.session_manager import SessionMessage
+from aacode.utils.thinking_extractor import OpenAIThinkingExtractor
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Any, Optional
@@ -112,8 +119,33 @@ else:
     from ..config import settings
 
 
+def _make_anthropic_client(api_key: str, base_url: str):
+    """构造 AsyncAnthropic 客户端，屏蔽 ANTHROPIC_AUTH_TOKEN 环境变量泄漏。
+
+    anthropic SDK 在 init 时会把 env var ``ANTHROPIC_AUTH_TOKEN`` 缓存进
+    ``auth_headers`` 当作 Bearer token，与 ``api_key`` 参数**同时**发送
+    （``X-Api-Key`` + ``Authorization: Bearer``）。若用户同台机器上曾配过
+    其他 provider（如 Aliyun）的 env var，值不是当前 provider 的 key，
+    会导致 SDK 在调用 DeepSeek / 其它 provider 时被认证拒掉。
+
+    测试覆盖：``tests/test_anthropic_auth_isolation.py``。
+    """
+    saved = os.environ.pop("ANTHROPIC_AUTH_TOKEN", None)
+    try:
+        client = anthropic.AsyncAnthropic(api_key=api_key, base_url=base_url)
+    finally:
+        if saved is not None:
+            os.environ["ANTHROPIC_AUTH_TOKEN"] = saved
+    return client
+
+
 class MainAgent(BaseAgent):
     """主Agent，负责复杂任务分解和协调"""
+
+    # 会话级 per-model thinking 模式缓存。
+    # 命中记录后该模型不再尝试更高优先级的模式。
+    # 进程重启或新会话自动清空（最坏代价：每个模型第一次请求一次重试）。
+    _anthropic_thinking_cache: Dict[str, str] = {}
 
     def __init__(
         self,
@@ -646,6 +678,7 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
         stream = await client.chat.completions.create(**create_kwargs)
 
         # ─── 流式响应处理 ───
+        thinking_extractor = OpenAIThinkingExtractor()
         thinking_printed = False
         thinking_content = ""
         last_finish_reason = None
@@ -653,16 +686,17 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
             if chunk.choices and chunk.choices[0].finish_reason:
                 last_finish_reason = chunk.choices[0].finish_reason
             delta = chunk.choices[0].delta
-            # 处理 reasoning_content
-            reasoning = getattr(delta, 'reasoning_content', None)
-            if reasoning:
+            # 通过统一提取器拆出 thinking / content，兼容 reasoning_content / thinking 字段
+            # 以及 <think>...</think> 标签内嵌三种格式
+            think_chunk, content_chunk = thinking_extractor.feed(delta)
+            if think_chunk:
                 if not thinking_printed:
                     print("💭 Thinking process:", flush=True)
                     thinking_printed = True
-                thinking_content += reasoning
-                _stream_print(reasoning)
+                thinking_content += think_chunk
+                _stream_print(think_chunk)
             # 处理正常内容
-            if delta.content is not None:
+            if content_chunk:
                 if thinking_printed:
                     thinking_printed = False
                     # thinking 段完成，把累积的干净 reasoning 内容发往前端（在 "Thought:" 之前发出）
@@ -670,8 +704,8 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
                         import json as _json
                         print(_json.dumps({"type": "seg_content", "seg": "thinking", "content": thinking_content}), flush=True)
                     print("\nThought: ", end="", flush=True) if _is_tty else print("Thought: ", flush=True)
-                full_response += delta.content
-                _stream_print(delta.content)
+                full_response += content_chunk
+                _stream_print(content_chunk)
             # 处理 tool_calls (流式累积，延迟打印以避免与 content token 交叉)
             if delta.tool_calls:
                 for tc_delta in delta.tool_calls:
@@ -711,24 +745,33 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
 
         if _is_tty:
             print()  # CLI newline
-        elif full_response:
-            # thought 段完成，把累积的干净内容发往前端
-            # 剥离末尾的 action 声明行（仅匹配严格格式），避免与系统打印的 🛠️ Action: 重复
-            # 只匹配 "Action: <小写工具名>" + 可选 "Action Input: ..."，且必须出现在文本末尾
-            _clean = full_response
-            _m = re.search(
-                r'\n+Action:\s+[a-z][a-z0-9_-]*\s*(?:\nAction Input:\s*.*?)?\s*$',
-                _clean
-            )
-            if _m:
-                _clean = _clean[:_m.start()].strip()
-            _clean = re.sub(r'\n{3,}', '\n\n', _clean)
-            import json as _json
-            print(_json.dumps({"type": "seg_content", "seg": "thought", "content": _clean}), flush=True)
-        elif not _is_tty:
-            # 即使 full_response 为空也发 seg_content，让前端知道 thought 段已完成
-            import json as _json
-            print(_json.dumps({"type": "seg_content", "seg": "thought", "content": ""}), flush=True)
+
+        # ─── flush 标签解析器残余缓冲（处理标签跨 chunk 切分时最后一截被 hold-back 的内容）───
+        tail_think, tail_content = thinking_extractor.finalize()
+        if tail_think:
+            thinking_content += tail_think
+        if tail_content:
+            full_response += tail_content
+
+        if not _is_tty:
+            if full_response:
+                # thought 段完成，把累积的干净内容发往前端
+                # 剥离末尾的 action 声明行（仅匹配严格格式），避免与系统打印的 🛠️ Action: 重复
+                # 只匹配 "Action: <小写工具名>" + 可选 "Action Input: ..."，且必须出现在文本末尾
+                _clean = full_response
+                _m = re.search(
+                    r'\n+Action:\s+[a-z][a-z0-9_-]*\s*(?:\nAction Input:\s*.*?)?\s*$',
+                    _clean
+                )
+                if _m:
+                    _clean = _clean[:_m.start()].strip()
+                _clean = re.sub(r'\n{3,}', '\n\n', _clean)
+                import json as _json
+                print(_json.dumps({"type": "seg_content", "seg": "thought", "content": _clean}), flush=True)
+            else:
+                # 即使 full_response 为空也发 seg_content，让前端知道 thought 段已完成
+                import json as _json
+                print(_json.dumps({"type": "seg_content", "seg": "thought", "content": ""}), flush=True)
 
         # ─── 构建 tool_calls 列表 ───
         tool_calls_list = []
@@ -823,10 +866,7 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
                 print(t("net.add_anthropic_path", old=base_url, new=adjusted_base_url))
 
         # 使 with  AsyncAnthropic 客户端（对标 OpenAI 的 AsyncOpenAI）
-        client = anthropic.AsyncAnthropic(
-            api_key=api_key,
-            base_url=adjusted_base_url,
-        )
+        client = _make_anthropic_client(api_key, adjusted_base_url)
 
         # Anthropic格式的消息转换
         system_message = ""
@@ -886,7 +926,12 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
         thinking_content = ""
         tool_calls_list = []
 
-        async def _do_stream():
+        # ── thinking 模式状态机 ──
+        # 顺序：adaptive (首选, 无 budget_tokens) → enabled (fallback, 含 budget_tokens) → none
+        # 命中后该模型会话内不再尝试更高优先级模式
+        thinking_mode = self._anthropic_thinking_cache.get(model_name, THINKING_MODE_ADAPTIVE)
+
+        async def _do_stream(mode):
             nonlocal response, thinking_content, tool_calls_list
             stream_kwargs = {
                 "model": model_name,
@@ -898,6 +943,9 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
                 stream_kwargs["system"] = system_message
             if tools:
                 stream_kwargs["tools"] = tools
+            thinking_kw = thinking_kwargs_for_mode(mode)
+            if thinking_kw is not None:
+                stream_kwargs["thinking"] = thinking_kw
 
             async with client.messages.stream(**stream_kwargs) as stream:
                 thinking_printed = False
@@ -950,10 +998,32 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
                             "arguments": getattr(block, 'input', {}),
                         })
 
-        try:
-            await _do_stream()
-        except Exception:
-            # 流式失败 → 降级非流式
+        stream_succeeded = False
+        stream_succeeded = False
+        while True:
+            try:
+                await _do_stream(thinking_mode)
+                stream_succeeded = True
+                # 缓存成功模式（会话内不再尝试更高优先级）
+                self._anthropic_thinking_cache[model_name] = thinking_mode
+                break
+            except anthropic.APIError as e:
+                # 仅 thinking 模式被拒才降级；其他错误（认证、配额、模型不存在）原样传播
+                if not is_thinking_mode_rejected(e, thinking_mode):
+                    break
+                nxt = next_thinking_mode(thinking_mode)
+                if nxt is None:
+                    # 已到终态（none）也被拒 → 整体放弃 thinking，降级非流式
+                    break
+                # 重置累积并切换模式重试
+                response = ""
+                thinking_content = ""
+                tool_calls_list = []
+                thinking_mode = nxt
+                self._anthropic_thinking_cache[model_name] = thinking_mode
+
+        if not stream_succeeded:
+            # 流式失败 → 降级非流式（thinking 已被状态机判定不可用，所以这里不再附加）
             try:
                 response = ""; thinking_content = ""; tool_calls_list = []
                 create_kwargs = {
@@ -987,8 +1057,14 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
                             "name": getattr(block, 'name', ''),
                             "arguments": getattr(block, 'input', {}),
                         })
-            except Exception:
-                pass
+            except Exception as e:
+                # 不要静默吞错：流式与非流式都失败时打印到 stderr，
+                # Rust 端会转发为 error 事件让客户端可见（避免"无输出直接停"）
+                print(
+                    f"\n❌ Anthropic non-streaming fallback failed: [{type(e).__name__}] {e}",
+                    file=sys.stderr,
+                    flush=True,
+                )
 
         # ─── thinking 内容与正文分离返回 ───
         if thinking_content:
@@ -1709,11 +1785,17 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
             # Get Git状态
             git_status = {}
             try:
+                no_window = (
+                    {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)}
+                    if os.name == "nt"
+                    else {}
+                )
                 result = subprocess.run(
                     ["git", "status", "--porcelain"],
                     capture_output=True,
                     text=True,
                     cwd=self.project_path,
+                    **no_window,
                 )
                 if result.returncode == 0:
                     if result.stdout.strip():

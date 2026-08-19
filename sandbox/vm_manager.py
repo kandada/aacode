@@ -10,11 +10,20 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import subprocess
 import tempfile
 from typing import Dict, List, Any, Optional
 from pathlib import Path
 import shutil
 from aacode.i18n import t
+
+
+def _no_window_kwargs() -> dict:
+    """Windows 下隐藏子进程控制台窗口（避免 cmd.exe 弹窗闪烁），其他平台无操作"""
+    if os.name == "nt":
+        return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)}
+    return {}
 
 
 class SandboxManager:
@@ -116,7 +125,8 @@ class SandboxManager:
                 cwd=str(sandbox_dir),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                shell=True
+                shell=True,
+                **_no_window_kwargs(),
             )
 
             try:

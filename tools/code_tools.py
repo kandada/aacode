@@ -9,6 +9,7 @@
 """
 
 import asyncio
+import os
 import tempfile
 import shutil
 from pathlib import Path
@@ -20,6 +21,13 @@ if __package__ in (None, ""):
     from config import settings
 else:
     from ..config import settings
+
+
+def _no_window_kwargs() -> dict:
+    """Windows 下隐藏子进程控制台窗口（避免 cmd.exe 弹窗闪烁），其他平台无操作"""
+    if os.name == "nt":
+        return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)}
+    return {}
 
 
 class CodeTools:
@@ -90,6 +98,7 @@ class CodeTools:
                     stdout=asyncio.subprocess.PIPE if capture_output else None,
                     stderr=asyncio.subprocess.PIPE if capture_output else None,
                     cwd=str(self.project_path),
+                    **_no_window_kwargs(),
                 )
 
                 try:
@@ -171,6 +180,7 @@ class CodeTools:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(self.project_path),
+                **_no_window_kwargs(),
             )
 
             try:

@@ -758,10 +758,16 @@ async def main():
                         print(f"🚀 Run {rel_path}:")
                         
                         # Method 1: 尝试使 with 项目根目录作为工作目录
+                        no_window = (
+                            {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)}
+                            if os.name == "nt"
+                            else {}
+                        )
                         result = subprocess.run([sys.executable, str(rel_path)], 
                                               cwd=project_dir, 
                                               capture_output=True, text=True,
-                                              env={**os.environ, 'PYTHONPATH': str(project_dir)})
+                                              env={**os.environ, 'PYTHONPATH': str(project_dir)},
+                                              **no_window)
                         
                         if result.returncode == 0:
                             print(f"✅ Output: {result.stdout.strip()}")

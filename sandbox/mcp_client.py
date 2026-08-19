@@ -222,6 +222,7 @@ class LocalMCPClient:
 
     async def _execute_command(self, arguments: Dict) -> Any:
         """执行命令"""
+        import os
         import subprocess
 
         command = arguments.get("command")
@@ -232,8 +233,17 @@ class LocalMCPClient:
 
         try:
             full_cmd = [command] + args
+            no_window = (
+                {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)}
+                if os.name == "nt"
+                else {}
+            )
             result = subprocess.run(
-                full_cmd, capture_output=True, text=True, timeout=30
+                full_cmd,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                **no_window,
             )
 
             return {
