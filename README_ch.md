@@ -86,9 +86,16 @@ aacode run -p /your/project/path "你的任务"
 |------|---------------------------------------------------------------------------------------------------------|
 | macOS (Apple Silicon) | [AACode_1.8.8_aarch64.dmg](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.8.8_aarch64.dmg) |
 | Windows | [AACode_1.8.8_x64-setup.exe](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.8.8_x64-setup.exe) |
-| Android | [aacode.apk](https://aacode-ai.com/download/aacode-android/app-release.apk) |
-
 > 桌面客户端仍需要 Python 环境和依赖库（手机App则不需要），详细安装步骤请参考 👉 [DESKTOP.md](DESKTOP.md)
+
+### 📱 移动端 App
+
+| 平台 | 下载 |
+|------|------|
+| Android | [aacode.apk](https://aacode-ai.com/download/aacode-android/app-release.apk) |
+| iOS | [App Store](https://apps.apple.com/cn/app/aacode/id6799053765) |
+
+> 非中国大陆地区的 Android 用户也可通过 [Google Play](https://play.google.com/store/apps/details?id=com.xiefujin.aacode) 安装。
 
 
 ## 🔧 配置说明

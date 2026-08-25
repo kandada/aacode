@@ -84,9 +84,16 @@ If you prefer a graphical interface, try AACode Desktop:
 |----------|---------------------------------------------------------------------------------------------------------|
 | macOS (Apple Silicon) | [AACode_1.8.8_aarch64.dmg](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.8.8_aarch64.dmg) |
 | Windows | [AACode_1.8.8_x64-setup.exe](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.8.8_x64-setup.exe) |
-| Android | [aacode.apk](https://aacode-ai.com/download/aacode-android/app-release.apk) |
-
 > The desktop client still requires Python and dependencies (not required for the mobile app). See 👉 [DESKTOP.md](DESKTOP.md) for full setup instructions.
+
+### 📱 Mobile App
+
+| Platform | Download |
+|----------|----------|
+| Android | [aacode.apk](https://aacode-ai.com/download/aacode-android/app-release.apk) |
+| iOS | [App Store](https://apps.apple.com/cn/app/aacode/id6799053765) |
+
+> Android users outside mainland China can also install via [Google Play](https://play.google.com/store/apps/details?id=com.xiefujin.aacode).
 
 ## 🔧 Configuration
 
