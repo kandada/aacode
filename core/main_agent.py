@@ -97,6 +97,7 @@ if __package__ in (None, ""):
     from utils.tool_schemas import get_all_schemas, get_schema
     from tools.skills_tools import SkillsManager, SkillInfo
     from tools.multimodal_tools import MultimodalTools, get_multimodal_tools_schema
+    from tools.browser_tools import FastbrowserTools
     from core.sub_agent import SubAgent
     from config import settings
 else:
@@ -115,6 +116,7 @@ else:
     from ..utils.tool_schemas import get_all_schemas, get_schema
     from ..tools.skills_tools import SkillsManager, SkillInfo
     from ..tools.multimodal_tools import MultimodalTools, get_multimodal_tools_schema
+    from ..tools.browser_tools import FastbrowserTools
     from .sub_agent import SubAgent
     from ..config import settings
 
@@ -1100,8 +1102,12 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
         todo_tools = TodoTools(project_path, safety_guard,
                                 get_session_id=lambda: self.session_manager.current_session_id)
 
+        # 浏览器 + 无障碍工具（fastbrowser）
+        browser_tools = FastbrowserTools(project_path)
+
         # 保存web_tools引 with 以便后续清理
         self.web_tools = web_tools
+        self.browser_tools = browser_tools
 
         # 包装fetch_url函数以保存结果
         async def wrapped_fetch_url(
@@ -1142,6 +1148,11 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
             "search_web": web_tools.search_web,
             "fetch_url": wrapped_fetch_url,
             "search_code": web_tools.search_code,
+            # 浏览器 + 无障碍工具（fastbrowser）
+            "fetch_rendered": browser_tools.fetch_rendered,
+            "browser_call": browser_tools.browser_call,
+            "browser_tools": browser_tools.browser_tools,
+            "ax_act": browser_tools.ax_act,
             # To-Do List工具
             "add_todo_item": todo_tools.add_todo_item,
             "mark_todo_completed": todo_tools.mark_todo_completed,
@@ -1463,6 +1474,11 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
             try:
                 if hasattr(self, "web_tools"):
                     await self.web_tools.cleanup()
+            except Exception as e:
+                print(t("agent.clean_web_tools", e=str(e)))
+            try:
+                if hasattr(self, "browser_tools"):
+                    await self.browser_tools.cleanup()
             except Exception as e:
                 print(t("agent.clean_web_tools", e=str(e)))
 

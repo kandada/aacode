@@ -26,6 +26,14 @@ skills:
     description: Web search via SearXNG for real-time information
   - name: fetch_url
     description: Fetch and read a web page
+  - name: fetch_rendered
+    description: Fetch a URL in a real headless browser that runs JS (SPA/JS-heavy pages)
+  - name: ax_act
+    description: Accessibility (AX) snapshot/action across web + native desktop apps
+  - name: browser_call
+    description: Call any fastbrowser browser/accessibility tool by name
+  - name: browser_tools
+    description: List the available browser/accessibility tools
   - name: understand_image
     description: Multimodal image understanding (screenshots, mockups, photos)
   - name: understand_video

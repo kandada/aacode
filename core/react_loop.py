@@ -39,6 +39,48 @@ from aacode.utils.message_utils import (
 )
 
 
+def _error_extra(result: Dict, error_msg: Any) -> str:
+    """把结构化错误线索（detail/hint）拼到错误展示里，便于模型/用户定位根因。
+
+    以前只输出 result['error']，导致像 browser backend 这类工具的真实原因
+    （依赖未装、无 Chromium、init 失败）被丢弃，模型只能瞎猜。
+    """
+    extra = ""
+    detail = result.get("detail")
+    if detail and str(detail) != str(error_msg):
+        extra += f"\n\nDetails: {detail}"
+    hint = result.get("hint")
+    if hint:
+        extra += f"\n\n💡 {hint}"
+    return extra
+
+
+# 浏览器/DOM/AX 工具名：它们的错误里也常含 "not found"/"permission"
+# （元素未找到、辅助功能权限），此时给文件系统提示会误导模型。
+_BROWSER_ACTIONS = ("browser_call", "browser_tools", "fetch_rendered", "ax_act")
+
+
+def _format_error_result(action: str, result: Dict) -> Optional[str]:
+    """把工具的错误 dict 格式化为可读错误字符串；非错误返回 None。"""
+    if result.get("error"):
+        error_msg = result["error"]
+        extra = _error_extra(result, error_msg)
+        low = str(error_msg).lower()
+        if action in _BROWSER_ACTIONS:
+            return f"❌ Error: {error_msg}{extra}"
+        if "permission" in low:
+            return f"🔒 Permission Error\n\n{error_msg}{extra}\n\n💡 Tips:\n- Check file/directory permissions\n- May need to modify permissions or use another path\n- Use run_shell to execute chmod commands"
+        if "not found" in low:
+            return f"🔍 Not Found Error\n\n{error_msg}{extra}\n\n💡 Tips:\n- Check if file/directory exists\n- Verify the path is correct\n- Use run_shell + find/ls to view available files"
+        if "timeout" in low:
+            return f"⏱️ Timeout Error\n\n{error_msg}{extra}\n\n💡 Tips:\n- Network request or operation timed out\n- Try retrying or check network connection\n- Consider increasing timeout"
+        return f"❌ Error: {error_msg}{extra}"
+    if "success" in result and not result["success"]:
+        reason = result.get("message") or result.get("reason") or "Unknown reason"
+        return f"❌ Execution failed: {reason}{_error_extra(result, reason)}"
+    return None
+
+
 @dataclass
 class ActionItem:
     """单个Action项"""
@@ -1080,20 +1122,9 @@ During each thought, naturally plan:
 
             # 处理字典结果（增强错误检测）
             if isinstance(result, dict):
-                if result.get("error"):  # 只在有实际错误内容时才报错
-                    error_msg = result["error"]
-                    # 提供更友好的错误提示
-                    if "permission" in error_msg.lower():
-                        return f"🔒 Permission Error\n\n{error_msg}\n\n💡 Tips:\n- Check file/directory permissions\n- May need to modify permissions or use another path\n- Use run_shell to execute chmod commands"
-                    elif "not found" in error_msg.lower():
-                        return f"🔍 Not Found Error\n\n{error_msg}\n\n💡 Tips:\n- Check if file/directory exists\n- Verify the path is correct\n- Use run_shell + find/ls to view available files"
-                    elif "timeout" in error_msg.lower():
-                        return f"⏱️ Timeout Error\n\n{error_msg}\n\n💡 Tips:\n- Network request or operation timed out\n- Try retrying or check network connection\n- Consider increasing timeout"
-                    else:
-                        return f"❌ Error: {error_msg}"
-                elif "success" in result and not result["success"]:
-                    reason = result.get("message") or result.get("reason") or "Unknown reason"
-                    return f"❌ Execution failed: {reason}"
+                formatted = _format_error_result(action, result)
+                if formatted is not None:
+                    return formatted
 
             # 自适应截断：基于剩余上下文预算
             result_str = str(result)

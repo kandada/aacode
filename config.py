@@ -185,6 +185,13 @@ class ToolConfig:
     search_api_key: Optional[str] = None
     enable_fallback_scrape: bool = True
 
+    # 浏览器工具（fastbrowser）——默认全自动，用户零配置
+    chrome_path: Optional[str] = None  # 空 = 自动探测（CHROME_PATH env → 系统常见路径）
+    cdp_url: Optional[str] = None      # 空 = 自动启动 Chromium；非空 = 连接已有 Chrome
+    browser_headless: bool = True
+    browser_viewport_width: int = 1280
+    browser_viewport_height: int = 800
+
     # 代码工具
     enable_code_execution: bool = True
     enable_testing: bool = True
@@ -577,6 +584,14 @@ class Settings:
         search_api_key = os.getenv("SEARCH_API_KEY") or os.getenv("SEARCHXNG_API_KEY")
         if search_api_key:
             self.tools.search_api_key = search_api_key
+
+        # 浏览器工具（fastbrowser）
+        chrome_path = os.getenv("CHROME_PATH")
+        if chrome_path:
+            self.tools.chrome_path = chrome_path
+        cdp_url = os.getenv("FASTBROWSER_CDP_URL")
+        if cdp_url:
+            self.tools.cdp_url = cdp_url
 
         # 语言配置
         lang = os.getenv("AACODE_LANG")

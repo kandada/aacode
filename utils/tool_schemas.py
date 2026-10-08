@@ -376,6 +376,176 @@ FETCH_URL_SCHEMA = ToolSchema(
 )
 
 
+# ==================== Browser Tools Schemas (fastbrowser) ====================
+
+FETCH_RENDERED_SCHEMA = ToolSchema(
+    name="fetch_rendered",
+    description="Fetch a URL in a real (headless) browser that executes JavaScript, then return the rendered text. Use for SPAs / JS-heavy pages that fetch_url cannot read.",
+    parameters=[
+        ToolParameter(
+            name="url",
+            type=str,
+            required=True,
+            description="URL to render",
+            example="https://example.com/spa",
+            aliases=["link", "uri", "address"],
+        ),
+        ToolParameter(
+            name="max_chars",
+            type=int,
+            required=False,
+            default=5000,
+            description="Max returned characters (default 5000)",
+            example=8000,
+            aliases=["max_length", "max_content_length"],
+        ),
+    ],
+    examples=[{"url": "https://example.com/spa"}],
+    returns="Returns a dictionary with success, url, title, content, content_length",
+)
+
+BROWSER_CALL_SCHEMA = ToolSchema(
+    name="browser_call",
+    description="Call any fastbrowser browser/accessibility tool by name. 'args' is that tool's parameters as an object. Returns the raw result by default; oversized results are auto-compacted and archived.",
+    parameters=[
+        ToolParameter(
+            name="name",
+            type=str,
+            required=True,
+            description="Browser tool name (see browser_tools for the list)",
+            example="ax_snapshot",
+            aliases=["tool"],
+        ),
+        ToolParameter(
+            name="args",
+            type=dict,
+            required=False,
+            description="Tool parameters (default {})",
+            example={},
+            aliases=["params", "arguments"],
+        ),
+        ToolParameter(
+            name="compact",
+            type=bool,
+            required=False,
+            default=False,
+            description="Return cleaned+truncated output and archive the full result (default false)",
+            aliases=["clean"],
+        ),
+        ToolParameter(
+            name="max_chars",
+            type=int,
+            required=False,
+            default=0,
+            description="Preview length for compact mode (default 6000)",
+            aliases=["max_length"],
+        ),
+    ],
+    examples=[{"name": "extract_text", "args": {}}],
+    returns="Returns a dictionary with success, result (or compacted preview + archive path)",
+)
+
+BROWSER_TOOLS_SCHEMA = ToolSchema(
+    name="browser_tools",
+    description="Discover browser/accessibility tools. 'mode': 'names' (default), 'compact' (name+short desc+param names), 'full' (adds param types), or 'help' (full schema for ONE tool, pass 'name').",
+    parameters=[
+        ToolParameter(
+            name="mode",
+            type=str,
+            required=False,
+            default="names",
+            description="Detail level: 'names' (default), 'compact', 'full', or 'help'",
+            aliases=["detail", "level"],
+        ),
+        ToolParameter(
+            name="name",
+            type=str,
+            required=False,
+            description="With mode='help': the tool to describe",
+            aliases=["tool"],
+        ),
+    ],
+    examples=[{"mode": "names"}],
+    returns="Returns a dictionary with success, mode, count, tools",
+)
+
+AX_ACT_SCHEMA = ToolSchema(
+    name="ax_act",
+    description="Accessibility (AX) perception + action across web and native desktop surfaces. action='snapshot' returns the accessibility tree (UiNode); other actions (click, double_click, right_click, type, scroll, press_key, focus, set_value, check, select, ...) act on an element by 'ref'.",
+    parameters=[
+        ToolParameter(
+            name="action",
+            type=str,
+            required=True,
+            description="Action name: 'snapshot' | click | double_click | right_click | focus | set_value | type | check | uncheck | select | scroll | press_key | increment | decrement | show_menu | raise | invoke",
+            example="snapshot",
+        ),
+        ToolParameter(
+            name="ref",
+            type=str,
+            required=False,
+            description="Element ref: full (web:3:a / desktop:1234:0.2.1) or bare (a / #go / text=Go / role=button)",
+            example="web:1:a",
+            aliases=["selector", "id", "element"],
+        ),
+        ToolParameter(
+            name="target",
+            type=str,
+            required=False,
+            description="Surface id (e.g. web:3 / desktop:1234); defaults to active/first surface",
+            example="desktop:1234",
+        ),
+        ToolParameter(
+            name="text",
+            type=str,
+            required=False,
+            description="Text for type action",
+            example="hello",
+        ),
+        ToolParameter(
+            name="value",
+            type=str,
+            required=False,
+            description="Value for set_value / select",
+        ),
+        ToolParameter(
+            name="key",
+            type=str,
+            required=False,
+            description="Key for press_key",
+            example="Tab",
+        ),
+        ToolParameter(
+            name="dx",
+            type=float,
+            required=False,
+            description="Horizontal scroll delta",
+        ),
+        ToolParameter(
+            name="dy",
+            type=float,
+            required=False,
+            description="Vertical scroll delta",
+            example=300,
+        ),
+        ToolParameter(
+            name="x",
+            type=float,
+            required=False,
+            description="Screen x for a coordinate click (with y)",
+        ),
+        ToolParameter(
+            name="y",
+            type=float,
+            required=False,
+            description="Screen y for a coordinate click (with x)",
+        ),
+    ],
+    examples=[{"action": "snapshot"}, {"action": "click", "ref": "web:1:a"}],
+    returns="Returns the accessibility snapshot (tree/text) or the action result",
+)
+
+
 # ==================== Todo Tools Schemas ====================
 
 ADD_TODO_ITEM_SCHEMA = ToolSchema(
@@ -678,6 +848,11 @@ ALL_SCHEMAS = {
     # Web Tools
     "search_web": SEARCH_WEB_SCHEMA,
     "fetch_url": FETCH_URL_SCHEMA,
+    # Browser Tools (fastbrowser)
+    "fetch_rendered": FETCH_RENDERED_SCHEMA,
+    "browser_call": BROWSER_CALL_SCHEMA,
+    "browser_tools": BROWSER_TOOLS_SCHEMA,
+    "ax_act": AX_ACT_SCHEMA,
     # Todo Tools (新名称)
     "add_todo_item": ADD_TODO_ITEM_SCHEMA,
     "mark_todo_completed": MARK_TODO_COMPLETED_SCHEMA,

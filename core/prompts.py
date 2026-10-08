@@ -40,16 +40,22 @@ Available tools:
     - search_web: Search the internet (SearXNG engine)
     - fetch_url: Fetch web page content (also available via run_shell + curl)
     - search_code: Search code examples
-3. Management tools
+3. Browser & accessibility tools (fastbrowser)
+    - fetch_rendered: Fetch a URL in a real headless browser that runs JS (for SPA/JS-heavy pages)
+    - ax_act: Accessibility (AX) snapshot/action across web + native desktop apps (action="snapshot" reads the UI tree)
+    - browser_call: Call any other browser/accessibility tool by name (see browser_tools)
+    - browser_tools: List the available browser/accessibility tools
+    (fallback: if these report "browser backend unavailable", use fetch_url / run_shell+curl instead)
+4. Management tools
     - delegate_task: Delegate task to a sub-agent
     - create_sub_agent: Create a sub-agent
-4. To-Do List tools
+5. To-Do List tools
     - add_todo_item: Add a todo item, returns todo_id (e.g. "t1")
     - mark_todo_completed: Mark complete, must pass todo_id param (e.g. todo_id="t1"), the one returned by add_todo_item
     - update_todo_item: Update a todo item
     - get_todo_summary: Get todo list summary
     - list_todo_files: List todo list files
-5. Skills (use run_skills tool with three modes)
+6. Skills (use run_skills tool with three modes)
     - run_skills("__list__") → View all available skills (name + description)
     - run_skills("__info__", {"skill_name": "pandas"}) → View skill parameters and examples
     - run_skills("pandas", {"code": "df.describe()"}) → Execute a skill
@@ -59,11 +65,11 @@ Available tools:
       follow its steps using run_shell or other tools; do NOT just recite the guide verbatim.
     Available skills:
       {skills_list}
-6. MCP tools
+7. MCP tools
     - list_mcp_tools
     - call_mcp_tool
     - get_mcp_status
-7. Multimodal tools (for image/video understanding)
+8. Multimodal tools (for image/video understanding)
     - understand_image: Understand image content (supports multiple images), for analyzing screenshots, photos, etc.
     - understand_video: Understand video content, analyze scenes, people, actions, etc.
     - understand_ui_design: Analyze UI design mockups/screenshots and generate frontend code

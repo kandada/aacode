@@ -456,7 +456,7 @@ Please generate corresponding HTML/CSS code (use pure CSS, no frameworks):
 
             # 回退到纯文本模式
             text_only_messages = self._convert_to_text_only(messages)
-            response = client.chat.completions.create(
+            response = await client.chat.completions.create(
                 model=model_name,
                 messages=text_only_messages,  # type: ignore
                 max_tokens=4096,

@@ -84,8 +84,8 @@ aacode run -p /your/project/path "你的任务"
 
 | 平台 | 下载                                                                                                      |
 |------|---------------------------------------------------------------------------------------------------------|
-| macOS (Apple Silicon) | [AACode_1.8.8_aarch64.dmg](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.8.8_aarch64.dmg) |
-| Windows | [AACode_1.8.8_x64-setup.exe](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.8.8_x64-setup.exe) |
+| macOS (Apple Silicon) | [AACode_1.8.13_aarch64.dmg](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.8.13_aarch64.dmg) |
+| Windows | [AACode_1.8.13_x64-setup.exe](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.8.13_x64-setup.exe) |
 > 桌面客户端仍需要 Python 环境和依赖库（手机App则不需要），详细安装步骤请参考 👉 [DESKTOP.md](DESKTOP.md)
 
 ### 📱 移动端 App
