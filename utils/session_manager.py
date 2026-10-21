@@ -181,6 +181,8 @@ class SessionManager:
         # 当前会话
         self.current_session_id: Optional[str] = None
         self.current_messages: List[SessionMessage] = []
+        # 模型视图 cutoff（不删除任何消息，只记录从哪里开始发送）
+        self.context_checkpoint: Optional[Dict[str, Any]] = None
 
         # 会话索引
         self.sessions_index: Dict[str, SessionSummary] = {}
@@ -243,6 +245,17 @@ class SessionManager:
         """获取当前会话的总token数"""
         return sum(msg.tokens for msg in self.current_messages)
 
+    def get_context_checkpoint(self) -> Optional[Dict[str, Any]]:
+        """返回当前会话的模型视图 cutoff（不修改消息）。"""
+        checkpoint = self.context_checkpoint
+        return checkpoint if isinstance(checkpoint, dict) else None
+
+    async def set_context_checkpoint(self, checkpoint: Optional[Dict[str, Any]]) -> None:
+        """持久化模型视图 cutoff。消息本身保持全量，不受影响。"""
+        self.context_checkpoint = checkpoint if isinstance(checkpoint, dict) else None
+        await self._save_session()
+        self._save_sessions_index()
+
     async def create_session(self, task: str, title: Optional[str] = None) -> str:
         """创建新会话"""
         session_id = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
@@ -267,6 +280,7 @@ class SessionManager:
         self.sessions_index[session_id] = session_summary
         self.current_session_id = session_id
         self.current_messages = []
+        self.context_checkpoint = None
 
         # 不再创建占位 system 消息。
         # 第一条 system prompt 完全由代码规则确定（SYSTEM_PROMPT + skills + working_dir
@@ -476,6 +490,7 @@ class SessionManager:
             "created_at": self.sessions_index.get(
                 self.current_session_id, SessionSummary("", "", "", 0, 0, 0, "", "")
             ).created_at,
+            "context_checkpoint": self.context_checkpoint,
             "messages": [
                 {
                     "role": msg.role,
@@ -538,6 +553,8 @@ class SessionManager:
                 )
                 self.current_messages.append(message)
 
+            checkpoint = session_data.get("context_checkpoint")
+            self.context_checkpoint = checkpoint if isinstance(checkpoint, dict) else None
             return True
 
         except Exception as e:

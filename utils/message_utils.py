@@ -281,3 +281,176 @@ def validate_tool_call_integrity(messages: List[Dict]) -> None:
             f"Orphaned tool_calls: {pending_ids} have no matching tool messages "
             f"in the compact view"
         )
+
+
+def _message_text(message: Dict) -> str:
+    content = message.get("content") or ""
+    if not isinstance(content, str):
+        return json.dumps(content, ensure_ascii=False)
+    return content
+
+
+def is_real_user_message(message: Dict) -> bool:
+    """用户消息，排除系统注入和检索 checkpoint。"""
+    if message.get("role") != "user":
+        return False
+    text = _message_text(message)
+    return not text.startswith("[System]") and not text.startswith("<conversation-checkpoint>")
+
+
+def _real_user_indices(messages: List[Dict]) -> List[int]:
+    return [i for i, message in enumerate(messages) if is_real_user_message(message)]
+
+
+def _round_start_indices(messages: List[Dict]) -> List[int]:
+    """A round starts at the system prompt or any non-tool message."""
+    return [i for i, message in enumerate(messages) if i == 0 or message.get("role") != "tool"]
+
+
+def _next_index(indices: List[int], value: int) -> Optional[int]:
+    for index in indices:
+        if index > value:
+            return index
+    return None
+
+
+def estimate_retrieval_view_tokens(
+    encoding,
+    messages: List[Dict],
+    cutoff: int,
+    latest_user_index: int,
+    stub_tokens: int = 0,
+) -> int:
+    """Estimate the tokens of the model view after applying a cutoff."""
+    if cutoff <= 0:
+        return estimate_tokens(encoding, messages)
+
+    view: List[Dict] = []
+    if messages:
+        view.append(messages[0])
+    if stub_tokens:
+        view.append({"role": "user", "content": "x" * (stub_tokens * 4)})
+    if latest_user_index >= 0 and cutoff > latest_user_index:
+        view.append(messages[latest_user_index])
+        index = latest_user_index + 1
+        while index < cutoff and messages[index].get("role") == "system":
+            view.append(messages[index])
+            index += 1
+    view.extend(messages[cutoff:])
+    return estimate_tokens(encoding, view)
+
+
+def compute_retrieval_cutoff(
+    encoding,
+    messages: List[Dict],
+    current_cutoff: int = 0,
+    keep_tokens: int = 20000,
+    keep_recent_user_messages: int = 2,
+    keep_min_rounds: int = 4,
+    stub_tokens: int = 2000,
+) -> Tuple[int, int]:
+    """Choose where the model view should start.
+
+    Rules:
+    - never move the cutoff backwards;
+    - keep the newest N user messages when possible;
+    - keep at least `keep_min_rounds` recent rounds when possible;
+    - cap the view at `keep_tokens` by dropping whole user rounds first;
+    - if the current task alone is too large, keep the newest user message
+      and the newest rounds, omitting the middle.
+
+    Returns `(cutoff, latest_user_index)`.
+    """
+    if not messages:
+        return 0, -1
+
+    count = len(messages)
+    current_cutoff = max(0, min(int(current_cutoff or 0), count))
+    users = _real_user_indices(messages)
+    starts = _round_start_indices(messages)
+    latest_user = users[-1] if users else -1
+
+    if latest_user < 0:
+        if len(starts) >= keep_min_rounds:
+            candidate = starts[-keep_min_rounds]
+        else:
+            candidate = 0
+        return max(current_cutoff, candidate), latest_user
+
+    if len(users) >= keep_recent_user_messages:
+        candidate = users[-keep_recent_user_messages]
+    else:
+        candidate = users[0]
+
+    candidate = max(candidate, current_cutoff)
+
+    # Keep at least the most recent rounds. Do not move backwards past a
+    # previously persisted cutoff.
+    if len(starts) >= keep_min_rounds:
+        candidate = max(current_cutoff, min(candidate, starts[-keep_min_rounds]))
+
+    # Drop whole older user rounds until the view fits the budget.
+    while candidate < latest_user:
+        tokens = estimate_retrieval_view_tokens(
+            encoding, messages, candidate, latest_user, stub_tokens
+        )
+        if tokens <= keep_tokens:
+            break
+        next_user = _next_index(users, candidate)
+        candidate = next_user if next_user is not None else latest_user
+
+    if candidate < latest_user:
+        tokens = estimate_retrieval_view_tokens(
+            encoding, messages, candidate, latest_user, stub_tokens
+        )
+        if tokens <= keep_tokens:
+            return candidate, latest_user
+
+    # The current task is still too large. Keep the latest user request plus
+    # the newest rounds; messages between them become retrievable history.
+    candidate = max(candidate, latest_user)
+    tail_starts = [index for index in starts if index > latest_user]
+    chosen_tail = latest_user
+    for start in reversed(tail_starts):
+        tokens = estimate_retrieval_view_tokens(
+            encoding, messages, start, latest_user, stub_tokens
+        )
+        if tokens <= keep_tokens:
+            chosen_tail = start
+        else:
+            break
+
+    if len(starts) >= keep_min_rounds and starts[-keep_min_rounds] > latest_user:
+        chosen_tail = min(chosen_tail, starts[-keep_min_rounds]) if chosen_tail > latest_user else chosen_tail
+
+    return max(candidate, chosen_tail), latest_user
+
+
+def render_retrieval_view(
+    messages: List[Dict],
+    cutoff: int,
+    latest_user_index: int,
+    checkpoint_stub: str,
+) -> List[Dict]:
+    """Render the model view without modifying the stored messages."""
+    if cutoff <= 0:
+        return list(messages)
+
+    # Never start a view with an orphaned tool result.
+    while cutoff < len(messages) and messages[cutoff].get("role") == "tool":
+        cutoff += 1
+
+    view: List[Dict] = [messages[0]]
+    view.append({"role": "user", "content": checkpoint_stub})
+
+    # If trimming inside the current task, keep the latest user request
+    # explicitly; the older part of that task is retrievable history.
+    if latest_user_index >= 0 and cutoff > latest_user_index:
+        view.append(messages[latest_user_index])
+        index = latest_user_index + 1
+        while index < cutoff and messages[index].get("role") == "system":
+            view.append(messages[index])
+            index += 1
+
+    view.extend(messages[cutoff:])
+    return view

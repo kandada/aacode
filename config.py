@@ -207,6 +207,7 @@ class SafetyConfig:
     allow_network: bool = True
     max_file_size: int = 50 * 1024 * 1024  # 50MB
     dangerous_command_action: str = "ask"  # reject, ask, log — ask 模式下危险命令弹窗确认
+    unknown_command_action: str = "allow"  # reject, ask, allow — 未在白名单/ PATH 中的命令
 
 
 @dataclass
@@ -224,6 +225,12 @@ class ContextConfig:
     compact_summary_steps: int = 10  # 摘要包含的步骤数
     compact_protect_first_rounds: int = 1  # 保护前N轮（只保留 system prompt，其余由 AI 摘要承载）
     compact_protect_user_rounds: int = 2  # 保护最近N条用户消息及附带消息（确保最新上下文完整）
+
+    # 检索式上下文控制（不生成摘要，只过滤模型视图）
+    retrieval_trigger_tokens: int = 100000
+    retrieval_keep_tokens: int = 20000
+    retrieval_keep_recent_user_messages: int = 2
+    retrieval_keep_min_rounds: int = 4
 
 
 @dataclass

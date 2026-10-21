@@ -38,11 +38,15 @@ def _smart_decode(data: bytes) -> str:
         return data.decode("gbk", errors="replace")
 
 
+DEFAULT_MAX_OUTPUT_CHARS = 20000
+DEFAULT_MAX_OUTPUT_LINES = 500
+
+
 def _is_unlimited(val) -> bool:
     """Check if a value means 'no limit'."""
     if val is None or val == 0:
         return True
-    if isinstance(val, str) and val.lower() in ('none', 'null', ''):
+    if isinstance(val, str) and val.lower() in ('none', 'null', '', 'full'):
         return True
     return False
 
@@ -66,10 +70,11 @@ class AtomicTools:
 
     async def run_shell(
         self, command: str = None, timeout: Optional[int] = None, stdin_input: str = None,
-        max_output: int = None, stop_on_exit: bool = False,
+        max_output: Any = None, stop_on_exit: bool = False,
         action: str = "exec", process_id: str = None,
         max_lines: int = None, idle_timeout: int = None,
-        use_pty: bool = False, **kwargs
+        use_pty: bool = False, max_output_lines: int = None,
+        full_output: bool = False, **kwargs
     ) -> Dict[str, Any]:
         """
         执行shell命令(带安全护栏)
@@ -88,6 +93,22 @@ class AtomicTools:
 
         Note: **kwargs 用于接收并忽略模型可能传入的额外参数
         """
+        # Cache-safe output budget: the capped content is what enters context
+        # from the start, and the full output is archived for later inspection.
+        wants_full = (
+            full_output
+            or (isinstance(max_output, str) and max_output.lower() == "full")
+            or (max_output is not None and _is_unlimited(max_output))
+        )
+        if wants_full:
+            max_output = None
+            max_output_lines = None
+        else:
+            if max_output is None:
+                max_output = DEFAULT_MAX_OUTPUT_CHARS
+            if max_output_lines is None:
+                max_output_lines = DEFAULT_MAX_OUTPUT_LINES
+
         try:
             if timeout is None:
                 if __package__ in (None, ""):
@@ -99,7 +120,8 @@ class AtomicTools:
             if action == "exec":
                 return await self._exec_action(command, timeout, stdin_input,
                                                max_output, stop_on_exit,
-                                               max_lines, idle_timeout, use_pty)
+                                               max_lines, idle_timeout, use_pty,
+                                               max_output_lines)
             elif action == "spawn":
                 return await self._spawn_action(command, max_lines,
                                                 idle_timeout, use_pty)
@@ -128,7 +150,8 @@ class AtomicTools:
     # ─── action: exec ───────────────────────────────────────────
 
     async def _exec_action(self, command, timeout, stdin_input, max_output,
-                           stop_on_exit, max_lines, idle_timeout, use_pty):
+                           stop_on_exit, max_lines, idle_timeout, use_pty,
+                           max_output_lines=None):
         """同步执行命令（原有行为 + max_lines/idle_timeout/use_pty 增强）"""
         if not command:
             return {"success": False, "error": "command is required for action=\"exec\""}
@@ -156,7 +179,8 @@ class AtomicTools:
         if use_pty and pty_info:
             result = await self._exec_with_pty(command, timeout, stdin_input,
                                                max_output, max_lines,
-                                               idle_timeout, pty_info)
+                                               idle_timeout, pty_info,
+                                               max_output_lines)
             await self._attach_changes(result)
             return result
 
@@ -181,9 +205,9 @@ class AtomicTools:
                     process, timeout, stop_on_exit, max_lines, idle_timeout)
 
             stdout_text, stdout_truncated = self._apply_max_output(
-                stdout_text, max_output, "stdout")
+                stdout_text, max_output, "stdout", max_output_lines)
             stderr_text, stderr_truncated = self._apply_max_output(
-                stderr_text, max_output, "stderr")
+                stderr_text, max_output, "stderr", max_output_lines)
 
             result = {
                 "success": True,
@@ -262,7 +286,8 @@ class AtomicTools:
         return stdout_text, stderr_text
 
     async def _exec_with_pty(self, command, timeout, stdin_input,
-                             max_output, max_lines, idle_timeout, pty_info):
+                             max_output, max_lines, idle_timeout, pty_info,
+                             max_output_lines=None):
         """通过 PTY 同步执行命令（stdout/stderr 合并）"""
         master_fd, slave_fd = pty_info
         cwd = str(self.project_path)
@@ -324,7 +349,7 @@ class AtomicTools:
             stdout_text = "\n".join(output_buf)
 
         stdout_text, stdout_truncated = self._apply_max_output(
-            stdout_text, max_output, "stdout")
+            stdout_text, max_output, "stdout", max_output_lines)
 
         return {
             "success": True,
@@ -746,21 +771,43 @@ class AtomicTools:
             except Exception:
                 pass
 
-    def _apply_max_output(self, text, max_output, prefix):
-        """对输出文本应用 max_output 截断"""
+    def _apply_max_output(self, text, max_output, prefix, max_output_lines=None):
+        """Apply char/line caps and archive the full output once when truncated."""
+        if not text:
+            return text, False
+
+        original = text
         truncated = False
-        if _is_unlimited(max_output):
-            return text, truncated
-        if isinstance(max_output, int) and max_output > 0:
-            if text and len(text) > max_output:
-                extracts = self.project_path / ".aacode" / "extracts"
-                extracts.mkdir(parents=True, exist_ok=True)
-                path = extracts / f"tool_{prefix}_{uuid.uuid4().hex[:8]}.txt"
-                path.write_text(text, encoding="utf-8")
-                suffix = f"\n\n[Full output saved to {path}. Use run_shell to Grep the file for what you need.]"
-                text = text[:max_output] + suffix
+
+        if isinstance(max_output_lines, int) and max_output_lines > 0:
+            lines = text.splitlines(keepends=True)
+            if len(lines) > max_output_lines:
+                text = "".join(lines[:max_output_lines])
                 truncated = True
-        return text, truncated
+
+        if not _is_unlimited(max_output) and isinstance(max_output, int) and max_output > 0:
+            if len(text) > max_output:
+                text = text[:max_output]
+                truncated = True
+
+        if not truncated:
+            return text, False
+
+        try:
+            extracts = self.project_path / ".aacode" / "extracts"
+            extracts.mkdir(parents=True, exist_ok=True)
+            path = extracts / f"tool_{prefix}_{uuid.uuid4().hex[:8]}.txt"
+            path.write_text(original, encoding="utf-8")
+            suffix = (
+                f"\n\n[Output truncated; full output saved to {path}. "
+                f"Use rg/sed/head/tail to inspect it, or pass full_output=true "
+                f"(or a larger max_output) next time.]"
+            )
+            text += suffix
+        except Exception:
+            text += "\n\n[Output truncated; full output could not be archived.]"
+
+        return text, True
 
     def _create_pty(self):
         """创建 PTY master/slave 对，失败返回 None"""

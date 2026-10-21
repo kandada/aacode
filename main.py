@@ -23,12 +23,12 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).parent.parent))
     from aacode.core.main_agent import MainAgent
     from aacode.utils.context_manager import ContextManager
-    from aacode.utils.safety import SafetyGuard
+    from aacode.utils.safety import create_safety_guard
     from aacode.config import settings
 else:
     from .core.main_agent import MainAgent
     from .utils.context_manager import ContextManager
-    from .utils.safety import SafetyGuard
+    from .utils.safety import create_safety_guard
     from .config import settings
 
 from aacode.i18n import t
@@ -88,11 +88,7 @@ class AICoder:
         # 所有工具都会使 with target_project作为基准路径
 
         # initialized核心组件（使 with target_project作为安全护栏的基准）
-        self.safety_guard = SafetyGuard(
-            self.target_project,
-            dangerous_command_action=settings.safety.dangerous_command_action,
-            restrict_to_project=settings.safety.restrict_to_project,
-        )
+        self.safety_guard = create_safety_guard(self.target_project)
         # 上下文管理器使 with aacode工作目录（存放日志等）
         self.context_manager = ContextManager(self.project_path)
 

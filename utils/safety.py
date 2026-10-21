@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 import shlex
+import sys
 from pathlib import Path
 from typing import Dict, List, Tuple, Set, Any, Union
 import ast
@@ -33,11 +34,13 @@ class SafetyGuard:
         interactive: bool = True,
         dangerous_command_action: str = "log",
         restrict_to_project: bool = True,
+        unknown_command_action: str = "reject",
     ):
         self.project_path = project_path
         self.project_root = str(project_path)
         self.interactive = interactive  # 是否启用交互式确认
         self.dangerous_command_action = dangerous_command_action  # reject, ask, log
+        self.unknown_command_action = unknown_command_action  # reject, ask, allow
         self._path_cache: Dict[str, Optional[str]] = {}  # 缓存 shutil.which 结果
         self.restrict_to_project = restrict_to_project
 
@@ -1561,6 +1564,79 @@ class SafetyGuard:
         # 低风险命令（安全）
         return self.RISK_SAFE, "Safe command"
 
+    def _strip_quoted_text(self, command: str) -> str:
+        """Remove quoted strings before scanning for dangerous substrings.
+
+        ``echo "shutdown now"`` and ``rg "systemctl stop"`` are data, not
+        commands. Keeping their quoted text out of the dangerous-pattern scan
+        avoids false positives without weakening real command checks.
+        """
+        result = []
+        quote = None
+        escaped = False
+        for char in command:
+            if quote:
+                if escaped:
+                    escaped = False
+                elif char == "\\" and quote == '"':
+                    escaped = True
+                elif char == quote:
+                    quote = None
+                continue
+            if char in ('"', "'"):
+                quote = char
+                continue
+            result.append(char)
+        return "".join(result)
+
+    def _strip_heredoc_bodies(self, command: str) -> str:
+        """Drop heredoc bodies so script text is not mistaken for commands."""
+        lines = command.splitlines()
+        result = []
+        delimiter = None
+        for line in lines:
+            if delimiter is not None:
+                if line.strip() == delimiter:
+                    delimiter = None
+                continue
+            result.append(line)
+            match = re.search(r"<<-?\s*[\"']?([A-Za-z0-9_]+)[\"']?", line)
+            if match:
+                delimiter = match.group(1)
+        return "\n".join(result)
+
+    def _dangerous_scan_text(self, command: str) -> str:
+        """Return the text that dangerous regexes should inspect."""
+        try:
+            parts = shlex.split(command)
+        except ValueError:
+            parts = command.split()
+        cmd_name = self._extract_command_name(parts[0]) if parts else ""
+
+        # Shell wrappers execute their arguments, so scan the raw text
+        # (including quoted inner commands).
+        wrappers = {
+            "bash", "sh", "zsh", "dash", "ksh", "fish", "csh", "tcsh",
+            "pwsh", "powershell", "cmd", "eval", "exec", "env", "nohup",
+            "time", "command", "xargs", "sudo",
+        }
+        text = self._strip_heredoc_bodies(command)
+        if cmd_name not in wrappers:
+            text = self._strip_quoted_text(text)
+
+        # Read/search commands treat their arguments as data. ``find`` is
+        # excluded when it actually executes or deletes.
+        data_commands = {
+            "echo", "printf", "rg", "ripgrep", "grep", "egrep", "fgrep",
+            "git", "sed", "awk", "cat", "head", "tail", "ls", "find",
+        }
+        if cmd_name in data_commands:
+            if cmd_name != "find" or not any(
+                part in ("-exec", "-execdir", "-delete") for part in parts
+            ):
+                return ""
+        return text
+
     def check_command(
         self, command: str, ask_confirmation: bool = True,
         _skip_newline_split: bool = False,
@@ -1632,9 +1708,10 @@ class SafetyGuard:
                     risk_level=final_risk,
                 )
 
-        # 检查危险模式
+        # 检查危险模式（只扫描真实命令文本，避免参数/引号/heredoc 误报）
+        scan_text = self._dangerous_scan_text(command)
         for pattern, description in self.dangerous_patterns:
-            if re.search(pattern, command, re.IGNORECASE):
+            if scan_text and re.search(pattern, scan_text, re.IGNORECASE):
                 # 根据配置处理危险命令
                 if self.dangerous_command_action == "reject":
                     return self._build_result(
@@ -1913,6 +1990,30 @@ class SafetyGuard:
                 found = self._exists_on_path(cmd_name)
                 if found:
                     print(f"⚠️  Command '{cmd_name}' not in whitelist but found on PATH ({found}), allowing")
+                elif self.unknown_command_action == "allow":
+                    # Parser/alias/wrapper false positives are common. An
+                    # unknown name that is not on PATH will fail in the shell
+                    # anyway, so allow it with a warning instead of blocking.
+                    print(
+                        f"⚠️  Unknown command allowed (not on PATH): {cmd_name}"
+                    )
+                    return self._build_result(
+                        allowed=True,
+                        reason=f"Unknown command allowed: {cmd_name}",
+                        risk_level=self.RISK_WARNING,
+                    )
+                elif (
+                    self.unknown_command_action == "ask"
+                    and self.interactive
+                    and self._ask_user_confirmation(
+                        command, f"Unknown command: {cmd_name}"
+                    )
+                ):
+                    return self._build_result(
+                        allowed=True,
+                        reason=f"Unknown command confirmed: {cmd_name}",
+                        risk_level=self.RISK_WARNING,
+                    )
                 else:
                     return self._build_result(
                         allowed=False,
@@ -2463,3 +2564,28 @@ class SafetyGuard:
                 return False
 
         return True
+
+
+def create_safety_guard(project_path: Path, interactive=None) -> SafetyGuard:
+    """Build a SafetyGuard from the shared config.
+
+    Desktop/Server pass ``interactive=False`` because there is no terminal
+    confirmation channel. ``ask`` then degrades safely instead of blocking on
+    ``input()``/EOF and reporting a misleading "User cancelled operation".
+    """
+    if interactive is None:
+        interactive = sys.stdin.isatty()
+    try:
+        from ..config import settings
+    except ImportError:  # pragma: no cover - direct execution fallback
+        from config import settings
+
+    return SafetyGuard(
+        project_path,
+        interactive=interactive,
+        dangerous_command_action=settings.safety.dangerous_command_action,
+        restrict_to_project=settings.safety.restrict_to_project,
+        unknown_command_action=getattr(
+            settings.safety, "unknown_command_action", "reject"
+        ),
+    )

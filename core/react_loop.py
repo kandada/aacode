@@ -15,6 +15,7 @@ import time
 import json
 import re
 import sys
+import uuid
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Callable, Awaitable
 from dataclasses import dataclass
@@ -36,7 +37,11 @@ from aacode.utils.message_utils import (
     split_into_rounds,
     build_compact_view,
     _find_last_n_real_user_round,
+    compute_retrieval_cutoff,
+    render_retrieval_view,
+    is_real_user_message,
 )
+from aacode.utils.usage_tracker import UsageTracker
 
 
 def _error_extra(result: Dict, error_msg: Any) -> str:
@@ -88,6 +93,7 @@ class ActionItem:
     action: str
     action_input: Dict
     observation: Optional[str] = None
+    call_id: Optional[str] = None
 
 
 @dataclass
@@ -148,6 +154,14 @@ class AsyncReActLoop:
 
         self.encoding = _load_tiktoken_encoding()
 
+        # Usage telemetry (token counts only; never prompt/response text)
+        self._usage_tracker = UsageTracker(project_path) if project_path else None
+        self.usage_meta: Optional[Dict[str, Any]] = None
+
+        # Retrieval-style context checkpoint (no summary, no message deletion)
+        self.context_checkpoint: Optional[Dict[str, Any]] = None
+        self.on_checkpoint: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None
+
         # 上下文压缩摘要缓存
         self._compact_summary: Optional[str] = None
         self._compact_summary_msg_count: int = 0
@@ -199,6 +213,7 @@ class AsyncReActLoop:
         """
         # 清除上一轮的 last_messages，确保失败时不残留旧数据
         self.last_messages = None
+        run_id = uuid.uuid4().hex[:12]
 
         # Reset stale loop detector for this run — each react_loop.run() call
         # starts with a clean tracker (fresh fetch_url domain history).
@@ -253,10 +268,13 @@ During each thought, naturally plan:
             if len(history_messages) > 0:
                 print(f"📜 Loaded {len(history_messages)}  history messages into context")
 
+        # Keep the user message byte-identical to what is persisted in the session.
+        # The native-tool-call instruction already lives in the system prompt, and
+        # rewriting this message breaks the provider's prefix cache on the next task.
         messages.append(
             {
                 "role": "user",
-                "content": f"Task: {task_description}\n\nUse native function calls (tool_calls) to execute tools. Do NOT output JSON/text-formatted tool call information in your response — the system handles tool execution automatically via the API's tool_calls mechanism and returns results as tool role messages.",
+                "content": task_description,
             },
         )
 
@@ -280,12 +298,24 @@ During each thought, naturally plan:
             # 调 with 模型Get 思考（使用 round-aware 压缩视图）
             # 同时缓存 compact view 和 token 数，供后续自适应截断复用，避免重复 split_into_rounds
             model_start = asyncio.get_event_loop().time()
-            effective_msgs, _, compact_tokens = self._build_compact_view(messages)
+            effective_msgs, was_compacted, compact_tokens = await self._build_model_view(
+                messages, session_id
+            )
             self._cached_compact_view = effective_msgs
             self._cached_compact_tokens = compact_tokens
             self._cached_compact_msg_count = len(messages)
             response = await self.model_caller(effective_msgs)
             model_time = asyncio.get_event_loop().time() - model_start
+
+            self._record_usage(
+                response=response,
+                run_id=run_id,
+                iteration=iteration + 1,
+                session_id=session_id,
+                context_tokens=compact_tokens,
+                messages_count=len(effective_msgs),
+                compacted=was_compacted,
+            )
 
             # 提取文本和 tool_calls（兼容旧版返回字符串）
             if isinstance(response, dict):
@@ -321,6 +351,7 @@ During each thought, naturally plan:
                     actions.append(ActionItem(
                         action=tc["name"],
                         action_input=arguments,
+                        call_id=tc.get("id"),
                     ))
             else:
                 # ─── 文本解析路径（回退） ───
@@ -399,7 +430,9 @@ During each thought, naturally plan:
             if len(messages) == getattr(self, '_cached_compact_msg_count', -1):
                 current_tokens = self._cached_compact_tokens
             else:
-                effective_msgs, _, current_tokens = self._build_compact_view(messages)
+                effective_msgs, _, current_tokens = await self._build_model_view(
+                    messages, session_id
+                )
             total_budget = (
                 self.context_config.max_context_length
                 if self.context_config
@@ -477,6 +510,18 @@ During each thought, naturally plan:
                     observation_for_display = observation
 
                 action_time = asyncio.get_event_loop().time() - action_start
+
+                # Structured status event (P1-lite): lets the desktop client
+                # distinguish tool failure/cancel from ordinary output.
+                status, error_code = self._classify_tool_status(observation)
+                self._emit_tool_status(
+                    call_id=action_item.call_id or f"call_{iteration}_{i}",
+                    tool=action_item.action,
+                    status=status,
+                    duration_ms=int(action_time * 1000),
+                    error_code=error_code,
+                    error_message=observation if error_code else None,
+                )
 
                 # 记录观察结果（完整版本）
                 action_item.observation = observation
@@ -604,28 +649,9 @@ During each thought, naturally plan:
                     execution_time=asyncio.get_event_loop().time() - iteration_start,
                 )
 
-            # 智能上下文缩减检查（基于传入模型的压缩视图 token 数）
-            effective_msgs, was_compacted, compact_view_tokens = self._build_compact_view(messages)
-            trigger_tokens = (
-                self.context_config.compact_trigger_tokens
-                if self.context_config
-                else 8000
-            )
-
-            if compact_view_tokens > trigger_tokens:
-                msg_count_changed = len(messages) - self._compact_summary_msg_count
-                if msg_count_changed > 20 or self._compact_summary is None:
-                    print(f"📊 Compact view tokens: {compact_view_tokens}, trigger threshold: {trigger_tokens}")
-                    msg_before_compact = len(messages)
-                    await self._compact_context(messages)
-                    # 持久化压缩摘要（_compact_context 追加了 system 消息到末尾）
-                    if on_new_messages and len(messages) > msg_before_compact:
-                        await on_new_messages(messages[msg_before_compact:])
-                    if self.logger:
-                        await self.logger.log_context_update(
-                            update_type="compact",
-                            content=f"Context compaction executed after iteration {iteration + 1} (compact_view_tokens: {compact_view_tokens})",
-                        )
+            # Retrieval checkpoint advancement happens at the next model call,
+            # inside _build_model_view(). No summary is generated and no stored
+            # message is modified or deleted here.
 
         total_time = asyncio.get_event_loop().time() - start_time
         if self.logger:
@@ -649,6 +675,332 @@ During each thought, naturally plan:
             "total_time": total_time,
             "message": "Maximum iterations reached, suggest continuing the session to complete the task",
         }
+
+    def _retrieval_config(self) -> tuple:
+        cfg = self.context_config
+        if not cfg:
+            return 100000, 20000, 2, 4
+        trigger = int(getattr(cfg, "retrieval_trigger_tokens", 100000) or 100000)
+        max_context = int(getattr(cfg, "max_context_length", trigger) or trigger)
+        trigger = max(1000, min(trigger, max_context))
+        keep = int(getattr(cfg, "retrieval_keep_tokens", 20000) or 20000)
+        recent = int(getattr(cfg, "retrieval_keep_recent_user_messages", 2) or 2)
+        rounds = int(getattr(cfg, "retrieval_keep_min_rounds", 4) or 4)
+        return trigger, keep, recent, rounds
+
+    def _latest_real_user_index(self, messages: List[Dict]) -> int:
+        for index in range(len(messages) - 1, -1, -1):
+            if is_real_user_message(messages[index]):
+                return index
+        return -1
+
+    def _pending_todo_lines(self, session_id: Optional[str], limit: int = 10) -> List[str]:
+        manager = self.todo_manager
+        if not manager:
+            return []
+        try:
+            resolver = getattr(manager, "_resolve_todo_file", None)
+            path = resolver(session_id) if resolver else getattr(manager, "current_todo_file", None)
+            if not path or not Path(path).exists():
+                return []
+            result = []
+            for line in Path(path).read_text(encoding="utf-8", errors="ignore").splitlines():
+                stripped = line.strip()
+                if stripped.startswith("- [ ]"):
+                    result.append(stripped[5:].strip()[:120])
+                    if len(result) >= limit:
+                        break
+            return result
+        except Exception:
+            return []
+
+    def _changed_files(self, limit: int = 15) -> List[str]:
+        if not self.project_path:
+            return []
+        try:
+            import subprocess
+
+            proc = subprocess.run(
+                ["git", "status", "--short"],
+                cwd=str(self.project_path),
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if proc.returncode != 0:
+                return []
+            return [line.strip() for line in proc.stdout.splitlines() if line.strip()][:limit]
+        except Exception:
+            return []
+
+    def _last_error(self, messages: List[Dict]) -> str:
+        markers = ("error", "failed", "traceback", "exception", "❌")
+        for message in reversed(messages):
+            if message.get("role") not in ("tool", "assistant"):
+                continue
+            text = message.get("content") or ""
+            if not isinstance(text, str):
+                text = str(text)
+            lowered = text.lower()
+            if any(marker in lowered for marker in markers):
+                return text.replace("\n", " ").strip()[:300]
+        return ""
+
+    async def _build_checkpoint_stub(
+        self,
+        messages: List[Dict],
+        cutoff: int,
+        latest_user_index: int,
+        session_id: Optional[str],
+    ) -> str:
+        lines = ["<conversation-checkpoint>"]
+        if cutoff > 0:
+            lines.append(f"Older messages omitted: messages 1-{max(0, cutoff - 1)}.")
+        lines.append(
+            "Full history is persisted. Use search_history / read_history to retrieve "
+            "older context. Never cat the session JSON."
+        )
+        if session_id:
+            lines.append(f"Session: {session_id}")
+
+        pending = self._pending_todo_lines(session_id)
+        if pending:
+            lines.append("Unfinished todos:")
+            lines.extend(f"- {item}" for item in pending)
+
+        changed = self._changed_files()
+        if changed:
+            lines.append("Changed files:")
+            lines.extend(f"- {item}" for item in changed)
+
+        error = self._last_error(messages[:cutoff])
+        if error:
+            lines.append(f"Last error: {error}")
+
+        earlier_users = []
+        for index, message in enumerate(messages[:cutoff]):
+            if not is_real_user_message(message):
+                continue
+            if latest_user_index >= 0 and index == latest_user_index:
+                continue
+            raw = message.get("content") or ""
+            if not isinstance(raw, str):
+                raw = str(raw)
+            text = raw.replace("\n", " ")
+            earlier_users.append(f"- [{index}] {text.strip()[:80]}")
+        if earlier_users:
+            lines.append("Earlier user messages:")
+            lines.extend(earlier_users[-10:])
+
+        lines.append("</conversation-checkpoint>")
+        stub = "\n".join(lines)
+        if len(stub) > 6000:
+            stub = stub[:6000] + "\n[truncated]"
+        return stub
+
+    async def _build_model_view(
+        self, messages: List[Dict], session_id: Optional[str]
+    ) -> tuple:
+        """Return the model view, advancing a frozen cutoff only when needed."""
+        trigger, keep_tokens, recent_users, min_rounds = self._retrieval_config()
+        checkpoint = (
+            self.context_checkpoint
+            if isinstance(self.context_checkpoint, dict)
+            else None
+        )
+        cutoff = int(checkpoint.get("cutoff_index") or 0) if checkpoint else 0
+        cutoff = max(0, min(cutoff, len(messages)))
+        latest_user = self._latest_real_user_index(messages)
+        stub = checkpoint.get("stub", "") if checkpoint else ""
+
+        if cutoff > 0 and not stub:
+            stub = await self._build_checkpoint_stub(
+                messages, cutoff, latest_user, session_id
+            )
+            checkpoint = {
+                **(checkpoint or {}),
+                "cutoff_index": cutoff,
+                "omitted_messages": cutoff,
+                "keep_tokens": keep_tokens,
+                "stub": stub,
+                "session_id": session_id,
+            }
+            self.context_checkpoint = checkpoint
+            if self.on_checkpoint:
+                await self.on_checkpoint(checkpoint)
+
+        view = (
+            render_retrieval_view(messages, cutoff, latest_user, stub)
+            if cutoff > 0
+            else list(messages)
+        )
+        tokens = self._estimate_tokens(view)
+        # Freeze the cutoff while the view fits the trigger. Advancing every
+        # request would change the prefix and destroy provider prompt caching.
+        if tokens <= trigger:
+            return view, cutoff > 0, tokens
+
+        new_cutoff, new_latest_user = compute_retrieval_cutoff(
+            self.encoding,
+            messages,
+            current_cutoff=cutoff,
+            keep_tokens=keep_tokens,
+            keep_recent_user_messages=recent_users,
+            keep_min_rounds=min_rounds,
+        )
+        if new_cutoff <= cutoff:
+            return view, cutoff > 0, tokens
+
+        new_stub = await self._build_checkpoint_stub(
+            messages, new_cutoff, new_latest_user, session_id
+        )
+        checkpoint = {
+            "cutoff_index": new_cutoff,
+            "omitted_messages": new_cutoff,
+            "keep_tokens": keep_tokens,
+            "stub": new_stub,
+            "session_id": session_id,
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        self.context_checkpoint = checkpoint
+        if self.on_checkpoint:
+            await self.on_checkpoint(checkpoint)
+
+        view = render_retrieval_view(
+            messages, new_cutoff, new_latest_user, new_stub
+        )
+        tokens = self._estimate_tokens(view)
+        if self.logger:
+            await self.logger.log_context_update(
+                update_type="retrieval_checkpoint",
+                content=(
+                    f"Omitted messages 1-{new_cutoff}; "
+                    f"model view tokens {tokens}"
+                ),
+            )
+        print(
+            style(
+                f"📦 Context cutoff: omitted {new_cutoff} messages, "
+                f"keeping ~{tokens} tokens",
+                fg=BLUE,
+            )
+        )
+        return view, True, tokens
+
+    def _classify_tool_status(self, observation: Any) -> tuple:
+        """Return (status, error_code) for a tool result."""
+        text = observation if isinstance(observation, str) else str(observation)
+        lowered = text.lower()
+        error_prefixes = (
+            "❌",
+            "error:",
+            "execution error",
+            "execution failed",
+            "command rejected",
+            "tool execution",
+        )
+        is_error = text.startswith(error_prefixes) or "traceback" in lowered
+        if not is_error:
+            return "success", None
+
+        if "safety guard" in lowered or "dangerous operation" in lowered or "user cancelled" in lowered:
+            return "error", "safety_guard"
+        if "timeout" in lowered or "timed out" in lowered:
+            return "error", "timeout"
+        if "parameter validation" in lowered or "parameter parsing" in lowered or "missing required" in lowered:
+            return "error", "validation"
+        if "not found" in lowered:
+            return "error", "not_found"
+        if "cancelled" in lowered or "canceled" in lowered:
+            return "error", "cancelled"
+        return "error", "tool_error"
+
+    def _emit_tool_status(
+        self,
+        call_id: str,
+        tool: str,
+        status: str,
+        duration_ms: int,
+        error_code: Optional[str] = None,
+        error_message: Optional[str] = None,
+    ) -> None:
+        """Emit a structured tool event for the desktop client.
+
+        This complements the existing text protocol without replacing it.
+        """
+        if sys.stdout.isatty():
+            return
+        payload: Dict[str, Any] = {
+            "type": "tool_status",
+            "call_id": call_id,
+            "tool": tool,
+            "status": status,
+            "duration_ms": duration_ms,
+        }
+        if error_code:
+            payload["error_code"] = error_code
+        if error_message:
+            payload["error_message"] = str(error_message)[:500]
+        print(json.dumps(payload, ensure_ascii=False), flush=True)
+
+    def _record_usage(
+        self,
+        response: Any,
+        run_id: str,
+        iteration: int,
+        session_id: Optional[str],
+        context_tokens: int,
+        messages_count: int,
+        compacted: bool,
+    ) -> None:
+        """Persist provider-reported usage for one model call.
+
+        The JSONL log is append-only and contains no prompt or response text.
+        """
+        usage = response.get("usage") if isinstance(response, dict) else None
+        meta = self.usage_meta or {}
+        event: Dict[str, Any] = {
+            "source": "main",
+            "session_id": session_id,
+            "run_id": run_id,
+            "iteration": iteration,
+            "provider": meta.get("provider"),
+            "gateway": meta.get("gateway"),
+            "model": meta.get("model"),
+            "stream": True,
+            "status": "ok",
+            "usage_source": "provider" if usage else "missing",
+            "estimated_input_tokens": context_tokens,
+            "context_tokens_estimate": context_tokens,
+            "messages_count": messages_count,
+            "compacted": bool(compacted),
+        }
+
+        if usage:
+            event.update(usage)
+            hit = int(usage.get("cache_read_tokens") or 0)
+            miss = int(usage.get("cache_miss_tokens") or 0)
+            denominator = hit + miss
+            event["cache_hit_rate"] = (hit / denominator) if denominator else 0.0
+
+        tracker = self._usage_tracker
+        if tracker is None or not tracker.record(event):
+            return
+
+        if usage and tracker.verbose:
+            hit = int(usage.get("cache_read_tokens") or 0)
+            miss = int(usage.get("cache_miss_tokens") or 0)
+            denominator = hit + miss
+            rate = (hit / denominator) if denominator else 0.0
+            print(
+                style(
+                    f"📊 Usage iter {iteration}: input={usage.get('input_tokens', 0)} "
+                    f"(cache {rate:.1%}) output={usage.get('output_tokens', 0)} "
+                    f"reasoning={usage.get('reasoning_tokens', 0)}",
+                    fg=BLUE,
+                ),
+                flush=True,
+            )
 
     def _parse_response(self, response: str) -> tuple:
         """解析模型响应（支持多个action）- 增强健壮性版本"""

@@ -36,6 +36,15 @@ class SubAgent(BaseAgent):
         **kwargs,
     ):
 
+        # Keep the native-tool-call instruction in the static system prompt so the
+        # user message can stay byte-identical to the persisted task text.
+        system_prompt = (
+            system_prompt.rstrip()
+            + "\n\n⚡ Always use native function calls (tool_calls) — do NOT output "
+            "JSON/text-formatted tool call info in your response. The system executes "
+            "tools automatically and returns results as tool role messages."
+        )
+
         super().__init__(
             agent_id=agent_id,
             system_prompt=system_prompt,
@@ -86,7 +95,7 @@ class SubAgent(BaseAgent):
         self.conversation_history.append(
             {
                 "role": "user",
-                "content": f"Task: {task}\n\nPlease focus on completing this specific task. Use submit_result tool to submit the result when done.",
+                "content": task,
             }
         )
 

@@ -51,9 +51,34 @@ RUN_SHELL_SCHEMA = ToolSchema(
             name="max_output",
             type=int,
             required=False,
-            description="Limit the output character count (for action=\"exec\"). Default is None (no limit). Pass a number like 200 to restrict.",
-            example=None,
+            default=20000,
+            description=(
+                "Maximum output characters (default 20000). Use a larger number for more, "
+                "or set full_output=true to disable the cap. Truncated output is archived."
+            ),
+            example=20000,
             aliases=["max_chars", "limit", "output_limit"],
+        ),
+        ToolParameter(
+            name="max_output_lines",
+            type=int,
+            required=False,
+            default=500,
+            description="Maximum output lines (default 500). Use full_output=true to disable.",
+            example=500,
+            aliases=["output_lines", "max_result_lines"],
+        ),
+        ToolParameter(
+            name="full_output",
+            type=bool,
+            required=False,
+            default=False,
+            description=(
+                "Disable the default output caps and return the full stdout/stderr. "
+                "Only use when you truly need the entire output; large outputs cost many tokens."
+            ),
+            example=False,
+            aliases=["full", "unlimited"],
         ),
         ToolParameter(
             name="stop_on_exit",
@@ -840,6 +865,118 @@ ANALYZE_IMAGE_CONSISTENCY_SCHEMA = ToolSchema(
 )
 
 
+SEARCH_HISTORY_SCHEMA = ToolSchema(
+    name="search_history",
+    description=(
+        "Search persisted conversation messages that may have been omitted from the model context. "
+        "Use this instead of cat-ing session JSON. Searches message content and tool call names/arguments; "
+        "reasoning content is excluded. Default scope is the current session; use scope=project to search "
+        "other sessions (use list_sessions to discover session IDs)."
+    ),
+    parameters=[
+        ToolParameter(
+            name="query",
+            type=str,
+            required=True,
+            description="Case-insensitive text to search for, e.g. an error string, file path, or requirement.",
+            example="E_CACHE_MISS",
+            aliases=["q", "text", "keyword"],
+        ),
+        ToolParameter(
+            name="session_id",
+            type=str,
+            required=False,
+            description="Specific session ID to search. Defaults to the current session.",
+            example="session_20261021_150000_abcd1234",
+            aliases=["session"],
+        ),
+        ToolParameter(
+            name="scope",
+            type=str,
+            required=False,
+            default="current",
+            description="current = current session; project = all sessions in this project.",
+            example="project",
+            aliases=["range"],
+        ),
+        ToolParameter(
+            name="role",
+            type=str,
+            required=False,
+            description="Optional role filter: user, assistant, tool, or system.",
+            example="user",
+            aliases=["role_filter"],
+        ),
+        ToolParameter(
+            name="limit",
+            type=int,
+            required=False,
+            default=20,
+            description="Maximum number of matches to return (1-50).",
+            example=20,
+            aliases=["max_results", "count"],
+        ),
+        ToolParameter(
+            name="offset",
+            type=int,
+            required=False,
+            default=0,
+            description="Pagination offset for matches.",
+            example=0,
+            aliases=["skip"],
+        ),
+    ],
+    returns="Matching messages with session ID, message index, role, timestamp, and a bounded snippet.",
+)
+
+READ_HISTORY_SCHEMA = ToolSchema(
+    name="read_history",
+    description=(
+        "Read a bounded range of persisted conversation messages by message index. "
+        "Use search_history first to find the relevant index. Never cat the session JSON. "
+        "Returns role, timestamp, tool calls, and truncated content."
+    ),
+    parameters=[
+        ToolParameter(
+            name="session_id",
+            type=str,
+            required=False,
+            description="Session ID to read. Defaults to the current session.",
+            example="session_20261021_150000_abcd1234",
+            aliases=["session"],
+        ),
+        ToolParameter(
+            name="start_index",
+            type=int,
+            required=False,
+            default=0,
+            description="First message index to read (0-based).",
+            example=120,
+            aliases=["start", "from"],
+        ),
+        ToolParameter(
+            name="max_messages",
+            type=int,
+            required=False,
+            default=20,
+            description="Maximum number of messages to return (1-50).",
+            example=20,
+            aliases=["limit", "count"],
+        ),
+        ToolParameter(
+            name="max_chars",
+            type=int,
+            required=False,
+            default=12000,
+            description="Maximum total characters to return (1000-30000).",
+            example=12000,
+            aliases=["max_output", "chars"],
+        ),
+    ],
+    returns="A bounded transcript with message indices and a continuation index.",
+)
+
+
 # ==================== 所有工具schema的字典 ====================
 ALL_SCHEMAS = {
     # Atomic Tools
@@ -860,6 +997,9 @@ ALL_SCHEMAS = {
     "get_todo_summary": GET_TODO_SUMMARY_SCHEMA,
     "list_todo_files": LIST_TODO_FILES_SCHEMA,
     "add_execution_record": ADD_EXECUTION_RECORD_SCHEMA,
+    # History retrieval tools
+    "search_history": SEARCH_HISTORY_SCHEMA,
+    "read_history": READ_HISTORY_SCHEMA,
     # MCP Tools
     "list_mcp_tools": LIST_MCP_TOOLS_SCHEMA,
     "call_mcp_tool": CALL_MCP_TOOL_SCHEMA,

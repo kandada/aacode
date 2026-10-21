@@ -9,12 +9,15 @@
 
 import asyncio
 import base64
+import logging
 import os
 import sys
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Union
 import openai
 from aacode.i18n import t
+
+logger = logging.getLogger(__name__)
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -451,6 +454,7 @@ Please generate corresponding HTML/CSS code (use pure CSS, no frameworks):
 
         except Exception as e:
             error_msg = str(e)
+            logger.exception("Multimodal API call failed: %s", e)
             print(f"⚠️  Multimodal API call failed: {error_msg}")
             print("💡 Trying text mode...")
 
@@ -601,6 +605,7 @@ Please analyze the consistency of these images:
             }
 
         except Exception as e:
+            logger.exception("Consistency analysis failed: %s", e)
             return {"error": f"Consistency analysis failed: {str(e)}"}
 
 

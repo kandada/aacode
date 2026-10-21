@@ -91,7 +91,9 @@ class SkillsManager:
         if not skills_dir.exists():
             return 0
         count = 0
-        for skill_dir in skills_dir.iterdir():
+        # Stable traversal order keeps the generated system prompt byte-identical
+        # across processes, which is required for provider prefix-cache hits.
+        for skill_dir in sorted(skills_dir.iterdir(), key=lambda p: p.name):
             if not skill_dir.is_dir():
                 continue
             skill_name = skill_dir.name
@@ -194,11 +196,14 @@ class SkillsManager:
 
         md_info = self._parse_skill_md(skill_md)
 
-        impl_files = [
-            f
-            for f in skill_dir.iterdir()
-            if f.is_file() and f.suffix == ".py" and f.name != "__pycache__"
-        ]
+        impl_files = sorted(
+            [
+                f
+                for f in skill_dir.iterdir()
+                if f.is_file() and f.suffix == ".py" and f.name != "__pycache__"
+            ],
+            key=lambda f: f.name,
+        )
 
         if not impl_files:
             return SkillInfo(
@@ -551,7 +556,7 @@ class SkillsManager:
         if not self.enabled_skills:
             return "(暂无可用 Skills)"
         lines = []
-        for name in self.enabled_skills:
+        for name in sorted(self.enabled_skills):
             info = self.loaded_skills.get(name)
             desc = info.description if info else ""
             lines.append(f"- {name}: {desc}")

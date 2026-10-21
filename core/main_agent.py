@@ -22,6 +22,7 @@ from aacode.utils.anthropic_thinking import (
 from aacode.utils.colors import style, RED, GREEN, BLUE
 from aacode.utils.session_manager import SessionMessage
 from aacode.utils.thinking_extractor import OpenAIThinkingExtractor
+from aacode.utils.usage_tracker import normalize_anthropic_usage, normalize_openai_usage
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Any, Optional
@@ -98,6 +99,7 @@ if __package__ in (None, ""):
     from tools.skills_tools import SkillsManager, SkillInfo
     from tools.multimodal_tools import MultimodalTools, get_multimodal_tools_schema
     from tools.browser_tools import FastbrowserTools
+    from tools.history_tools import HistoryTools
     from core.sub_agent import SubAgent
     from config import settings
 else:
@@ -117,6 +119,7 @@ else:
     from ..tools.skills_tools import SkillsManager, SkillInfo
     from ..tools.multimodal_tools import MultimodalTools, get_multimodal_tools_schema
     from ..tools.browser_tools import FastbrowserTools
+    from ..tools.history_tools import HistoryTools
     from .sub_agent import SubAgent
     from ..config import settings
 
@@ -161,6 +164,7 @@ class MainAgent(BaseAgent):
 
         # initialized模型调用器
         model_caller = self._create_model_caller(model_config)
+        self.model_config = model_config
 
         # 先initializedskills_manager，因为_create_tools需要它
         self.skills_manager = SkillsManager(project_path)
@@ -243,6 +247,8 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
 
         # 会话管理器
         self.session_manager = SessionManager(project_path)
+        if hasattr(self, "history_tools"):
+            self.history_tools.attach_session_manager(self.session_manager)
 
         # ReAct循环
         self.react_loop = AsyncReActLoop(
@@ -672,22 +678,47 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
             "temperature": temperature,
             "max_tokens": model_config.get("max_tokens", 96000),
             "stream": True,
+            "stream_options": {"include_usage": True},
         }
         if tools:
             create_kwargs["tools"] = tools
             create_kwargs["tool_choice"] = "auto"
 
-        stream = await client.chat.completions.create(**create_kwargs)
+        try:
+            stream = await client.chat.completions.create(**create_kwargs)
+        except Exception as exc:
+            # Some OpenAI-compatible gateways reject stream_options. Retry
+            # without it; usage will be unavailable for those gateways.
+            message = str(exc).lower()
+            unsupported = (
+                "stream_options",
+                "include_usage",
+                "unexpected keyword",
+                "extra inputs",
+            )
+            if not any(term in message for term in unsupported):
+                raise
+            create_kwargs.pop("stream_options", None)
+            stream = await client.chat.completions.create(**create_kwargs)
 
         # ─── 流式响应处理 ───
         thinking_extractor = OpenAIThinkingExtractor()
         thinking_printed = False
         thinking_content = ""
         last_finish_reason = None
+        last_usage = None
         async for chunk in stream:
-            if chunk.choices and chunk.choices[0].finish_reason:
+            if getattr(chunk, "usage", None):
+                last_usage = chunk.usage
+            # With include_usage, the final chunk carries usage and may have
+            # no choices. Never index into an empty choices list.
+            if not chunk.choices:
+                continue
+            if chunk.choices[0].finish_reason:
                 last_finish_reason = chunk.choices[0].finish_reason
             delta = chunk.choices[0].delta
+            if delta is None:
+                continue
             # 通过统一提取器拆出 thinking / content，兼容 reasoning_content / thinking 字段
             # 以及 <think>...</think> 标签内嵌三种格式
             think_chunk, content_chunk = thinking_extractor.feed(delta)
@@ -830,6 +861,7 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
             "text": full_response if full_response is not None else "",
             "tool_calls": tool_calls_list,
             "reasoning_content": thinking_content if thinking_content else None,
+            "usage": normalize_openai_usage(last_usage),
         }
 
     async def _call_anthropic_api(
@@ -927,6 +959,7 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
         response = ""
         thinking_content = ""
         tool_calls_list = []
+        last_usage = None
 
         # ── thinking 模式状态机 ──
         # 顺序：adaptive (首选, 无 budget_tokens) → enabled (fallback, 含 budget_tokens) → none
@@ -934,7 +967,7 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
         thinking_mode = self._anthropic_thinking_cache.get(model_name, THINKING_MODE_ADAPTIVE)
 
         async def _do_stream(mode):
-            nonlocal response, thinking_content, tool_calls_list
+            nonlocal response, thinking_content, tool_calls_list, last_usage
             stream_kwargs = {
                 "model": model_name,
                 "max_tokens": model_config.get("max_tokens", 96000),
@@ -986,6 +1019,7 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
 
                 #  with  get_final_message Get 完整的 tool_use（非流式解析，可靠）
                 final = await stream.get_final_message()
+                last_usage = getattr(final, "usage", None)
                 # Check for max_tokens truncation
                 if getattr(final, 'stop_reason', None) == "max_tokens":
                     warning_text = "\n\n[⚠️ WARNING: API response was truncated (max_tokens limit reached). Reduce content per request or increase max_tokens in config.]"
@@ -1039,6 +1073,7 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
                 if tools:
                     create_kwargs["tools"] = tools
                 message = await client.messages.create(**create_kwargs)
+                last_usage = getattr(message, "usage", None)
                 # Check for max_tokens truncation (non-streaming fallback)
                 if getattr(message, 'stop_reason', None) == "max_tokens":
                     response += "\n\n[⚠️ WARNING: API response was truncated (max_tokens limit reached). Reduce content per request or increase max_tokens in config.]"
@@ -1091,6 +1126,7 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
             "text": response,
             "tool_calls": tool_calls_list,
             "reasoning_content": thinking_content if thinking_content else None,
+            "usage": normalize_anthropic_usage(last_usage),
         }
 
     def _create_tools(self, project_path: Path, safety_guard) -> Dict[str, Any]:
@@ -1104,6 +1140,10 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
 
         # 浏览器 + 无障碍工具（fastbrowser）
         browser_tools = FastbrowserTools(project_path)
+
+        # 历史检索工具（只读，不切换当前会话）
+        history_tools = HistoryTools(project_path)
+        self.history_tools = history_tools
 
         # 保存web_tools引 with 以便后续清理
         self.web_tools = web_tools
@@ -1176,6 +1216,9 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
             "delete_session": self.delete_session,
             "get_conversation_history": self.get_conversation_history,
             "get_session_stats": self.get_session_stats,
+            # 历史检索工具
+            "search_history": history_tools.search_history,
+            "read_history": history_tools.read_history,
             # 动态规划已集成到ReAct循环中，移除复杂规划工具
         }
 
@@ -1402,7 +1445,7 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
         self.conversation_history.append(
             {
                 "role": "user",
-                "content": f"Task: {task}\n\nPlease reference the project structure analysis to create a plan and execute.",
+                "content": task,
             }
         )
 
@@ -1438,6 +1481,17 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
         # ─── 运 linesReAct循环（增量持久化：每轮迭代立即保存消息）───
         _task_error = None
         result = None
+        model_name = str(self.model_config.get("name") or "unknown")
+        # Attach usage metadata without changing ReactLoop.run's signature
+        # (some tests replace it with a lightweight fake).
+        self.react_loop.usage_meta = {
+            "provider": model_name.split("-", 1)[0],
+            "gateway": self.model_config.get("gateway"),
+            "model": model_name,
+        }
+        # Retrieval checkpoint is stored in the session; messages stay untouched.
+        self.react_loop.context_checkpoint = self.session_manager.get_context_checkpoint()
+        self.react_loop.on_checkpoint = self.session_manager.set_context_checkpoint
         try:
             result = await self.react_loop.run(
                 initial_prompt=full_system_prompt,

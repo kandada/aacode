@@ -10,6 +10,8 @@ from pathlib import Path
 from datetime import datetime
 from typing import AsyncGenerator, Dict, Any, Optional
 
+from aacode.utils.runtime_info import get_runtime_info
+
 
 class AICoderRunner:
     """Runner for executing AICoder tasks with streaming output"""
@@ -35,20 +37,22 @@ class AICoderRunner:
         os.environ["AACODE_WORK_DIR"] = str(self.project_path)
 
         yield {"type": "start", "task": task, "project": str(work_dir)}
+        yield {"type": "runtime_info", **get_runtime_info()}
 
         try:
             if __package__ in (None, ""):
                 from aacode.core.main_agent import MainAgent
                 from aacode.utils.context_manager import ContextManager
-                from aacode.utils.safety import SafetyGuard
+                from aacode.utils.safety import create_safety_guard
                 from aacode.config import settings
             else:
                 from aacode.core.main_agent import MainAgent
                 from aacode.utils.context_manager import ContextManager
-                from aacode.utils.safety import SafetyGuard
+                from aacode.utils.safety import create_safety_guard
                 from aacode.config import settings
 
-            safety_guard = SafetyGuard(work_dir)
+            # No terminal confirmation channel in the server/desktop path.
+            safety_guard = create_safety_guard(work_dir, interactive=False)
             context_manager = ContextManager(self.project_path)
 
             # 读取 init.md（项目指导原则），作为静态 system prompt 的一部分

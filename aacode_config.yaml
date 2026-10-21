@@ -8,10 +8,16 @@ context:
   strategy: file_based
   use_vector_store: false
   # 上下文缩减（卸载）配置
-  compact_trigger_tokens: 512000      # 触发缩减的token数阈值
+  compact_trigger_tokens: 512000      # 旧版摘要压缩阈值（保留兼容）
   compact_keep_rounds: 10            # 退化场景：缩减后保留的对话轮数（最近N轮）
   compact_summary_steps: 10         # 摘要包含的步骤数
   compact_protect_user_rounds: 2    # 保护最新N条用户消息及附带消息（≥2，确保最新上下文完整）
+
+  # 检索式上下文控制（不生成摘要，只过滤模型视图）
+  retrieval_trigger_tokens: 100000   # 模型视图超过此 token 数时推进 cutoff
+  retrieval_keep_tokens: 20000       # cutoff 后保留的最近原文预算
+  retrieval_keep_recent_user_messages: 2
+  retrieval_keep_min_rounds: 4
 
 # 输出处理配置（自适应截断 — 基于剩余上下文预算）
 output:
@@ -130,6 +136,7 @@ agent:
 safety:
   allow_network: true
   dangerous_command_action: ask   # reject, ask, log — ask 模式下危险命令弹窗确认
+  unknown_command_action: allow   # reject, ask, allow — 未在白名单/PATH 中的命令
   enable_safety_guard: true
   max_file_size: 52428800
   restrict_to_project: false    # false 允许访问项目外路径
