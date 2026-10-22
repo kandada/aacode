@@ -377,6 +377,8 @@ async def continue_session(coder, project_dir):
             print("  - Type 'list' to view project files")
             print("  - Type 'todo' to view todo list")
             print("  - Type 'logs' to view session logs")
+            print("  - Type 'jobs' to list background jobs")
+            print("  - Type 'job <id>' to view job output, 'killjob <id>' to stop it")
             print("  - Type 'exit' or 'quit' to exit")
             print("  - Type 'clear' to clear project dir")
             print("  - Type 'continue' for resume help")
@@ -447,6 +449,52 @@ async def continue_session(coder, project_dir):
                 else:
                     print("📭 Log directory does not exist")
                 continue
+            elif user_input.lower() in ("jobs", "jobs list", "job list"):
+                atomic_tools = getattr(coder.main_agent, "atomic_tools", None)
+                if not atomic_tools:
+                    print("📭 Background jobs are not available")
+                    continue
+                jobs = atomic_tools.list_jobs()
+                if not jobs.get("jobs"):
+                    print("📭 No background jobs")
+                    continue
+                print("\n🗂️  Background jobs:")
+                for job in jobs["jobs"]:
+                    status = "running" if job.get("running") else "exited"
+                    print(
+                        f"  - {job.get('job_id')} [{status}] {job.get('mode')} "
+                        f"{job.get('command', '')[:80]}"
+                    )
+                    if job.get("log_path"):
+                        print(f"    log: {job.get('log_path')}")
+                continue
+            elif user_input.lower().startswith("job "):
+                job_id = user_input.split(None, 1)[1].strip()
+                atomic_tools = getattr(coder.main_agent, "atomic_tools", None)
+                if not atomic_tools:
+                    print("📭 Background jobs are not available")
+                    continue
+                read = await atomic_tools.run_shell(
+                    action="read", process_id=job_id, max_lines=50
+                )
+                if read.get("success"):
+                    print(f"\n📄 Job {job_id} ({'running' if read.get('running') else 'exited'}):")
+                    print(read.get("stdout") or "(no output)")
+                else:
+                    print(f"❌ {read.get('error')}")
+                continue
+            elif user_input.lower().startswith("killjob "):
+                job_id = user_input.split(None, 1)[1].strip()
+                atomic_tools = getattr(coder.main_agent, "atomic_tools", None)
+                if not atomic_tools:
+                    print("📭 Background jobs are not available")
+                    continue
+                result = await atomic_tools.run_shell(action="kill", process_id=job_id)
+                if result.get("success"):
+                    print(f"✅ Job stopped: {job_id}")
+                else:
+                    print(f"❌ {result.get('error')}")
+                continue
             elif user_input.lower() == "clear":
                 # 确认清空项目
                 confirm = (
@@ -487,6 +535,8 @@ async def continue_session(coder, project_dir):
                 print("  list    - to view project files")
                 print("  todo    - to view todo lists")
                 print("  logs    - to view session logs")
+                print("  jobs    - to list background jobs")
+                print("  job <id> / killjob <id> - view or stop a background job")
                 print("  clear   - to clear project dir")
                 print("  exit    - to exit session")
                 print("  help    - to show help")

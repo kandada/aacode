@@ -11,7 +11,9 @@
 
 import asyncio
 import collections
+import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -85,10 +87,12 @@ class AtomicTools:
             stdin_input: 传给程序的标准输入内容（可选）
             max_output: 限制返回的输出最大字符数
             stop_on_exit: 主进程退出后是否不等子进程管道立即返回
-            action: 操作模式 - "exec", "spawn", "check", "read", "write", "kill"
+            action: 操作模式 - "exec", "spawn", "check", "read", "write", "kill", "jobs"
             process_id: spawn 返回的进程ID，用于 check/read/write/kill
             max_lines: 环形缓冲区行数限制
             idle_timeout: 空闲超时（秒），无输出超过此时长则 kill
+            full_output: True 时禁用默认 20k/500 行输出上限
+            max_output_lines: 默认输出行数上限（500）
             use_pty: 是否使用伪终端（仅 Linux/macOS）
 
         Note: **kwargs 用于接收并忽略模型可能传入的额外参数
@@ -133,6 +137,8 @@ class AtomicTools:
                 return await self._write_action(process_id, stdin_input)
             elif action == "kill":
                 return await self._kill_action(process_id)
+            elif action == "jobs":
+                return self.list_jobs()
             else:
                 return {"success": False, "error": f"Unknown action: {action}"}
 
@@ -308,6 +314,12 @@ class AtomicTools:
 
         reader = await self._create_pty_reader(master_fd)
 
+        if stdin_input:
+            try:
+                os.write(master_fd, stdin_input.encode("utf-8"))
+            except Exception:
+                pass
+
         buf_cls = (lambda: collections.deque(maxlen=max_lines)) if max_lines else list
         output_buf = buf_cls()
 
@@ -364,6 +376,119 @@ class AtomicTools:
             "pty": True,
         }
 
+    # ─── background job persistence ─────────────────────────────
+
+    def _jobs_dir(self) -> Path:
+        return self.project_path / ".aacode" / "jobs"
+
+    def _job_meta_path(self, job_id: str) -> Path:
+        return self._jobs_dir() / f"job_{job_id}.json"
+
+    def _job_log_path(self, job_id: str) -> Path:
+        return self._jobs_dir() / f"job_{job_id}.log"
+
+    def _write_job_meta(self, job_id: str, meta: Dict[str, Any]) -> None:
+        try:
+            self._jobs_dir().mkdir(parents=True, exist_ok=True)
+            self._job_meta_path(job_id).write_text(
+                json.dumps(meta, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+    def _read_job_meta(self, job_id: str) -> Optional[Dict[str, Any]]:
+        try:
+            return json.loads(self._job_meta_path(job_id).read_text(encoding="utf-8"))
+        except Exception:
+            return None
+
+    def _mark_job_stopped(self, job_id: str) -> None:
+        meta = self._read_job_meta(job_id)
+        if not meta:
+            return
+        meta["stopped_at"] = time.time()
+        self._write_job_meta(job_id, meta)
+
+    def _pid_alive(self, pid: int) -> bool:
+        if not isinstance(pid, int) or pid <= 0:
+            return False
+        try:
+            os.kill(pid, 0)
+            return True
+        except (ProcessLookupError, PermissionError):
+            return False
+        except Exception:
+            return False
+
+    def _terminate_pid(self, pid: int, grouped: bool = True) -> None:
+        """Terminate a detached job; kill its process group when possible."""
+        if not isinstance(pid, int) or pid <= 0:
+            return
+        try:
+            if os.name != "nt" and grouped:
+                try:
+                    os.killpg(os.getpgid(pid), signal.SIGTERM)
+                    return
+                except (ProcessLookupError, PermissionError):
+                    pass
+                except Exception:
+                    pass
+            os.kill(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            pass
+        except Exception:
+            pass
+
+    def _job_summary(self, job_id: str, bg: Optional[Dict] = None) -> Dict[str, Any]:
+        meta = self._read_job_meta(job_id) or {}
+        if bg:
+            proc = bg.get("process")
+            running = proc.returncode is None if proc else False
+            mode = bg.get("mode", meta.get("mode", "pipe"))
+            command = bg.get("command", meta.get("command", ""))
+            started_at = meta.get("started_at", bg.get("started_at"))
+        else:
+            pid = meta.get("pid")
+            running = not meta.get("stopped_at") and self._pid_alive(pid)
+            mode = meta.get("mode", "unknown")
+            command = meta.get("command", "")
+            started_at = meta.get("started_at")
+        return {
+            "job_id": job_id,
+            "pid": meta.get("pid"),
+            "running": running,
+            "mode": mode,
+            "command": command,
+            "started_at": started_at,
+            "log_path": meta.get("log_path"),
+            "managed_in_this_process": bg is not None,
+        }
+
+    def list_jobs(self, limit: int = 20) -> Dict[str, Any]:
+        """List background jobs from this process and persisted metadata."""
+        limit = max(1, min(int(limit or 20), 100))
+        jobs = {}
+        for job_id, bg in self._background_processes.items():
+            jobs[job_id] = self._job_summary(job_id, bg)
+
+        try:
+            for path in sorted(
+                self._jobs_dir().glob("job_*.json"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            ):
+                job_id = path.stem.removeprefix("job_")
+                if job_id not in jobs:
+                    jobs[job_id] = self._job_summary(job_id)
+                if len(jobs) >= limit:
+                    break
+        except Exception:
+            pass
+
+        ordered = list(jobs.values())[:limit]
+        return {"success": True, "jobs": ordered, "count": len(ordered)}
+
     # ─── action: spawn ──────────────────────────────────────────
 
     async def _spawn_action(self, command, max_lines, idle_timeout, use_pty):
@@ -381,6 +506,9 @@ class AtomicTools:
 
         pid = uuid.uuid4().hex[:12]
         print(f"\U0001f527 Spawning background process [{pid}]: {command}")
+        self._jobs_dir().mkdir(parents=True, exist_ok=True)
+        log_path = self._job_log_path(pid)
+        log_handle = open(log_path, "a", encoding="utf-8", errors="replace", buffering=1)
 
         pty_info = None
         if use_pty and os.name != "nt":
@@ -391,8 +519,14 @@ class AtomicTools:
 
         if use_pty and pty_info:
             return await self._spawn_with_pty(command, pid, max_lines,
-                                              idle_timeout, pty_info)
+                                              idle_timeout, pty_info,
+                                              log_path, log_handle)
 
+        spawn_kwargs = _no_window_kwargs()
+        if os.name != "nt":
+            # Isolate the job in its own process group so kill() can stop
+            # child processes as well as the shell.
+            spawn_kwargs["start_new_session"] = True
         process = await asyncio.create_subprocess_shell(
             command,
             cwd=str(self.project_path),
@@ -400,7 +534,7 @@ class AtomicTools:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env={**os.environ, "PYTHONUNBUFFERED": "1"},
-            **_no_window_kwargs(),
+            **spawn_kwargs,
         )
 
         maxlen = max_lines if max_lines else 10000
@@ -425,6 +559,11 @@ class AtomicTools:
                 text = _smart_decode(line).rstrip()
                 buf.append(text)
                 last_output = time.monotonic()
+                try:
+                    log_handle.write(text + "\n")
+                    log_handle.flush()
+                except Exception:
+                    pass
                 print(f"{prefix}{text}", flush=True)
                 if proc.returncode is not None:
                     break
@@ -436,6 +575,7 @@ class AtomicTools:
             _bg_stream_reader(process.stderr, "\u2570 ", stderr_deque, process)
         )
 
+        started_epoch = time.time()
         self._background_processes[pid] = {
             "process": process,
             "stdout_deque": stdout_deque,
@@ -445,21 +585,37 @@ class AtomicTools:
             "command": command,
             "started_at": time.monotonic(),
             "mode": "pipe",
+            "log_path": log_path,
+            "log_handle": log_handle,
         }
+        self._write_job_meta(
+            pid,
+            {
+                "job_id": pid,
+                "pid": process.pid,
+                "command": command,
+                "mode": "pipe",
+                "started_at": started_epoch,
+                "cwd": str(self.project_path),
+                "log_path": str(log_path.relative_to(self.project_path)),
+            },
+        )
 
         recent_stdout = "\n".join(stdout_deque) if stdout_deque else ""
 
         return {
             "success": True,
             "process_id": pid,
+            "job_id": pid,
             "initial_stdout": recent_stdout,
             "mode": "pipe",
             "command": command,
             "working_directory": str(self.project_path),
+            "log_path": str(log_path.relative_to(self.project_path)),
         }
 
     async def _spawn_with_pty(self, command, pid, max_lines,
-                              idle_timeout, pty_info):
+                              idle_timeout, pty_info, log_path, log_handle):
         """后台 PTY 模式启动"""
         master_fd, slave_fd = pty_info
         cwd = str(self.project_path)
@@ -501,6 +657,11 @@ class AtomicTools:
                 text = _smart_decode(line).rstrip()
                 buf.append(text)
                 last_output = time.monotonic()
+                try:
+                    log_handle.write(text + "\n")
+                    log_handle.flush()
+                except Exception:
+                    pass
                 print(f"\u2502 {text}", flush=True)
                 if proc.returncode is not None:
                     break
@@ -509,6 +670,7 @@ class AtomicTools:
             _bg_pty_reader(reader, output_deque, process, pid)
         )
 
+        started_epoch = time.time()
         self._background_processes[pid] = {
             "process": process,
             "stdout_deque": output_deque,
@@ -519,17 +681,34 @@ class AtomicTools:
             "started_at": time.monotonic(),
             "mode": "pty",
             "pty_reader": reader,
+            "master_fd": master_fd,
+            "log_path": log_path,
+            "log_handle": log_handle,
         }
+        self._write_job_meta(
+            pid,
+            {
+                "job_id": pid,
+                "pid": process.pid,
+                "command": command,
+                "mode": "pty",
+                "started_at": started_epoch,
+                "cwd": str(self.project_path),
+                "log_path": str(log_path.relative_to(self.project_path)),
+            },
+        )
 
         recent_stdout = "\n".join(output_deque) if output_deque else ""
 
         return {
             "success": True,
             "process_id": pid,
+            "job_id": pid,
             "initial_stdout": recent_stdout,
             "mode": "pty",
             "command": command,
             "working_directory": str(self.project_path),
+            "log_path": str(log_path.relative_to(self.project_path)),
         }
 
     # ─── action: check ──────────────────────────────────────────
@@ -542,8 +721,21 @@ class AtomicTools:
 
         bg = self._background_processes.get(process_id)
         if not bg:
-            return {"success": False,
-                    "error": f"Process not found: {process_id}"}
+            meta = self._read_job_meta(process_id)
+            if not meta or meta.get("stopped_at"):
+                return {"success": False,
+                        "error": f"Process not found: {process_id}"}
+            return {
+                "success": True,
+                "process_id": process_id,
+                "job_id": process_id,
+                "running": self._pid_alive(meta.get("pid")),
+                "returncode": None,
+                "command": meta.get("command", ""),
+                "mode": meta.get("mode", "unknown"),
+                "log_path": meta.get("log_path"),
+                "persisted": True,
+            }
 
         proc = bg["process"]
         running = proc.returncode is None
@@ -551,12 +743,17 @@ class AtomicTools:
         result = {
             "success": True,
             "process_id": process_id,
+            "job_id": process_id,
             "running": running,
             "returncode": proc.returncode,
             "command": bg["command"],
             "mode": bg["mode"],
+            "log_path": str(bg["log_path"].relative_to(self.project_path))
+            if bg.get("log_path")
+            else None,
         }
         if not running:
+            self._mark_job_stopped(process_id)
             self._cleanup_process(process_id)
         return result
 
@@ -570,8 +767,36 @@ class AtomicTools:
 
         bg = self._background_processes.get(process_id)
         if not bg:
-            return {"success": False,
-                    "error": f"Process not found: {process_id}"}
+            meta = self._read_job_meta(process_id)
+            if not meta:
+                return {"success": False,
+                        "error": f"Process not found: {process_id}"}
+            log_text = ""
+            log_path = meta.get("log_path")
+            if log_path:
+                try:
+                    lines = (self.project_path / log_path).read_text(
+                        encoding="utf-8", errors="replace"
+                    ).splitlines()
+                    if max_lines:
+                        lines = lines[-max_lines:]
+                    log_text = "\n".join(lines)
+                except Exception:
+                    pass
+            return {
+                "success": True,
+                "process_id": process_id,
+                "job_id": process_id,
+                "stdout": log_text,
+                "stderr": "",
+                "running": not meta.get("stopped_at")
+                and self._pid_alive(meta.get("pid")),
+                "returncode": None,
+                "command": meta.get("command", ""),
+                "mode": meta.get("mode", "unknown"),
+                "log_path": log_path,
+                "persisted": True,
+            }
 
         stdout_deque = bg.get("stdout_deque")
         stderr_deque = bg.get("stderr_deque")
@@ -597,17 +822,22 @@ class AtomicTools:
         running = proc.returncode is None
 
         if not running:
+            self._mark_job_stopped(process_id)
             self._cleanup_process(process_id)
 
         return {
             "success": True,
             "process_id": process_id,
+            "job_id": process_id,
             "stdout": stdout_text,
             "stderr": stderr_text,
             "running": running,
             "returncode": proc.returncode,
             "command": bg["command"],
             "mode": bg["mode"],
+            "log_path": str(bg["log_path"].relative_to(self.project_path))
+            if bg.get("log_path")
+            else None,
         }
 
     # ─── action: write ──────────────────────────────────────────
@@ -633,8 +863,14 @@ class AtomicTools:
 
         try:
             data = stdin_input.encode("utf-8")
-            proc.stdin.write(data)
-            await proc.stdin.drain()
+            master_fd = bg.get("master_fd")
+            if master_fd is not None:
+                # PTY jobs read input from the master side; proc.stdin is None
+                # because stdin was bound to the slave fd at spawn time.
+                os.write(master_fd, data)
+            else:
+                proc.stdin.write(data)
+                await proc.stdin.drain()
         except Exception as e:
             return {"success": False,
                     "error": f"Failed to write to process: {e}"}
@@ -654,12 +890,28 @@ class AtomicTools:
 
         bg = self._background_processes.get(process_id)
         if not bg:
-            return {"success": False,
-                    "error": f"Process not found: {process_id}"}
+            meta = self._read_job_meta(process_id)
+            if not meta:
+                return {"success": False,
+                        "error": f"Process not found: {process_id}"}
+            self._terminate_pid(meta.get("pid"), grouped=True)
+            meta["stopped_at"] = time.time()
+            self._write_job_meta(process_id, meta)
+            return {
+                "success": True,
+                "process_id": process_id,
+                "job_id": process_id,
+                "returncode": None,
+                "command": meta.get("command", ""),
+                "persisted": True,
+            }
 
         proc = bg["process"]
         try:
-            proc.terminate()
+            if os.name != "nt":
+                self._terminate_pid(proc.pid, grouped=True)
+            else:
+                proc.terminate()
             try:
                 await asyncio.wait_for(proc.wait(), timeout=3.0)
             except asyncio.TimeoutError:
@@ -672,6 +924,7 @@ class AtomicTools:
             pass
 
         returncode = proc.returncode
+        self._mark_job_stopped(process_id)
         self._cleanup_process(process_id)
 
         return {
@@ -846,3 +1099,15 @@ class AtomicTools:
             task = bg.get(key)
             if task and not task.done():
                 task.cancel()
+        handle = bg.get("log_handle")
+        if handle:
+            try:
+                handle.close()
+            except Exception:
+                pass
+        master_fd = bg.get("master_fd")
+        if master_fd is not None:
+            try:
+                os.close(master_fd)
+            except Exception:
+                pass

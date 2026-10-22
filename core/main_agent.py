@@ -1133,6 +1133,7 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
         """创建工具集并注册到工具注册表"""
 
         atomic_tools = AtomicTools(project_path, safety_guard)
+        self.atomic_tools = atomic_tools
         code_tools = CodeTools(project_path, safety_guard)
         web_tools = WebTools(project_path, safety_guard)
         todo_tools = TodoTools(project_path, safety_guard,

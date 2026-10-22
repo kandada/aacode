@@ -19,7 +19,7 @@ else:
 
 RUN_SHELL_SCHEMA = ToolSchema(
     name="run_shell",
-    description="Execute a shell command - the universal Swiss Army knife! The tool always returns success=True; check returncode to determine success/failure. Full stdout and stderr are returned for you to process. Common uses: read files (cat/tail), write files (echo/cat), search (grep/ls/find), development (python/pytest/git). Supports pipes and redirection. Filenames with spaces or special characters must be quoted (e.g. cat \"my file.md\").\n\nLifecycle actions for long-running processes (simulators, servers):\n- action=\"exec\" (default): run synchronously and return full output\n- action=\"spawn\": start in background, returns process_id immediately\n- action=\"check\": query status of a spawned process (running/exited)\n- action=\"read\": read latest output from a spawned process\n- action=\"write\": send stdin input to a spawned process\n- action=\"kill\": terminate a spawned process",
+    description="Execute a shell command - the universal Swiss Army knife! The tool always returns success=True; check returncode to determine success/failure. Full stdout and stderr are returned for you to process. Common uses: read files (cat/tail), write files (echo/cat), search (grep/ls/find), development (python/pytest/git). Supports pipes and redirection. Filenames with spaces or special characters must be quoted (e.g. cat \"my file.md\").\n\nLifecycle actions for long-running processes (simulators, servers):\n- action=\"exec\" (default): run synchronously and return full output\n- action=\"spawn\": start in background, returns process_id immediately\n- action=\"check\": query status of a spawned process (running/exited)\n- action=\"read\": read latest output from a spawned process\n- action=\"write\": send stdin input to a spawned process\n- action=\"kill\": terminate a spawned process\n- action=\"jobs\": list background jobs (including persisted jobs from earlier tasks)",
     parameters=[
         ToolParameter(
             name="command",
@@ -94,7 +94,7 @@ RUN_SHELL_SCHEMA = ToolSchema(
             type=str,
             required=False,
             default="exec",
-            description="Operation mode: \"exec\" (default, synchronous execute), \"spawn\" (start background process, return process_id), \"check\" (query process status), \"read\" (read process output), \"write\" (send stdin to process), \"kill\" (terminate process).",
+            description="Operation mode: \"exec\" (default, synchronous execute), \"spawn\" (start background process, return process_id), \"check\" (query process status), \"read\" (read process output), \"write\" (send stdin to process), \"kill\" (terminate process), \"jobs\" (list background jobs).",
             example="spawn",
             aliases=["mode", "op"],
         ),
