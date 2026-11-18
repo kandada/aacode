@@ -1,0 +1,308 @@
+Screen {
+    background: #0b0d10;
+    color: #d7dce2;
+}
+
+#topbar {
+    height: 1;
+    padding: 0 2;
+    background: #0b0d10;
+    color: #6e7681;
+}
+
+#topbar #brand {
+    width: 1fr;
+    min-width: 0;
+    height: 1;
+    overflow: hidden;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+    color: #e6edf3;
+    text-style: bold;
+}
+
+#topbar #header-right {
+    width: 50;
+    height: 1;
+    overflow: hidden;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+    color: #6e7681;
+}
+
+#transcript {
+    height: 1fr;
+    padding: 1 3;
+    background: #0b0d10;
+    scrollbar-size-vertical: 1;
+}
+
+.splash {
+    height: auto;
+    margin: 1 0 2 0;
+}
+
+.splash .title {
+    color: #e6edf3;
+    text-style: bold;
+}
+
+.splash .subtitle {
+    color: #8b949e;
+}
+
+.splash .path {
+    color: #6e7681;
+    margin: 0 0 1 0;
+}
+
+.splash .launch {
+    color: #30363d;
+    margin: 0 0 1 0;
+}
+
+.splash .warning {
+    color: #d29922;
+    margin: 0 0 1 0;
+}
+
+.splash .section {
+    color: #8b949e;
+    text-style: bold;
+    margin: 1 0 0 0;
+}
+
+.splash .example {
+    color: #c9d1d9;
+    margin: 0 0 0 1;
+}
+
+.splash .hint {
+    color: #6e7681;
+    margin: 1 0 0 0;
+}
+
+.msg-user {
+    margin: 1 0 1 0;
+    padding: 0 0 0 1;
+    border-left: solid #4c8dff;
+    color: #e6edf3;
+}
+
+.msg-assistant {
+    margin: 0 0 1 0;
+}
+
+.thinking-label {
+    margin: 1 0 0 0;
+    color: #6e7681;
+    text-style: italic;
+}
+
+.msg-thinking {
+    margin: 0 0 1 0;
+    color: #7d8590;
+    text-style: italic;
+}
+
+.tool-card {
+    height: auto;
+    margin: 0 0 0 0;
+    background: #0e1217;
+    border-left: solid #30363d;
+}
+
+.tool-card.running {
+    border-left: solid #d29922;
+}
+
+.tool-card.success {
+    border-left: solid #3fb950;
+}
+
+.tool-card.error {
+    border-left: solid #f85149;
+}
+
+.tool-card.stopped {
+    border-left: solid #6e7681;
+}
+
+.tool-card Collapsible {
+    height: auto;
+    background: #0e1217;
+    border: none;
+}
+
+.tool-card .tool-body {
+    padding: 0 1;
+    color: #c9d1d9;
+}
+
+.system {
+    margin: 0 0 1 0;
+    color: #6e7681;
+}
+
+.done {
+    margin: 1 0 1 0;
+    color: #3fb950;
+}
+
+.error-text {
+    margin: 0 0 1 0;
+    color: #f85149;
+}
+
+#footer {
+    dock: bottom;
+    height: auto;
+    background: #0b0d10;
+    border-top: none;
+    padding: 1 2 0 2;
+}
+
+#prompt {
+    width: 1fr;
+    height: auto;
+    min-height: 3;
+    max-height: 7;
+    background: #11151a;
+    color: #e6edf3;
+    border: round #30363d;
+    padding: 0 1;
+}
+
+#prompt:focus {
+    border: round #4c8dff;
+    background: #121820;
+}
+
+#slash-menu {
+    display: none;
+    height: auto;
+    max-height: 10;
+    background: #11151a;
+    border: round #30363d;
+    padding: 0 1;
+    margin: 0 0 1 0;
+}
+
+#slash-menu .option-list--option {
+    padding: 0 1;
+}
+
+#slash-menu .option-list--option-highlighted {
+    background: #1f3a5f;
+    color: #e6edf3;
+}
+
+#statusline {
+    height: 1;
+    overflow: hidden;
+    color: #6e7681;
+}
+
+#status-left {
+    width: 1fr;
+    min-width: 0;
+    height: 1;
+    overflow: hidden;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+    color: #6e7681;
+}
+
+#status-right {
+    width: auto;
+    height: 1;
+    padding: 0 0 0 1;
+    overflow: hidden;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+    color: #6e7681;
+    text-align: right;
+}
+
+.modal-screen {
+    align: center middle;
+    background: rgba(0, 0, 0, 0.65);
+}
+
+.modal-panel {
+    width: 78%;
+    max-width: 100;
+    height: auto;
+    max-height: 80%;
+    background: #11151a;
+    border: round #30363d;
+    padding: 1 2;
+}
+
+.setup-panel {
+    height: 80%;
+}
+
+#setup-body {
+    height: 1fr;
+    scrollbar-size-vertical: 1;
+}
+
+#setup-body Markdown {
+    background: transparent;
+}
+
+.modal-title {
+    color: #e6edf3;
+    text-style: bold;
+    margin: 0 0 1 0;
+}
+
+.modal-filter {
+    background: #0b0d10;
+    color: #e6edf3;
+    border: none;
+    padding: 0 1;
+    margin: 0 0 1 0;
+}
+
+.modal-panel OptionList {
+    background: #11151a;
+    height: auto;
+    max-height: 24;
+    border: none;
+}
+
+.modal-hint {
+    color: #6e7681;
+    margin: 1 0 0 0;
+}
+
+.usage-row {
+    color: #d7dce2;
+}
+
+.setup-note {
+    color: #d29922;
+    margin: 0 0 1 0;
+}
+
+.setup-label {
+    color: #8b949e;
+    margin: 1 0 0 0;
+}
+
+.setup-path {
+    color: #6e7681;
+    margin: 0 0 1 0;
+}
+
+.setup-actions {
+    height: auto;
+    margin: 1 0 0 0;
+}
+
+.setup-actions Button {
+    min-width: 12;
+    margin: 0 1 0 0;
+}

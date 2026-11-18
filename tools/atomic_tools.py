@@ -233,6 +233,7 @@ class AtomicTools:
             await self._reap_process(process, 5.0)
             result = {
                 "success": True,
+                "ok": False,
                 "error": f"Command execution timeout ({timeout}s)",
                 "timeout": True,
                 "command": command,

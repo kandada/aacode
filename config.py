@@ -19,6 +19,12 @@ import yaml
 import platformdirs
 from aacode.i18n import t
 
+# Safe defaults for legacy configs that stored these values as 0. Most modern
+# coding models have a ~1M-token window; 32k is a conservative completion cap
+# that is supported by common coding endpoints.
+DEFAULT_CONTEXT_WINDOW = 1_000_000
+DEFAULT_MAX_OUTPUT_TOKENS = 32_000
+
 
 @dataclass
 class ModelConfig:
@@ -31,6 +37,13 @@ class ModelConfig:
     max_tokens: int = 96000
     gateway: str = "openai"  # openai, anthropic
     multimodal: bool = False  # 是否supports multimodal
+    # Per-route context metadata. These are optional for old config files and
+    # are resolved from the selected entry in ``models`` when available.
+    context_window: Optional[int] = None
+    max_output_tokens: Optional[int] = None
+    default_model: str = ""
+    models: Dict[str, Any] = field(default_factory=dict)
+    pricing: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         # 环境变量优先，yaml配置作为后备
@@ -197,6 +210,11 @@ class ToolConfig:
     enable_testing: bool = True
     max_execution_time: int = 60
 
+    # 工具 schema 分组：auto / core / web / full
+    tool_profile: str = "auto"
+    enable_media_tools: bool = True
+    enable_mcp_tools: bool = True
+
 
 @dataclass
 class SafetyConfig:
@@ -215,7 +233,7 @@ class ContextConfig:
     """上下文配置"""
 
     strategy: str = "file_based"  # file_based, memory, hybrid
-    max_context_length: int = 1000000
+    max_context_length: int = DEFAULT_CONTEXT_WINDOW
     compact_threshold: int = 12000
     history_compression: bool = True
     use_vector_store: bool = False
@@ -226,21 +244,66 @@ class ContextConfig:
     compact_protect_first_rounds: int = 1  # 保护前N轮（只保留 system prompt，其余由 AI 摘要承载）
     compact_protect_user_rounds: int = 2  # 保护最近N条用户消息及附带消息（确保最新上下文完整）
 
-    # 检索式上下文控制（不生成摘要，只过滤模型视图）
-    retrieval_trigger_tokens: int = 100000
-    retrieval_keep_tokens: int = 20000
+    # ── 新一代上下文策略（质量优先，同时保留成本上限） ──
+    # trigger = min(window * window_ratio, window - output - headroom)
+    # 默认沿用 DSH 的质量优先比例：尽量用满窗口，而不是固定 100k。
+    window_ratio: float = 0.8
+    headroom_tokens: int = 65536
+    retain_ratio: float = 0.16
+    # 绝对保留值；设置后覆盖 retain_ratio。
+    retain_tokens: Optional[int] = None
+    # 可选成本上限。默认 None = 只按窗口比例；设置后 trigger 取两者较小值。
+    cost_ceiling_tokens: Optional[int] = None
+
+    # 旧字段保留用于兼容；新逻辑使用上面的 window_ratio/headroom/retain。
+    retrieval_trigger_tokens: int = 0
+    retrieval_keep_tokens: int = 0
     retrieval_keep_recent_user_messages: int = 2
     retrieval_keep_min_rounds: int = 4
+
+    # 工具结果治理
+    inline_tool_tokens: int = 6000
+    inline_head_chars: int = 8000
+    inline_tail_chars: int = 4000
+    prune_enabled: bool = True
+    prune_threshold_chars: int = 8192
+    prune_head_chars: int = 4096
+    prune_tail_chars: int = 1024
+    prune_min_rounds: int = 4
+
+    # 结构化摘要（与检索式 cutoff 结合）
+    summary_mode: str = "adaptive"  # off | always | adaptive
+    summary_min_shadow_tokens: int = 30000
+    summary_max_tokens: int = 2000
+    summary_provider: str = ""
+    summary_model: str = ""
+
+    # 失效恢复与任务预算
+    overflow_retries: int = 1
+    task_input_token_budget: int = 0  # 0 = 不限制
+    task_output_token_budget: int = 0
+
+    # 循环与重复调用防护
+    repeat_tool_enabled: bool = True
+    repeat_tool_thresholds: List[int] = field(default_factory=lambda: [3, 5, 8])
+    read_cache_enabled: bool = True
 
 
 @dataclass
 class AgentConfig:
     """Agent配置"""
 
-    max_react_iterations: int = 50
-    max_sub_agent_iterations: int = 30
+    max_react_iterations: int = 300
+    max_sub_agent_iterations: int = 100
     enable_auto_planning: bool = True
     enable_todo_tracking: bool = True
+    # Subagent safety/cost policy.
+    max_sub_agent_depth: int = 2
+    max_sub_agent_concurrency: int = 3
+    subagent_model: str = ""
+    subagent_input_token_budget: int = 400000
+    subagent_output_token_budget: int = 60000
+    subagent_timeout_seconds: int = 600
 
 
 @dataclass
@@ -454,6 +517,7 @@ class Settings:
         self.skills = SkillsConfig()  # Skills配置
         self.multimodal = MultimodalConfig()  # 多模态配置
         self.diff_hook = DiffHookConfig()  # diff 钩子配置
+        self.pricing: Dict[str, Any] = {}  # 模型价格表（按模型名/键）
         self.language: str = "en"    # 语言 en / zh
 
         # 从文件加载配置
@@ -461,6 +525,7 @@ class Settings:
 
         # 从环境变量更新配置（环境变量优先）
         self._load_from_env()
+        self._normalize_compat_settings()
 
         # initialized i18n
         from aacode.i18n import init as i18n_init
@@ -519,9 +584,28 @@ class Settings:
                         except Exception as e:
                             print(t("config.save_error", e=str(e)))
 
+                # Migrate pre-1.9 context settings: the old fixed retrieval
+                # trigger/keep values were cost-first and prevented using the
+                # model window. Unless a new cost ceiling was explicitly set,
+                # move those sessions to the window-ratio policy.
+                try:
+                    ctx = config_data.get("context") if isinstance(config_data, dict) else None
+                    if isinstance(ctx, dict) and "cost_ceiling_tokens" not in ctx:
+                        if int(ctx.get("retrieval_trigger_tokens") or 0) > 0:
+                            ctx["retrieval_trigger_tokens"] = 0
+                            ctx["retrieval_keep_tokens"] = 0
+                            ctx.setdefault("window_ratio", 0.8)
+                            ctx.setdefault("headroom_tokens", 65536)
+                            ctx.setdefault("retain_ratio", 0.16)
+                            with open(self.config_path, "w", encoding="utf-8") as f:
+                                yaml.dump(config_data, f, default_flow_style=False, allow_unicode=True)
+                except Exception:
+                    pass
+
                 # 更新配置
                 if config_data:
                     self._update_from_dict(config_data)
+                    self._normalize_compat_settings()
             except Exception as e:
                 print(t("config.load_error", e=str(e)))
 
@@ -650,21 +734,32 @@ class Settings:
             elif section == "model":
                 # 处理model配置（支持列表+扁平两种结构）
                 if isinstance(values, dict):
+                    # 保留完整模型目录，供路由解析和价格表使用。
+                    if isinstance(values.get("models"), dict):
+                        self.model.models = values["models"]
+                    if values.get("default_model"):
+                        self.model.default_model = str(values["default_model"])
+                    if isinstance(values.get("pricing"), dict):
+                        self.model.pricing = values["pricing"]
                     # 优先从列表结构读取（models + default_model）
                     if "models" in values and "default_model" in values:
                         default_key = values["default_model"]
                         models = values.get("models", {})
                         if isinstance(models, dict) and default_key in models:
                             model_entry = models[default_key]
-                            for k, v in model_entry.items():
-                                if hasattr(self.model, k):
-                                    setattr(self.model, k, v)
+                            if isinstance(model_entry, dict):
+                                for k, v in model_entry.items():
+                                    if hasattr(self.model, k):
+                                        setattr(self.model, k, v)
                     # 扁平字段（temperature / max_tokens / 向后兼容）
                     for key, value in values.items():
-                        if key in ("models", "default_model"):
+                        if key in ("models", "default_model", "pricing"):
                             continue
                         if hasattr(self.model, key):
                             setattr(self.model, key, value)
+            elif section == "pricing":
+                if isinstance(values, dict):
+                    self.pricing = values
             elif section == "language":
                 self.language = str(values) if values else "en"
             elif hasattr(self, section):
@@ -674,19 +769,124 @@ class Settings:
                         if hasattr(section_obj, key):
                             setattr(section_obj, key, value)
 
+    def _normalize_compat_settings(self) -> None:
+        """Repair legacy null/zero values in memory without rewriting YAML.
+
+        Old configs often stored zero for values that were introduced later, or
+        null for optional policy fields. Runtime code should see the same safe
+        defaults as a freshly generated config.
+        """
+        def _as_int(value: Any, default: int) -> int:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return default
+
+        def _as_float(value: Any, default: float) -> float:
+            try:
+                number = float(value)
+                return number if number > 0 else default
+            except (TypeError, ValueError):
+                return default
+
+        if _as_int(self.model.max_tokens, 0) <= 0:
+            self.model.max_tokens = DEFAULT_MAX_OUTPUT_TOKENS
+        if self.model.context_window is not None and _as_int(self.model.context_window, 0) <= 0:
+            self.model.context_window = None
+        if self.model.max_output_tokens is not None and _as_int(self.model.max_output_tokens, 0) <= 0:
+            self.model.max_output_tokens = None
+
+        if _as_int(self.context.max_context_length, 0) <= 0:
+            self.context.max_context_length = DEFAULT_CONTEXT_WINDOW
+        ratio = _as_float(self.context.window_ratio, 0.8)
+        self.context.window_ratio = ratio if ratio <= 1 else 0.8
+        self.context.headroom_tokens = max(0, _as_int(self.context.headroom_tokens, 65536))
+        retain = _as_float(self.context.retain_ratio, 0.16)
+        self.context.retain_ratio = retain if retain < self.context.window_ratio else 0.16
+        mode = str(self.context.summary_mode or "adaptive").lower()
+        self.context.summary_mode = (
+            mode if mode in ("off", "adaptive", "always") else "adaptive"
+        )
+        for key in ("compact_trigger_tokens", "compact_keep_rounds", "compact_protect_first_rounds", "compact_protect_user_rounds"):
+            setattr(self.context, key, max(0, _as_int(getattr(self.context, key, 0), 0)))
+
+    def get_model_profile(self, name: Optional[str] = None) -> Dict[str, Any]:
+        """Resolve the effective config for one model name/key.
+
+        The flat ``model`` section remains the fallback for old configs. A
+        matching entry in ``model.models`` overrides route metadata such as
+        ``context_window``, ``max_output_tokens`` and ``pricing``.
+        """
+        target = name or os.getenv("LLM_MODEL_NAME") or self.model.name
+        entry: Dict[str, Any] = {}
+        models = self.model.models if isinstance(self.model.models, dict) else {}
+        if models:
+            for key, candidate in models.items():
+                if not isinstance(candidate, dict):
+                    continue
+                candidate_name = str(candidate.get("name") or key)
+                if target in (key, candidate_name):
+                    entry = dict(candidate)
+                    break
+            if not entry and self.model.default_model in models:
+                candidate = models[self.model.default_model]
+                if isinstance(candidate, dict):
+                    entry = dict(candidate)
+        def _positive_int(value: Any) -> Optional[int]:
+            """Treat 0/negative/empty legacy values as unset."""
+            try:
+                number = int(value)
+            except (TypeError, ValueError):
+                return None
+            return number if number > 0 else None
+
+        # Old configs may contain context_window/max_output_tokens/max_tokens
+        # as 0. Treat those as unset and resolve safe defaults; otherwise the
+        # value propagates to the API as max_tokens=0 and requests fail.
+        entry_context = _positive_int(
+            entry.get("context_window") or entry.get("contextWindow")
+        )
+        entry_max_output = _positive_int(
+            entry.get("max_output_tokens") or entry.get("maxOutputTokens")
+        )
+        entry_max_tokens = _positive_int(entry.get("max_tokens"))
+        base_max_tokens = (
+            _positive_int(self.model.max_tokens) or DEFAULT_MAX_OUTPUT_TOKENS
+        )
+        max_tokens = entry_max_tokens or entry_max_output or base_max_tokens
+        max_output_tokens = (
+            entry_max_output
+            or entry_max_tokens
+            or _positive_int(self.model.max_output_tokens)
+            or DEFAULT_MAX_OUTPUT_TOKENS
+        )
+        context_window = (
+            entry_context
+            or _positive_int(self.model.context_window)
+            or int(self.context.max_context_length or DEFAULT_CONTEXT_WINDOW)
+        )
+
+        merged = {
+            "name": entry.get("name") or self.model.name or "deepseek-chat",
+            "api_key": os.getenv("LLM_API_KEY") or entry.get("api_key") or self.model.api_key,
+            "base_url": os.getenv("LLM_API_URL") or entry.get("base_url") or self.model.base_url,
+            "temperature": self.model.temperature,
+            "max_tokens": max_tokens,
+            "context_window": context_window,
+            "max_output_tokens": max_output_tokens,
+            "gateway": os.getenv("LLM_GATEWAY") or entry.get("gateway") or self.model.gateway or "openai",
+            "multimodal": bool(entry.get("multimodal", self.model.multimodal)),
+        }
+        pricing = entry.get("pricing")
+        if not isinstance(pricing, dict):
+            pricing = (self.model.pricing or {}).get(str(merged.get("name"))) or (self.model.pricing or {}).get(str(target)) or {}
+        merged["pricing"] = pricing
+        return merged
+
     @property
     def DEFAULT_MODEL(self):
         """Get 默认模型配置"""
-        # 环境变量优先，yaml配置作为后备
-        return {
-            "name": os.getenv("LLM_MODEL_NAME") or self.model.name or "deepseek-chat",
-            "api_key": os.getenv("LLM_API_KEY") or self.model.api_key,
-            "base_url": os.getenv("LLM_API_URL") or self.model.base_url,
-            "temperature": self.model.temperature,
-            "max_tokens": self.model.max_tokens,
-            "gateway": os.getenv("LLM_GATEWAY") or self.model.gateway or "openai",
-            "multimodal": self.model.multimodal,
-        }
+        return self.get_model_profile()
 
     @property
     def MAX_REACT_ITERATIONS(self):
@@ -738,6 +938,38 @@ class Settings:
             errors.append(
                 "Web search is enabled but the search API URL is not configured. Please set the SEARCHXNG_URL environment variable or set tools.search_api_url in the config file"
             )
+
+        # Context policy sanity: ratios and retention must be coherent.
+        try:
+            ratio = float(self.context.window_ratio)
+            retain_ratio = float(self.context.retain_ratio)
+            if not (0 < ratio <= 1):
+                errors.append("context.window_ratio must be in (0, 1]")
+            if not (0 < retain_ratio < ratio):
+                errors.append("context.retain_ratio must be in (0, window_ratio)")
+            if int(self.context.headroom_tokens) < 0:
+                errors.append("context.headroom_tokens must be non-negative")
+            if str(self.context.summary_mode).lower() not in ("off", "adaptive", "always"):
+                errors.append("context.summary_mode must be off, adaptive, or always")
+        except (TypeError, ValueError):
+            errors.append("context window/retain ratios and headroom must be numeric")
+
+        # The model must have room for the reserved output plus compaction headroom.
+        profile = self.get_model_profile()
+        try:
+            window = int(profile.get("context_window") or 1_000_000)
+            output = int(profile.get("max_output_tokens") or profile.get("max_tokens") or 0)
+            headroom = int(self.context.headroom_tokens or 0)
+            if window <= 0:
+                errors.append("Model context_window must be a positive integer")
+            elif output + headroom >= window:
+                errors.append(
+                    f"Model context_window ({window}) is too small for "
+                    f"max_output_tokens ({output}) + headroom ({headroom}); "
+                    "reduce the output cap or headroom, or choose a larger-window model"
+                )
+        except (TypeError, ValueError):
+            errors.append("Model context_window / max_output_tokens must be integers")
 
         return errors
 

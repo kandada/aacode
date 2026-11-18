@@ -14,24 +14,32 @@
 """
 
 import json
+import re
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
+from .token_usage import estimate_text_tokens
 
-def estimate_tokens(encoding, messages: List[Dict]) -> int:
+
+def estimate_tokens(encoding, messages: List[Dict], include_reasoning: bool = True) -> int:
     """
     估算消息列表的 token 数（含 tool_calls / tool_call_id / reasoning_content 等结构化字段）。
 
     Args:
-        encoding: tiktoken encoding 对象，可以为 None（回退到字符数 // 4）
+        encoding: tiktoken encoding 对象，可以为 None（回退到 CJK-aware 估算）
         messages: 消息列表
+        include_reasoning: 是否把 reasoning_content 计入 input。DeepSeek 对
+            reasoning 不计 input，阈值判断应传 False。
 
     Returns:
         估算的 token 数
     """
     total_tokens = 0
     for msg in messages:
-        for field in ("content", "reasoning_content"):
+        fields = ["content"]
+        if include_reasoning:
+            fields.append("reasoning_content")
+        for field in fields:
             val = msg.get(field, "")
             if val:
                 total_tokens += _encode_str(encoding, val)
@@ -48,16 +56,16 @@ def estimate_tokens(encoding, messages: List[Dict]) -> int:
     return total_tokens
 
 
+def estimate_input_tokens(encoding, messages: List[Dict]) -> int:
+    """Prompt-side estimate: reasoning is output-side and excluded."""
+    return estimate_tokens(encoding, messages, include_reasoning=False)
+
+
 def _encode_str(encoding, text: str) -> int:
-    """编码字符串为 token 数，失败时回退到字符数 // 4。"""
+    """编码字符串为 token 数，失败时回退到 CJK-aware 估算。"""
     if not text:
         return 0
-    if encoding is None:
-        return len(text) // 4
-    try:
-        return len(encoding.encode(text))
-    except Exception:
-        return len(text) // 4
+    return estimate_text_tokens(text, encoding)
 
 
 def split_into_rounds(messages: List[Dict]) -> List[List[Dict]]:
@@ -295,7 +303,7 @@ def is_real_user_message(message: Dict) -> bool:
     if message.get("role") != "user":
         return False
     text = _message_text(message)
-    return not text.startswith("[System]") and not text.startswith("<conversation-checkpoint>")
+    return not text.startswith("[System]") and not text.startswith("<conversation-checkpoint>") and not text.startswith("[SYSTEM")
 
 
 def _real_user_indices(messages: List[Dict]) -> List[int]:
@@ -337,7 +345,7 @@ def estimate_retrieval_view_tokens(
             view.append(messages[index])
             index += 1
     view.extend(messages[cutoff:])
-    return estimate_tokens(encoding, view)
+    return estimate_input_tokens(encoding, view)
 
 
 def compute_retrieval_cutoff(
@@ -454,3 +462,36 @@ def render_retrieval_view(
 
     view.extend(messages[cutoff:])
     return view
+
+
+def canonical_json_value(value):
+    """Deep key-sorted JSON for stable tool-call comparison and hashing."""
+    def _sort(item):
+        if isinstance(item, list):
+            return [_sort(x) for x in item]
+        if isinstance(item, dict):
+            return {k: _sort(item[k]) for k in sorted(item)}
+        return item
+    return json.dumps(_sort(value), ensure_ascii=False, sort_keys=True, default=str)
+
+
+def tool_repeat_key(name: str, arguments) -> str:
+    """Stable key for consecutive repeat-call detection."""
+    return f"{name}:{canonical_json_value(arguments)}"
+
+
+def message_text(message: Dict) -> str:
+    content = message.get("content") or ""
+    if isinstance(content, str):
+        return content
+    try:
+        return json.dumps(content, ensure_ascii=False)
+    except Exception:
+        return str(content)
+
+
+CJK_RE = re.compile(r"[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]")
+
+
+def contains_cjk(text: str) -> bool:
+    return bool(CJK_RE.search(text or ""))

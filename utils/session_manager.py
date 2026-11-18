@@ -18,6 +18,14 @@ from datetime import datetime
 import uuid
 from dataclasses import dataclass
 from aacode.i18n import t
+from aacode.utils.token_usage import (
+    estimate_text_tokens,
+    empty_usage,
+    merge_usage,
+    cache_hit_rate,
+    canonical_from_normalized,
+    usage_cost,
+)
 
 
 def _load_tiktoken_encoding():
@@ -79,9 +87,11 @@ def _ensure_iso_timestamp(ts: Any) -> str:
 
     反序列化时调用，确保内存中全用统一格式。
     """
+    if ts is None:
+        return ""
     if isinstance(ts, (int, float)):
         return datetime.fromtimestamp(ts).isoformat(timespec='seconds')
-    return ts
+    return str(ts)
 
 
 def _timestamp_sort_key(ts: Any) -> float:
@@ -152,6 +162,9 @@ class SessionMessage:
     tool_calls: Optional[List[Dict]] = None       # assistant 消息的 tool_calls
     tool_call_id: Optional[str] = None             # tool 消息的 tool_call_id
     reasoning_content: Optional[str] = None         # assistant 消息的 reasoning_content
+    # Provider usage for the assistant call that produced this message.
+    usage: Optional[Dict[str, Any]] = None
+    model: Optional[str] = None
 
 
 @dataclass
@@ -166,6 +179,10 @@ class SessionSummary:
     task_count: int
     title: str
     status: str  # active, completed, archived
+    calls: int = 0
+    cache_hit_rate: float = 0.0
+    total_cost: float = 0.0
+    last_context_tokens: int = 0
 
 
 class SessionManager:
@@ -183,6 +200,10 @@ class SessionManager:
         self.current_messages: List[SessionMessage] = []
         # 模型视图 cutoff（不删除任何消息，只记录从哪里开始发送）
         self.context_checkpoint: Optional[Dict[str, Any]] = None
+        # Session bootstrap (system prompt snapshot; see bootstrap freeze).
+        self.bootstrap: Optional[Dict[str, Any]] = None
+        # Usage attributed to child agents, folded into the parent session.
+        self.subagent_usage: Dict[str, Any] = empty_usage()
 
         # 会话索引
         self.sessions_index: Dict[str, SessionSummary] = {}
@@ -200,11 +221,38 @@ class SessionManager:
             try:
                 with open(index_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
+                    allowed = set(SessionSummary.__dataclass_fields__.keys())
                     for session_id, session_data in data.items():
+                        if not isinstance(session_data, dict):
+                            continue
+                        # Old indexes may predate task_count/title/status or
+                        # contain null counters. Fill required dataclass fields
+                        # instead of dropping the whole index on TypeError.
+                        session_data.setdefault("session_id", session_id)
+                        session_data.setdefault("created_at", "")
+                        session_data.setdefault("last_activity", "")
+                        session_data.setdefault("total_messages", 0)
+                        session_data.setdefault("total_tokens", 0)
+                        session_data.setdefault("task_count", 0)
+                        session_data.setdefault("title", "")
+                        session_data.setdefault("status", "active")
+                        if session_data.get("title") is None:
+                            session_data["title"] = ""
+                        if session_data.get("status") not in ("active", "completed", "archived"):
+                            session_data["status"] = "active"
+                        for key in ("total_messages", "total_tokens", "task_count", "calls"):
+                            try:
+                                session_data[key] = int(session_data.get(key) or 0)
+                            except (TypeError, ValueError):
+                                session_data[key] = 0
                         # 兼容旧版 float 时间戳，反序列化时统一转为 ISO 8601 字符串
                         session_data["created_at"] = _ensure_iso_timestamp(session_data.get("created_at", ""))
                         session_data["last_activity"] = _ensure_iso_timestamp(session_data.get("last_activity", ""))
-                        self.sessions_index[session_id] = SessionSummary(**session_data)
+                        filtered = {k: v for k, v in session_data.items() if k in allowed}
+                        try:
+                            self.sessions_index[session_id] = SessionSummary(**filtered)
+                        except Exception as e:
+                            print(t("session.load_error", e=str(e)))
             except Exception as e:
                 print(t("session.load_error", e=str(e)))
 
@@ -223,6 +271,10 @@ class SessionManager:
                     "task_count": session_summary.task_count,
                     "title": session_summary.title,
                     "status": session_summary.status,
+                    "calls": getattr(session_summary, "calls", 0),
+                    "cache_hit_rate": getattr(session_summary, "cache_hit_rate", 0.0),
+                    "total_cost": getattr(session_summary, "total_cost", 0.0),
+                    "last_context_tokens": getattr(session_summary, "last_context_tokens", 0),
                 }
 
             _merge_sessions_index(index_file, our_data)
@@ -230,16 +282,10 @@ class SessionManager:
             print(f"⚠️ Failed to save session index: {e}")
 
     def _count_tokens(self, text: str) -> int:
-        """计算文本的token数量"""
+        """计算文本的 token 数量（CJK-aware，避免中文低估 2-3 倍）。"""
         if self._encoding is None:
             self._encoding = _load_tiktoken_encoding()
-        if self._encoding:
-            try:
-                return len(self._encoding.encode(text))
-            except Exception:
-                pass
-        # 回退到简单估算（大致4字符=1token）
-        return len(text) // 4
+        return estimate_text_tokens(text or "", self._encoding)
 
     def _get_total_tokens(self) -> int:
         """获取当前会话的总token数"""
@@ -255,6 +301,42 @@ class SessionManager:
         self.context_checkpoint = checkpoint if isinstance(checkpoint, dict) else None
         await self._save_session()
         self._save_sessions_index()
+
+    def get_bootstrap(self) -> Optional[Dict[str, Any]]:
+        """Return the frozen session bootstrap (system prompt snapshot)."""
+        return self.bootstrap if isinstance(self.bootstrap, dict) else None
+
+    async def set_bootstrap(self, bootstrap: Optional[Dict[str, Any]]) -> None:
+        self.bootstrap = bootstrap if isinstance(bootstrap, dict) else None
+        await self._save_session()
+
+    def get_usage_summary(self) -> Dict[str, Any]:
+        """Fold provider usage from persisted assistant messages and subagents."""
+        total = empty_usage()
+        last_context = 0
+        for message in self.current_messages:
+            usage = message.usage
+            if not isinstance(usage, dict) or not usage:
+                continue
+            # Older sessions stored the normalized provider shape
+            # (input_tokens/cache_miss_tokens/...), not the canonical shape.
+            if "prompt_total" not in usage and "uncached_input" not in usage:
+                usage = canonical_from_normalized(usage, provider=str(message.model or ""))
+            merge_usage(total, usage)
+            if usage:
+                last_context = int(usage.get("prompt_total") or last_context)
+        if isinstance(self.subagent_usage, dict) and int(self.subagent_usage.get("calls", 0) or 0) > 0:
+            sub = self.subagent_usage
+            if "prompt_total" not in sub and "uncached_input" not in sub:
+                sub = canonical_from_normalized(sub) or {}
+            merge_usage(total, sub)
+        total["cache_hit_rate"] = cache_hit_rate(total)
+        return total
+
+    def record_subagent_usage(self, usage: Optional[Dict[str, Any]]) -> None:
+        """Attribute a completed child agent's usage to this parent session."""
+        if usage:
+            merge_usage(self.subagent_usage, usage)
 
     async def create_session(self, task: str, title: Optional[str] = None) -> str:
         """创建新会话"""
@@ -281,6 +363,8 @@ class SessionManager:
         self.current_session_id = session_id
         self.current_messages = []
         self.context_checkpoint = None
+        self.bootstrap = None
+        self.subagent_usage = empty_usage()
 
         # 不再创建占位 system 消息。
         # 第一条 system prompt 完全由代码规则确定（SYSTEM_PROMPT + skills + working_dir
@@ -334,6 +418,8 @@ class SessionManager:
         tool_calls: Optional[List[Dict]] = None,
         tool_call_id: Optional[str] = None,
         reasoning_content: Optional[str] = None,
+        usage: Optional[Dict[str, Any]] = None,
+        model: Optional[str] = None,
     ) -> bool:
         """添加消息到当前会话"""
         if not self.current_session_id:
@@ -351,6 +437,8 @@ class SessionManager:
             tool_calls=tool_calls,
             tool_call_id=tool_call_id,
             reasoning_content=reasoning_content,
+            usage=usage,
+            model=model,
         )
 
         self.current_messages.append(message)
@@ -404,6 +492,10 @@ class SessionManager:
                 entry["tool_call_id"] = msg.tool_call_id
             if msg.reasoning_content:
                 entry["reasoning_content"] = msg.reasoning_content
+            if msg.usage:
+                entry["usage"] = msg.usage
+            if msg.model:
+                entry["model"] = msg.model
             messages.append(entry)
 
         return messages
@@ -485,12 +577,18 @@ class SessionManager:
 
         session_file = self.sessions_dir / f"{self.current_session_id}.json"
 
+        current_summary = self.sessions_index.get(self.current_session_id)
         session_data = {
             "session_id": self.current_session_id,
-            "created_at": self.sessions_index.get(
-                self.current_session_id, SessionSummary("", "", "", 0, 0, 0, "", "")
-            ).created_at,
+            "created_at": current_summary.created_at if current_summary else "",
+            "title": current_summary.title if current_summary else "",
+            "status": current_summary.status if current_summary else "active",
+            "total_messages": len(self.current_messages),
+            "total_tokens": self._get_total_tokens(),
             "context_checkpoint": self.context_checkpoint,
+            "bootstrap": self.bootstrap,
+            "subagent_usage": self.subagent_usage,
+            "usage_summary": self.get_usage_summary(),
             "messages": [
                 {
                     "role": msg.role,
@@ -500,6 +598,8 @@ class SessionManager:
                     "tool_calls": msg.tool_calls,
                     "tool_call_id": msg.tool_call_id,
                     "reasoning_content": msg.reasoning_content,
+                    "usage": msg.usage,
+                    "model": msg.model,
                 }
                 for msg in self.current_messages
             ],
@@ -539,22 +639,44 @@ class SessionManager:
             # 如果 structured_messages 存在，以它为准（它已经是我们需要的结构化格式）；
             # 否则走 messages 数组。
             raw_messages = session_data.get("structured_messages") or session_data.get("messages", [])
+            if not isinstance(raw_messages, list):
+                raw_messages = []
 
             for msg_data in raw_messages:
-                msg_data["timestamp"] = _ensure_iso_timestamp(msg_data.get("timestamp"))
+                if not isinstance(msg_data, dict):
+                    continue
+                role = str(msg_data.get("role") or "").strip()
+                if not role:
+                    continue
+                try:
+                    tokens = int(msg_data.get("tokens") or 0)
+                except (TypeError, ValueError):
+                    tokens = 0
+                tool_calls = msg_data.get("tool_calls")
+                if not isinstance(tool_calls, list):
+                    tool_calls = None
+                usage = msg_data.get("usage")
+                if not isinstance(usage, dict):
+                    usage = None
                 message = SessionMessage(
-                    role=msg_data["role"],
-                    content=msg_data.get("content", ""),
-                    timestamp=msg_data["timestamp"],
-                    tokens=msg_data.get("tokens", 0),
-                    tool_calls=msg_data.get("tool_calls"),
+                    role=role,
+                    content=msg_data.get("content") or "",
+                    timestamp=_ensure_iso_timestamp(msg_data.get("timestamp")),
+                    tokens=max(0, tokens),
+                    tool_calls=tool_calls,
                     tool_call_id=msg_data.get("tool_call_id"),
                     reasoning_content=msg_data.get("reasoning_content"),
+                    usage=usage,
+                    model=msg_data.get("model"),
                 )
                 self.current_messages.append(message)
 
             checkpoint = session_data.get("context_checkpoint")
             self.context_checkpoint = checkpoint if isinstance(checkpoint, dict) else None
+            bootstrap = session_data.get("bootstrap")
+            self.bootstrap = bootstrap if isinstance(bootstrap, dict) else None
+            subagent_usage = session_data.get("subagent_usage")
+            self.subagent_usage = subagent_usage if isinstance(subagent_usage, dict) else empty_usage()
             return True
 
         except Exception as e:
@@ -575,6 +697,10 @@ class SessionManager:
                     "total_tokens": session_summary.total_tokens,
                     "task_count": session_summary.task_count,
                     "status": session_summary.status,
+                    "calls": getattr(session_summary, "calls", 0),
+                    "cache_hit_rate": getattr(session_summary, "cache_hit_rate", 0.0),
+                    "total_cost": getattr(session_summary, "total_cost", 0.0),
+                    "last_context_tokens": getattr(session_summary, "last_context_tokens", 0),
                 }
             )
 
@@ -655,15 +781,34 @@ class SessionManager:
             return {}
 
         messages = await self.get_messages(session_id, include_system=True)
+        indexed = self.sessions_index.get(session_id)
+        raw_messages = session_summary.get("structured_messages") or session_summary.get("messages") or []
+        if not isinstance(raw_messages, list):
+            raw_messages = []
+        computed_tokens = sum(
+            int(m.get("tokens") or 0)
+            for m in raw_messages
+            if isinstance(m, dict)
+        )
+        file_total_messages = session_summary.get("total_messages")
+        file_total_tokens = session_summary.get("total_tokens")
 
         return {
             "session_id": session_id,
-            "title": session_summary.get("title", ""),
+            "title": session_summary.get("title") or (indexed.title if indexed else ""),
             "messages": messages,
-            "total_messages": session_summary.get("total_messages", 0),
-            "total_tokens": session_summary.get("total_tokens", 0),
-            "created_at": session_summary.get("created_at", ""),
-            "last_activity": session_summary.get("last_activity", ""),
+            "total_messages": (
+                int(file_total_messages)
+                if file_total_messages not in (None, 0, "0")
+                else (indexed.total_messages if indexed else len(raw_messages))
+            ),
+            "total_tokens": (
+                int(file_total_tokens)
+                if file_total_tokens not in (None, 0, "0")
+                else (indexed.total_tokens if indexed else computed_tokens)
+            ),
+            "created_at": session_summary.get("created_at") or (indexed.created_at if indexed else ""),
+            "last_activity": session_summary.get("last_activity") or (indexed.last_activity if indexed else ""),
         }
 
     async def count_tokens(self, session_id: Optional[str] = None) -> int:
@@ -682,7 +827,17 @@ class SessionManager:
         try:
             with open(session_file, "r", encoding="utf-8") as f:
                 session_data = json.load(f)
-            return session_data.get("total_tokens", 0)
+            stored = session_data.get("total_tokens")
+            if stored not in (None, 0, "0"):
+                return int(stored)
+            raw_messages = session_data.get("structured_messages") or session_data.get("messages") or []
+            if isinstance(raw_messages, list):
+                return sum(
+                    int(m.get("tokens") or 0)
+                    for m in raw_messages
+                    if isinstance(m, dict)
+                )
+            return 0
         except Exception:
             return 0
 
@@ -731,13 +886,32 @@ class SessionManager:
         except Exception:
             return {}
 
+        usage = session_summary.get("usage_summary") or self.get_usage_summary()
+        indexed = self.sessions_index.get(self.current_session_id)
+        raw_messages = session_summary.get("structured_messages") or session_summary.get("messages") or []
+        if not isinstance(raw_messages, list):
+            raw_messages = []
+        computed_tokens = sum(
+            int(m.get("tokens") or 0)
+            for m in raw_messages
+            if isinstance(m, dict)
+        )
         return {
             "session_id": self.current_session_id,
-            "title": session_summary.get("title", ""),
-            "total_messages": session_summary.get("total_messages", 0),
-            "total_tokens": session_summary.get("total_tokens", 0),
+            "title": session_summary.get("title") or (indexed.title if indexed else ""),
+            "total_messages": (
+                int(session_summary["total_messages"])
+                if session_summary.get("total_messages") not in (None, 0, "0")
+                else (indexed.total_messages if indexed else len(raw_messages))
+            ),
+            "total_tokens": (
+                int(session_summary["total_tokens"])
+                if session_summary.get("total_tokens") not in (None, 0, "0")
+                else (indexed.total_tokens if indexed else computed_tokens)
+            ),
             "current_tokens": self._get_total_tokens(),
             "max_tokens": self.max_tokens,
-            "created_at": session_summary.get("created_at", ""),
-            "last_activity": session_summary.get("last_activity", ""),
+            "created_at": session_summary.get("created_at") or (indexed.created_at if indexed else ""),
+            "last_activity": session_summary.get("last_activity") or (indexed.last_activity if indexed else ""),
+            "usage": usage,
         }

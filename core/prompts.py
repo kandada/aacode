@@ -80,6 +80,13 @@ Available tools:
     - read_history: Read a bounded message range by index
     - Never cat session JSON; use these tools instead.
 
+🔎 Tool discovery (profile-stable):
+- If you need a capability that is not advertised in this request, use:
+  1. list_tool_schemas(query="browser") — list active and profile-hidden tools
+  2. get_tool_schema(name="browser_call") — inspect exact parameters
+  3. call_tool(name="browser_call", arguments={...}) — invoke it
+- These three meta-tools are always available. Use call_tool only after validating the schema; do not call the meta-tools recursively.
+
 ⚡ Always use native function calls (tool_calls) — do NOT output JSON/text-formatted tool call info in your response. The system automatically executes tools via the API's tool_calls mechanism and returns results as tool role messages.
 
 Older messages may be omitted from context. Full history is persisted. Use search_history / read_history to retrieve older context; never cat session JSON.

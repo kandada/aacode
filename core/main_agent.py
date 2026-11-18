@@ -23,6 +23,7 @@ from aacode.utils.colors import style, RED, GREEN, BLUE
 from aacode.utils.session_manager import SessionMessage
 from aacode.utils.thinking_extractor import OpenAIThinkingExtractor
 from aacode.utils.usage_tracker import normalize_anthropic_usage, normalize_openai_usage
+from aacode.utils.token_usage import fingerprint, cache_hit_rate, usage_cost
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Any, Optional
@@ -60,8 +61,10 @@ import anthropic
 # ─────────────────────────────────────────────────────────────────
 
 _is_tty = sys.stdout.isatty()
+_JSON_EVENTS = os.getenv("AACODE_JSON_EVENTS") == "1"
+_ANSI_RE = __import__("re").compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
-def _stream_print(text, newline_after=False):
+def _stream_print(text, newline_after=False, kind="text"):
     """
     流式输出模型 token。
     
@@ -71,6 +74,13 @@ def _stream_print(text, newline_after=False):
     
     Only for model streaming token output. System marker lines (emoji prefix) should use print() directly.
     """
+    if _JSON_EVENTS:
+        try:
+            text = _ANSI_RE.sub("", str(text))
+            print(json.dumps({"type": "text_delta", "kind": kind, "text": text}, ensure_ascii=False), flush=True)
+        except Exception:
+            pass
+        return
     if _is_tty:
         print(text, end="", flush=True)
     else:
@@ -84,7 +94,7 @@ def _stream_print(text, newline_after=False):
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).parent.parent.parent))
     from core.agent import BaseAgent
-    from core.react_loop import AsyncReActLoop
+    from core.react_loop import AsyncReActLoop, ContextOverflowError, ModelSwitchError
     from core.multi_agent import MultiAgentSystem
     from core.prompts import SYSTEM_PROMPT_FOR_MAIN_AGENT
     from tools.atomic_tools import AtomicTools
@@ -104,7 +114,7 @@ if __package__ in (None, ""):
     from config import settings
 else:
     from .agent import BaseAgent
-    from .react_loop import AsyncReActLoop
+    from .react_loop import AsyncReActLoop, ContextOverflowError, ModelSwitchError
     from .multi_agent import MultiAgentSystem
     from .prompts import SYSTEM_PROMPT_FOR_MAIN_AGENT
     from ..tools.atomic_tools import AtomicTools
@@ -122,6 +132,54 @@ else:
     from ..tools.history_tools import HistoryTools
     from .sub_agent import SubAgent
     from ..config import settings
+
+
+CORE_TOOL_NAMES = {
+    "list_tool_schemas", "get_tool_schema", "call_tool",
+    "run_shell", "run_skills", "delegate_task",
+    "add_todo_item", "mark_todo_completed", "update_todo_item",
+    "get_todo_summary", "list_todo_files", "add_execution_record",
+    "search_history", "read_history",
+}
+WEB_TOOL_NAMES = {
+    "search_web", "fetch_url", "fetch_rendered",
+    "browser_call", "browser_tools", "ax_act",
+}
+MEDIA_TOOL_NAMES = {
+    "understand_image", "understand_video",
+    "understand_ui_design", "analyze_image_consistency",
+}
+MCP_TOOL_NAMES = {"list_mcp_tools", "call_mcp_tool", "get_mcp_status"}
+
+
+def select_tool_names(profile: str = "auto", enable_media: bool = True, enable_mcp: bool = True) -> set:
+    """Select the model-facing tool schemas for this session.
+
+    The active list is stable for the session so the provider prefix cache and
+    tool declarations do not churn. ``full`` keeps every schema; ``core`` is
+    the minimal coding loop; ``auto`` adds web tools but leaves heavy media/MCP
+    schemas opt-in.
+    """
+    profile = (profile or "auto").lower()
+    if profile == "core":
+        return set(CORE_TOOL_NAMES)
+    if profile == "auto":
+        # Everyday coding: core + the three lightweight web tools. Browser,
+        # accessibility, media and MCP schemas are opt-in because they are
+        # large and rarely used together.
+        return set(CORE_TOOL_NAMES | {"search_web", "fetch_url", "fetch_rendered"})
+    names = set(CORE_TOOL_NAMES | WEB_TOOL_NAMES)
+    if enable_mcp:
+        names |= MCP_TOOL_NAMES
+    if profile == "web":
+        return names
+    if profile == "full":
+        if enable_media:
+            names |= MEDIA_TOOL_NAMES
+        names |= MCP_TOOL_NAMES
+        return names
+    # Unknown profile names fall back to the safe auto set.
+    return set(CORE_TOOL_NAMES | {"search_web", "fetch_url", "fetch_rendered"})
 
 
 def _make_anthropic_client(api_key: str, base_url: str):
@@ -162,9 +220,38 @@ class MainAgent(BaseAgent):
         **kwargs,
     ):
 
-        # initialized模型调用器
-        model_caller = self._create_model_caller(model_config)
+        # Resolve the exact route before creating the caller so prompt/tool
+        # fingerprints use the same model metadata as the requests.
         self.model_config = model_config
+        self.event_callback = None
+        self.model_profile = settings.get_model_profile(model_config.get("name"))
+        media_capable = bool(
+            getattr(settings.tools, "enable_media_tools", True)
+            and self.model_config.get("multimodal")
+            and getattr(settings.multimodal, "enabled", True)
+        )
+        self.active_tool_names = select_tool_names(
+            getattr(settings.tools, "tool_profile", "auto"),
+            media_capable,
+            bool(getattr(settings.tools, "enable_mcp_tools", True)),
+        )
+        try:
+            from aacode.utils.tool_schemas import get_all_schemas as _all_schemas
+            _active_schemas = {k: v for k, v in _all_schemas().items() if k in self.active_tool_names}
+            self._tools_hash = fingerprint(_active_schemas)
+        except Exception:
+            self._tools_hash = None
+        model_caller = self._create_model_caller(model_config, self.active_tool_names)
+        # Optional cheaper summary route. Specifying a model changes only the
+        # auxiliary compaction call, never the conversation route.
+        self.summary_caller = None
+        try:
+            summary_model = str(getattr(settings.context, "summary_model", "") or "")
+            if summary_model:
+                summary_config = settings.get_model_profile(summary_model)
+                self.summary_caller = self._create_model_caller(summary_config, set())
+        except Exception:
+            self.summary_caller = None
 
         # 先initializedskills_manager，因为_create_tools需要它
         self.skills_manager = SkillsManager(project_path)
@@ -236,6 +323,7 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
 
         # SubAgent注册表
         self.sub_agents: Dict[str, Any] = {}
+        self.agent_depth = 0
 
         # 任务跟踪
         self.tasks: Dict[str, Dict] = {}
@@ -467,23 +555,30 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
             pass
         return False
 
-    def _create_model_caller(self, model_config: Dict):
+    def _create_model_caller(self, model_config: Dict, tool_names: Optional[set] = None):
         """创建模型调 with 器（支持流式输出、多网关、原生 Function Calling）"""
 
         from aacode.utils.tool_adapter import to_openai_tools, to_anthropic_tools
         from aacode.utils.tool_schemas import get_all_schemas
 
         _all_schemas = get_all_schemas()
+        if tool_names is not None:
+            _all_schemas = {k: v for k, v in _all_schemas.items() if k in tool_names}
         _openai_tools = None
         _anthropic_tools = None
         if _all_schemas:
             _openai_tools = to_openai_tools(_all_schemas)
             _anthropic_tools = to_anthropic_tools(_all_schemas)
 
-        async def model_caller(messages: List[Dict]) -> Dict[str, Any]:
-            """调 with 模型，返回 {"text": str, "tool_calls": list}"""
+        async def model_caller(messages: List[Dict], purpose: str = "chat") -> Dict[str, Any]:
+            """调 with 模型，返回 {"text": str, "tool_calls": list, "usage": ...}"""
             gateway = model_config.get("gateway", "openai")
             native_tools = _anthropic_tools if gateway == "anthropic" else _openai_tools
+            if purpose == "summary":
+                native_tools = None
+            call_config = dict(model_config)
+            if purpose == "summary":
+                call_config["max_tokens"] = max(256, int(getattr(settings.context, "summary_max_tokens", 2000) or 2000))
 
             # 重试机制：网络瞬断、协议错误、5xx等自动重试
             _max_retries = 3
@@ -544,12 +639,12 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
                     # 根据网关类型创建客户端
                     if gateway == "anthropic":
                         return await self._call_anthropic_api(
-                            api_key, base_url, model_name, messages, model_config,
+                            api_key, base_url, model_name, messages, call_config,
                             tools=native_tools,
                         )
                     else:
                         return await self._call_openai_api(
-                            api_key, base_url, model_name, messages, model_config,
+                            api_key, base_url, model_name, messages, call_config,
                             tools=native_tools,
                         )
                 except asyncio.CancelledError:
@@ -564,6 +659,8 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
                         break
 
             e = _last_exc
+            if self._is_context_overflow_error(e):
+                raise ContextOverflowError(str(e)) from e
             error_msg = f"Model call failed: [{type(e).__name__}] {str(e)}"
             print(style(f"\n❌ {error_msg}", fg=RED, bold=True))
 
@@ -631,6 +728,23 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
 
         return model_caller
 
+    @staticmethod
+    def _is_context_overflow_error(error: Exception) -> bool:
+        text = str(error).lower()
+        markers = (
+            "context length",
+            "context window",
+            "maximum context",
+            "too many tokens",
+            "prompt is too long",
+            "reduce the length",
+            "input is too long",
+            "exceeds the model",
+            "context_length_exceeded",
+            "token limit",
+        )
+        return any(marker in text for marker in markers)
+
     async def _call_openai_api(
         self,
         api_key: str,
@@ -666,7 +780,7 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
             temperature = 1.0
 
         # 流式输出
-        if _is_tty:
+        if _is_tty and not _JSON_EVENTS:
             _stream_print(style(t("model.thinking"), fg=BLUE))
         full_response = ""
         tool_calls_accumulator: Dict[int, Dict[str, str]] = {}
@@ -727,7 +841,7 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
                     print("💭 Thinking process:", flush=True)
                     thinking_printed = True
                 thinking_content += think_chunk
-                _stream_print(think_chunk)
+                _stream_print(think_chunk, kind="thinking")
             # 处理正常内容
             if content_chunk:
                 if thinking_printed:
@@ -954,7 +1068,7 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
                 formatted_messages.append({"role": "user", "content": content})
 
         # Async 流式调 with 
-        if _is_tty:
+        if _is_tty and not _JSON_EVENTS:
             _stream_print(style(t("model.thinking"), fg=BLUE))
         response = ""
         thinking_content = ""
@@ -1007,7 +1121,9 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
                             dt = getattr(delta, 'type', '')
                             if dt == 'thinking_delta':
                                 chunk = getattr(delta, 'thinking', '')
-                                if chunk: thinking_content += chunk; _stream_print(chunk)
+                                if chunk:
+                                    thinking_content += chunk
+                                    _stream_print(chunk, kind="thinking")
                             elif dt == 'text_delta':
                                 chunk = getattr(delta, 'text', '')
                                 if chunk: response += chunk; _stream_print(chunk)
@@ -1044,6 +1160,10 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
                 self._anthropic_thinking_cache[model_name] = thinking_mode
                 break
             except anthropic.APIError as e:
+                # Context overflow is recoverable by compaction; let it reach
+                # the ReAct loop instead of silently returning an empty reply.
+                if self._is_context_overflow_error(e):
+                    raise ContextOverflowError(str(e)) from e
                 # 仅 thinking 模式被拒才降级；其他错误（认证、配额、模型不存在）原样传播
                 if not is_thinking_mode_rejected(e, thinking_mode):
                     break
@@ -1095,6 +1215,8 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
                             "arguments": getattr(block, 'input', {}),
                         })
             except Exception as e:
+                if self._is_context_overflow_error(e):
+                    raise ContextOverflowError(str(e)) from e
                 # 不要静默吞错：流式与非流式都失败时打印到 stderr，
                 # Rust 端会转发为 error 事件让客户端可见（避免"无输出直接停"）
                 print(
@@ -1128,6 +1250,117 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
             "reasoning_content": thinking_content if thinking_content else None,
             "usage": normalize_anthropic_usage(last_usage),
         }
+
+
+    # ── Tool discovery / profile-stable proxy ─────────────────────
+    def _schema_dict(self, schema: Any) -> Dict[str, Any]:
+        return {
+            "name": schema.name,
+            "description": schema.description,
+            "parameters": [
+                {
+                    "name": p.name,
+                    "type": getattr(p.type, "__name__", str(p.type)),
+                    "required": bool(p.required),
+                    "default": p.default,
+                    "description": p.description,
+                    "aliases": list(p.aliases or []),
+                    "example": p.example,
+                }
+                for p in (schema.parameters or [])
+            ],
+            "examples": schema.examples or [],
+            "returns": schema.returns,
+        }
+
+    def list_tool_schemas(self, query: str = "", active_only: bool = False) -> str:
+        """List every tool registered for this session, including profile-hidden ones."""
+        registry = get_global_registry()
+        needle = str(query or "").strip().lower()
+        active = self.active_tool_names
+        rows = []
+        for name in sorted(self.tools.keys()):
+            schema = registry.get_schema(name) or get_schema(name)
+            if schema is None:
+                continue
+            is_active = active is None or name in active
+            if active_only and not is_active:
+                continue
+            haystack = f"{name} {schema.description or ''}".lower()
+            if needle and needle not in haystack:
+                continue
+            status = "active" if is_active else "inactive"
+            description = (schema.description or "").splitlines()[0][:140]
+            rows.append(f"- {name} [{status}] — {description}")
+        header = (
+            f"Tool profile: {getattr(settings.tools, 'tool_profile', 'auto')} "
+            f"({len(active) if active is not None else 'all'} active schemas, "
+            f"{len(self.tools)} available functions)\n"
+            "Use get_tool_schema(name) for parameters, then "
+            "call_tool(name, arguments) to invoke a hidden tool without changing profiles."
+        )
+        return header + "\n\n" + ("\n".join(rows) if rows else "No matching tools.")
+
+    def get_tool_schema(self, name: str) -> str:
+        """Return the full schema for a tool, including inactive tools."""
+        registry = get_global_registry()
+        schema = registry.get_schema(str(name or "")) or get_schema(str(name or ""))
+        if schema is None:
+            return registry.format_tool_not_found_error(str(name or ""))
+        return json.dumps(self._schema_dict(schema), ensure_ascii=False, indent=2, default=str)
+
+    async def call_tool(self, name: str, arguments: Optional[Any] = None) -> str:
+        """Invoke a registered tool without changing the advertised tool schema set."""
+        registry = get_global_registry()
+        name = str(name or "").strip()
+        if name in {"call_tool", "list_tool_schemas", "get_tool_schema"}:
+            return f"Error: {name} cannot be invoked recursively through call_tool."
+        if name not in self.tools:
+            return registry.format_tool_not_found_error(name)
+        if name in MCP_TOOL_NAMES and not getattr(settings.tools, "enable_mcp_tools", True):
+            return f"Error: MCP tools are disabled (tools.enable_mcp_tools=false): {name}"
+        if name in MEDIA_TOOL_NAMES:
+            if not getattr(settings.tools, "enable_media_tools", True) or not self.model_config.get("multimodal"):
+                return f"Error: media tools are disabled for this model/profile: {name}"
+
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments) if arguments.strip() else {}
+            except Exception as exc:
+                return f"Error: arguments must be a JSON object: {exc}"
+        if arguments is None:
+            arguments = {}
+        if not isinstance(arguments, dict):
+            return f"Error: arguments must be an object, got {type(arguments).__name__}"
+
+        validation = registry.validate_call(name, arguments)
+        if not validation.valid:
+            return f"Invalid arguments for {name}: {validation.error_message}"
+        schema = registry.get_schema(name) or get_schema(name)
+        if schema is not None:
+            arguments = schema.normalize_params(arguments)
+
+        func = self.tools[name]
+        timeout_cfg = getattr(settings, "timeout", None)
+        timeout = getattr(timeout_cfg, "tool_default", 300) if timeout_cfg else 300
+        try:
+            if asyncio.iscoroutinefunction(func):
+                result = await asyncio.wait_for(func(**arguments), timeout=timeout)
+            else:
+                result = await asyncio.wait_for(
+                    asyncio.get_event_loop().run_in_executor(None, lambda: func(**arguments)),
+                    timeout=timeout,
+                )
+        except asyncio.TimeoutError:
+            return f"Error: {name} timed out after {timeout}s"
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            return f"Error: {name} failed: {type(exc).__name__}: {exc}"
+
+        if isinstance(result, dict):
+            return json.dumps(result, ensure_ascii=False, default=str)
+        return str(result)
 
     def _create_tools(self, project_path: Path, safety_guard) -> Dict[str, Any]:
         """创建工具集并注册到工具注册表"""
@@ -1182,6 +1415,10 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
 
         # 主Agent的特殊工具
         tools = {
+            # Tool discovery / profile-stable proxy
+            "list_tool_schemas": self.list_tool_schemas,
+            "get_tool_schema": self.get_tool_schema,
+            "call_tool": self.call_tool,
             # 原子工具
             "run_shell": atomic_tools.run_shell,
             "run_skills": self._run_skills,
@@ -1311,42 +1548,35 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
     async def _save_iteration_messages(self, new_msgs):
         """增量持久化：将 React 循环每轮新生成的消息立即保存到会话文件。
 
-        Args:
-            new_msgs: 本轮新生成的消息列表（dict 格式，含 assistant/tool 角色）
+        重要：持久化的内容必须与发送给模型的内容逐字节一致，否则下一次
+        请求的前缀缓存会从差异处失效。不要在这里清洗/改写 tool 内容。
         """
         try:
-            # 建立 call_id -> tool_name 映射，用于识别 fetch_url 的工具结果
-            call_id_to_name = {}
-            for msg in new_msgs:
-                if msg["role"] == "assistant":
-                    for tc in (msg.get("tool_calls") or []):
-                        func = tc.get("function", {})
-                        call_id_to_name[tc.get("id", "")] = func.get("name", "")
-
             for msg in new_msgs:
                 if msg["role"] not in ("assistant", "tool", "system"):
                     continue
                 content = msg.get("content", "")
                 reasoning_content = msg.get("reasoning_content")
                 tool_calls = msg.get("tool_calls")
-
-                # fetch_url 结果持久化前清洗 CSS/JS 垃圾，减少 session 文件体积
-                if msg["role"] == "tool":
-                    tool_name = call_id_to_name.get(msg.get("tool_call_id", ""), "")
-                    if tool_name == "fetch_url" and content and "<html" in content.lower():
-                        try:
-                            content = type(self.web_tools)._clean_html(content)
-                        except Exception:
-                            pass
-
+                usage = msg.get("usage") if isinstance(msg.get("usage"), dict) else None
+                model = msg.get("model")
+                counter = getattr(self.session_manager, "_count_tokens", None)
+                if callable(counter):
+                    tokens = counter(content or "")
+                    if reasoning_content:
+                        tokens += counter(reasoning_content)
+                else:
+                    tokens = len(content or "") // 4 + (len(reasoning_content or "") // 4)
                 sm = SessionMessage(
                     role=msg["role"],
                     content=content,
                     timestamp=datetime.now().isoformat(timespec='seconds'),
-                    tokens=(len(content) + len(reasoning_content or "")) // 4,
+                    tokens=tokens,
                     tool_calls=tool_calls,
                     tool_call_id=msg.get("tool_call_id"),
                     reasoning_content=reasoning_content,
+                    usage=usage,
+                    model=model,
                 )
                 self.session_manager.current_messages.append(sm)
 
@@ -1356,6 +1586,20 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
                 summary.last_activity = datetime.now().isoformat(timespec='seconds')
                 summary.total_messages = len(self.session_manager.current_messages)
                 summary.total_tokens = self.session_manager._get_total_tokens()
+                usage_summary = {}
+                if hasattr(self.session_manager, "get_usage_summary"):
+                    usage_summary = self.session_manager.get_usage_summary()
+                if hasattr(summary, "calls"):
+                    summary.calls = int(usage_summary.get("calls", 0))
+                if hasattr(summary, "cache_hit_rate"):
+                    summary.cache_hit_rate = float(usage_summary.get("cache_hit_rate") or 0.0)
+                if hasattr(summary, "last_context_tokens"):
+                    summary.last_context_tokens = getattr(self.react_loop, "_last_context_tokens", 0) if hasattr(self, "react_loop") else 0
+                if hasattr(summary, "total_cost"):
+                    route_fn = getattr(getattr(self, "react_loop", None), "_route", None)
+                    pricing = route_fn().pricing if callable(route_fn) else None
+                    cost = usage_cost(usage_summary, pricing)
+                    summary.total_cost = float(cost or 0.0)
 
             # 每轮迭代立即写盘，确保客户端读取到的始终是最新数据
             await self.session_manager._save_session()
@@ -1373,10 +1617,64 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
             session_summary.last_activity = datetime.now().isoformat(timespec='seconds')
             session_summary.total_messages = len(self.session_manager.current_messages)
             session_summary.total_tokens = self.session_manager._get_total_tokens()
+            usage_summary = self.session_manager.get_usage_summary()
+            session_summary.calls = int(usage_summary.get("calls", 0))
+            session_summary.cache_hit_rate = float(usage_summary.get("cache_hit_rate") or 0.0)
+            session_summary.last_context_tokens = getattr(self.react_loop, "_last_context_tokens", 0)
+            session_summary.total_cost = float(
+                usage_cost(usage_summary, getattr(self.react_loop, "_route")().pricing) or 0.0
+            )
 
         await self.session_manager._save_session()
         self.session_manager._save_sessions_index()
         await self.session_manager._save_current_session_id()
+
+    async def compact_context(self) -> Dict[str, Any]:
+        """Manually compact the current idle session (the /compact command)."""
+        session_id = self.session_manager.current_session_id
+        if not session_id:
+            return {"status": "error", "error": "No active session to compact."}
+        bootstrap = self.session_manager.get_bootstrap() or {}
+        system_prompt = bootstrap.get("system_prompt") or self.system_prompt
+        history = await self.session_manager.get_messages(include_system=True)
+        messages = [{"role": "system", "content": system_prompt}] + history
+        if not isinstance(self.react_loop.context_checkpoint, dict):
+            self.react_loop.context_checkpoint = self.session_manager.get_context_checkpoint() or {
+                "version": 2,
+                "cutoff_index": 0,
+                "omitted_messages": 0,
+                "anchor": None,
+            }
+        profile = settings.get_model_profile(self.model_config.get("name"))
+        route = {
+            "provider": str(profile.get("name") or "").split("-", 1)[0],
+            "model": str(profile.get("name") or ""),
+            "context_window": int(profile.get("context_window") or settings.context.max_context_length or 1_000_000),
+            "max_output_tokens": int(profile.get("max_output_tokens") or profile.get("max_tokens") or 0),
+            "pricing": profile.get("pricing") if isinstance(profile.get("pricing"), dict) else None,
+        }
+        self.react_loop.route_context = route
+        self.react_loop.context_config = settings.context
+        self.react_loop.summary_caller = self.summary_caller
+        self.react_loop.session_id = session_id
+        self.react_loop._system_prompt_for_hash = system_prompt
+        self.react_loop._tools_hash = getattr(self, "_tools_hash", None)
+        self.react_loop.active_tool_names = getattr(self, "active_tool_names", None)
+        self.react_loop.usage_meta = {
+            "provider": route["provider"],
+            "gateway": self.model_config.get("gateway"),
+            "model": route["model"],
+            "tools_hash": getattr(self, "_tools_hash", None),
+            "source": "compaction",
+        }
+        self.react_loop.on_checkpoint = self.session_manager.set_context_checkpoint
+        result = await self.react_loop.compact_now(messages, session_id)
+        try:
+            await self.session_manager.set_context_checkpoint(self.react_loop.context_checkpoint)
+            await self._finalize_session_save()
+        except Exception:
+            pass
+        return result
 
     async def execute(
         self,
@@ -1384,6 +1682,7 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
         task_dir: Optional[Path] = None,
         max_iterations: int = 20,
         todo_manager: Optional[Any] = None,
+        event_callback: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """
         execute任务
@@ -1410,6 +1709,74 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
             session_id = await self.session_manager.create_session(task)
             print(t("agent.session_reuse", id=session_id))
         print(t("agent.session_hint", id=session_id))
+        if event_callback is not None:
+            self.event_callback = event_callback
+
+        # ─── Session bootstrap: freeze the static system prompt ───
+        # Rebuilding node 0 from live skills/init.md on every task would
+        # invalidate the entire provider prefix. Keep the session's original
+        # rendering and express changes as appended system notices instead.
+        import hashlib as _hashlib
+        fresh_system_prompt = self.system_prompt
+        fresh_hash = _hashlib.sha256(fresh_system_prompt.encode("utf-8")).hexdigest()[:16]
+        bootstrap = self.session_manager.get_bootstrap()
+        dynamic_system_msgs = []
+        if bootstrap and bootstrap.get("system_prompt"):
+            full_system_prompt = bootstrap["system_prompt"]
+            if bootstrap.get("system_hash") and bootstrap.get("system_hash") != fresh_hash:
+                current_skills = sorted(getattr(self.skills_manager, "enabled_skills", []) or [])
+                old_skills = bootstrap.get("skills_snapshot") or []
+                notice = (
+                    "[System] Project instructions changed since this session started. "
+                    "The session keeps its original bootstrap for prefix-cache stability. "
+                    "Re-read init.md or the skills list if the current task depends on them."
+                )
+                if current_skills != old_skills:
+                    notice += "\nEnabled skills now: " + ", ".join(current_skills)
+                dynamic_system_msgs.append({"role": "system", "content": notice})
+                # Remember that this change was announced so later tasks do not
+                # append the same notice again. The original rendering stays in
+                # bootstrap.system_prompt for prefix stability.
+                try:
+                    bootstrap = dict(bootstrap)
+                    bootstrap["system_hash"] = fresh_hash
+                    bootstrap["skills_snapshot"] = current_skills
+                    await self.session_manager.set_bootstrap(bootstrap)
+                except Exception:
+                    pass
+        else:
+            full_system_prompt = fresh_system_prompt
+            try:
+                await self.session_manager.set_bootstrap({
+                    "version": 1,
+                    "system_prompt": fresh_system_prompt,
+                    "system_hash": fresh_hash,
+                    "skills_snapshot": sorted(getattr(self.skills_manager, "enabled_skills", []) or []),
+                    "init_md_hash": _hashlib.sha256(
+                        (full_system_prompt or "").encode("utf-8")
+                    ).hexdigest()[:16],
+                    "cwd": str(self.project_path.absolute()) if self.project_path else "",
+                    "created_at": datetime.now().isoformat(timespec="seconds"),
+                })
+            except Exception as exc:
+                print(f"⚠️  Failed to persist session bootstrap: {exc}")
+
+        # Route-specific context policy (window/output/pricing).
+        profile = settings.get_model_profile(self.model_config.get("name"))
+        route = {
+            "provider": str(profile.get("name") or "").split("-", 1)[0],
+            "model": str(profile.get("name") or ""),
+            "context_window": int(profile.get("context_window") or settings.context.max_context_length or 1_000_000),
+            "max_output_tokens": int(profile.get("max_output_tokens") or profile.get("max_tokens") or 0),
+            "pricing": profile.get("pricing") if isinstance(profile.get("pricing"), dict) else None,
+        }
+        self.react_loop.route_context = route
+        self.react_loop.event_callback = self.event_callback
+        self.react_loop.summary_caller = self.summary_caller
+        self.react_loop.context_config = settings.context
+        self.react_loop._tools_hash = getattr(self, "_tools_hash", None)
+        self.react_loop.active_tool_names = getattr(self, "active_tool_names", None)
+        self.react_loop.session_id = session_id
 
         # 将已创建的 todo 文件绑定到当前 session，实现会话级隔离
         if todo_manager:
@@ -1421,8 +1788,6 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
                 todo_manager.set_session_todo(session_id, todo_manager.current_todo_file)
 
         # ─── 构建动态上下文消息（作为独立 system 消息追加，不嵌入 system prompt）───
-        dynamic_system_msgs = []
-
         if todo_manager:
             try:
                 todo_summary = await todo_manager.get_todo_summary(session_id=session_id)
@@ -1438,8 +1803,7 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
             except Exception as e:
                 print(f"⚠️  Failed to get todo summarized: {e}")
 
-        # system prompt 保持静态（不含动态 todo/analysis/init_instructions）
-        full_system_prompt = self.system_prompt
+        # system prompt 保持静态（session bootstrap 版本）
         self.conversation_history[0]["content"] = full_system_prompt
 
         # 添加任务描述
@@ -1485,10 +1849,22 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
         model_name = str(self.model_config.get("name") or "unknown")
         # Attach usage metadata without changing ReactLoop.run's signature
         # (some tests replace it with a lightweight fake).
+        last_model = None
+        for _message in reversed(history_messages or []):
+            if _message.get("role") == "assistant" and _message.get("model"):
+                last_model = _message.get("model")
+                break
+        checkpoint_anchor = (self.session_manager.get_context_checkpoint() or {}).get("anchor") or {}
+        last_model = last_model or checkpoint_anchor.get("model")
+        self.react_loop._model_switch_check = bool(
+            last_model and last_model != route.get("model") and history_messages
+        )
         self.react_loop.usage_meta = {
             "provider": model_name.split("-", 1)[0],
             "gateway": self.model_config.get("gateway"),
             "model": model_name,
+            "tools_hash": getattr(self, "_tools_hash", None),
+            "source": "main",
         }
         # Retrieval checkpoint is stored in the session; messages stay untouched.
         self.react_loop.context_checkpoint = self.session_manager.get_context_checkpoint()
@@ -1694,15 +2070,48 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
         system_prompt += project_path_str
 
         # 创建SubAgent
+        tool_names = (set(self.active_tool_names) - {"run_skills", "delegate_task", "create_sub_agent"}) | {"submit_result"}
+        child_caller = self._create_model_caller(self.model_config, tool_names)
+        child_tools = {k: v for k, v in self.tools.items() if k in tool_names}
+        profile = settings.get_model_profile(self.model_config.get("name"))
+        route = {
+            "provider": str(profile.get("name") or "").split("-", 1)[0],
+            "model": str(profile.get("name") or ""),
+            "context_window": int(profile.get("context_window") or settings.context.max_context_length or 1_000_000),
+            "max_output_tokens": int(profile.get("max_output_tokens") or profile.get("max_tokens") or 0),
+            "pricing": profile.get("pricing") if isinstance(profile.get("pricing"), dict) else None,
+        }
+        child_manager = None
+        child_session_id = None
+        try:
+            child_manager = SessionManager(self.project_path)
+            child_session_id = await child_manager.create_session(
+                f"subagent {agent_id}", title=f"[subagent] {agent_id}"
+            )
+        except Exception:
+            child_manager = None
         sub_agent = SubAgent(
             agent_id=agent_id,
             system_prompt=system_prompt,
-            model_caller=self.model_caller,
-            tools=self.tools,  # 可以传递子集
+            model_caller=child_caller,
+            tools=child_tools,
             context_manager=self.context_manager,
             parent_agent_id=self.agent_id,
-            max_iterations=self.max_iterations,
+            project_path=self.project_path,
+            context_config=settings.context,
+            route_context=route,
+            session_manager=child_manager,
+            usage_meta={
+                "source": "subagent",
+                "session_id": child_session_id or f"{self.session_manager.current_session_id}:{agent_id}",
+                "parent_session_id": self.session_manager.current_session_id,
+                "model": self.model_config.get("name"),
+                "gateway": self.model_config.get("gateway"),
+                "tools_hash": fingerprint({k: v for k, v in get_all_schemas().items() if k in tool_names}),
+            },
+            max_iterations=settings.MAX_SUB_AGENT_ITERATIONS,
         )
+        sub_agent.agent_depth = self.agent_depth + 1
 
         self.sub_agents[agent_id] = sub_agent
 

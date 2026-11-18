@@ -19,14 +19,19 @@ else:
 
 RUN_SHELL_SCHEMA = ToolSchema(
     name="run_shell",
-    description="Execute a shell command - the universal Swiss Army knife! The tool always returns success=True; check returncode to determine success/failure. Full stdout and stderr are returned for you to process. Common uses: read files (cat/tail), write files (echo/cat), search (grep/ls/find), development (python/pytest/git). Supports pipes and redirection. Filenames with spaces or special characters must be quoted (e.g. cat \"my file.md\").\n\nLifecycle actions for long-running processes (simulators, servers):\n- action=\"exec\" (default): run synchronously and return full output\n- action=\"spawn\": start in background, returns process_id immediately\n- action=\"check\": query status of a spawned process (running/exited)\n- action=\"read\": read latest output from a spawned process\n- action=\"write\": send stdin input to a spawned process\n- action=\"kill\": terminate a spawned process\n- action=\"jobs\": list background jobs (including persisted jobs from earlier tasks)",
+    description=(
+        "Execute a shell command (read/write files, grep/find, git, tests, builds; pipes and "
+        "redirection supported). Always check returncode for success. Quote paths with spaces. "
+        "Long-running processes: action=exec (default), spawn (returns process_id), check, read, "
+        "write, kill, or jobs."
+    ),
     parameters=[
         ToolParameter(
             name="command",
             type=str,
             required=True,
             default="",
-            description="The shell command to execute (supports pipes, redirection, and other shell features). Required for action=\"exec\" and action=\"spawn\". Not needed for action=\"check\"/\"read\"/\"kill\".",
+            description="Shell command to execute. Required for exec/spawn; optional for check/read/write/kill.",
             example='python -c "import sys; print(sys.version)"',
             aliases=["cmd", "shell", "script", "exec_cmd"],
         ),
@@ -35,7 +40,7 @@ RUN_SHELL_SCHEMA = ToolSchema(
             type=int,
             required=False,
             default=30,
-            description="Command execution timeout in seconds (default 30). Increase for long-running commands.",
+            description="Timeout in seconds (default 30).",
             example=60,
             aliases=["time_limit", "max_time", "wait"],
         ),
@@ -43,7 +48,7 @@ RUN_SHELL_SCHEMA = ToolSchema(
             name="stdin_input",
             type=str,
             required=False,
-            description="Standard input content to pass to the program. For action=\"exec\": one-shot stdin before execution. For action=\"write\": send input to a running spawned process. Separate multiple lines with \\n.",
+            description="stdin content for exec (one-shot) or write (running process). Use \\n for newlines.",
             example="5\\n3\\n",
             aliases=["input", "stdin"],
         ),
@@ -52,10 +57,7 @@ RUN_SHELL_SCHEMA = ToolSchema(
             type=int,
             required=False,
             default=20000,
-            description=(
-                "Maximum output characters (default 20000). Use a larger number for more, "
-                "or set full_output=true to disable the cap. Truncated output is archived."
-            ),
+            description="Max output characters (default 20000; full_output=true disables). Truncated output is archived.",
             example=20000,
             aliases=["max_chars", "limit", "output_limit"],
         ),
@@ -64,7 +66,7 @@ RUN_SHELL_SCHEMA = ToolSchema(
             type=int,
             required=False,
             default=500,
-            description="Maximum output lines (default 500). Use full_output=true to disable.",
+            description="Max output lines (default 500).",
             example=500,
             aliases=["output_lines", "max_result_lines"],
         ),
@@ -73,10 +75,7 @@ RUN_SHELL_SCHEMA = ToolSchema(
             type=bool,
             required=False,
             default=False,
-            description=(
-                "Disable the default output caps and return the full stdout/stderr. "
-                "Only use when you truly need the entire output; large outputs cost many tokens."
-            ),
+            description="Return full stdout/stderr (may cost many tokens).",
             example=False,
             aliases=["full", "unlimited"],
         ),
@@ -85,7 +84,7 @@ RUN_SHELL_SCHEMA = ToolSchema(
             type=bool,
             required=False,
             default=False,
-            description="If true, stop waiting for stdout/stderr immediately after the main process exits, instead of waiting for all child processes to close their pipes. Use when the command spawns long-running children (e.g. open Simulator, start server) to prevent the tool from hanging. Default is False (wait for all output).",
+            description="Stop waiting for child processes' pipes once the main process exits. Use for commands that spawn long-running children.",
             example=True,
             aliases=["detach", "no_wait_children"],
         ),
@@ -94,7 +93,7 @@ RUN_SHELL_SCHEMA = ToolSchema(
             type=str,
             required=False,
             default="exec",
-            description="Operation mode: \"exec\" (default, synchronous execute), \"spawn\" (start background process, return process_id), \"check\" (query process status), \"read\" (read process output), \"write\" (send stdin to process), \"kill\" (terminate process), \"jobs\" (list background jobs).",
+            description="exec (default), spawn, check, read, write, kill, or jobs.",
             example="spawn",
             aliases=["mode", "op"],
         ),
@@ -102,7 +101,7 @@ RUN_SHELL_SCHEMA = ToolSchema(
             name="process_id",
             type=str,
             required=False,
-            description="The process ID returned by action=\"spawn\". Required for action=\"check\"/\"read\"/\"write\"/\"kill\".",
+            description="process_id from spawn; required for check/read/write/kill.",
             example="a1b2c3d4e5f6",
             aliases=["pid", "id"],
         ),
@@ -110,7 +109,7 @@ RUN_SHELL_SCHEMA = ToolSchema(
             name="max_lines",
             type=int,
             required=False,
-            description="Ring buffer size: keep only the last N lines of output (prevents OOM on long-running processes). For action=\"exec\": limits captured output lines. For action=\"spawn\": sets background buffer size. For action=\"read\": returns only last N lines.",
+            description="Keep only the last N output lines (exec capture, spawn buffer, or read tail).",
             example=500,
             aliases=["tail_lines", "buffer_size"],
         ),
@@ -258,23 +257,17 @@ action="kill":
 
 RUN_SKILLS_SCHEMA = ToolSchema(
     name="run_skills",
-    description="""Execute pre-defined skills. Three modes:
-
-1. List available skills: run_skills("__list__")
-2. View skill details: run_skills("__info__", {"skill_name": "pandas"})
-3. Execute a skill: run_skills("pandas", {"code": "df.describe()"})
-
-For multi-function skills (e.g. playwright), pass "func" in params:
-  run_skills("playwright", {"func": "browser_automation", "url": "https://example.com"})
-
-Use __list__ to see available skills first, then __info__ to get parameter details, then execute.
-""",
+    description=(
+        "Execute or inspect a pre-defined skill. Use skill_name='__list__' to list, "
+        "skill_name='__info__' with params={'skill_name': ...} for details, or "
+        "skill_name='<name>' with params to execute. Multi-function skills take a 'func' key."
+    ),
     parameters=[
         ToolParameter(
             name="skill_name",
             type=str,
             required=False,
-            description="Skill name, or __list__/__info__ for listing/info modes. If omitted, tries params.skill_name as fallback.",
+            description="Skill name, __list__, or __info__. Falls back to params.skill_name.",
             example="pandas",
             aliases=["skill", "name"],
         ),
@@ -282,7 +275,7 @@ Use __list__ to see available skills first, then __info__ to get parameter detai
             name="params",
             type=dict,
             required=False,
-            description="Parameters for the skill. For multi-function skills, include 'func' key to select sub-function.",
+            description="Skill parameters; include 'func' for multi-function skills.",
             example={"code": "df.describe()"},
             aliases=["arguments", "args", "kwargs"],
         ),
@@ -290,7 +283,7 @@ Use __list__ to see available skills first, then __info__ to get parameter detai
             name="timeout",
             type=int,
             required=False,
-            description="Skill execution timeout in seconds. Increase for long-running skills (e.g. browser automation, large data processing). Uses config default if not specified.",
+            description="Timeout in seconds (default from config).",
             example=120,
             aliases=["time_limit", "max_time"],
         ),
@@ -868,17 +861,15 @@ ANALYZE_IMAGE_CONSISTENCY_SCHEMA = ToolSchema(
 SEARCH_HISTORY_SCHEMA = ToolSchema(
     name="search_history",
     description=(
-        "Search persisted conversation messages that may have been omitted from the model context. "
-        "Use this instead of cat-ing session JSON. Searches message content and tool call names/arguments; "
-        "reasoning content is excluded. Default scope is the current session; use scope=project to search "
-        "other sessions (use list_sessions to discover session IDs)."
+        "Search persisted conversation messages omitted from the model view. Searches content and "
+        "tool call arguments; reasoning is excluded. Defaults to the current session."
     ),
     parameters=[
         ToolParameter(
             name="query",
             type=str,
             required=True,
-            description="Case-insensitive text to search for, e.g. an error string, file path, or requirement.",
+            description="Text to find (case-insensitive).",
             example="E_CACHE_MISS",
             aliases=["q", "text", "keyword"],
         ),
@@ -886,7 +877,7 @@ SEARCH_HISTORY_SCHEMA = ToolSchema(
             name="session_id",
             type=str,
             required=False,
-            description="Specific session ID to search. Defaults to the current session.",
+            description="Session ID (default: current).",
             example="session_20261021_150000_abcd1234",
             aliases=["session"],
         ),
@@ -895,7 +886,7 @@ SEARCH_HISTORY_SCHEMA = ToolSchema(
             type=str,
             required=False,
             default="current",
-            description="current = current session; project = all sessions in this project.",
+            description="current or project.",
             example="project",
             aliases=["range"],
         ),
@@ -903,7 +894,7 @@ SEARCH_HISTORY_SCHEMA = ToolSchema(
             name="role",
             type=str,
             required=False,
-            description="Optional role filter: user, assistant, tool, or system.",
+            description="Role filter: user, assistant, tool, or system.",
             example="user",
             aliases=["role_filter"],
         ),
@@ -912,7 +903,7 @@ SEARCH_HISTORY_SCHEMA = ToolSchema(
             type=int,
             required=False,
             default=20,
-            description="Maximum number of matches to return (1-50).",
+            description="Max matches (1-50).",
             example=20,
             aliases=["max_results", "count"],
         ),
@@ -921,7 +912,7 @@ SEARCH_HISTORY_SCHEMA = ToolSchema(
             type=int,
             required=False,
             default=0,
-            description="Pagination offset for matches.",
+            description="Pagination offset.",
             example=0,
             aliases=["skip"],
         ),
@@ -977,8 +968,176 @@ READ_HISTORY_SCHEMA = ToolSchema(
 )
 
 
+# ==================== Subagent Delegation ====================
+
+DELEGATE_TASK_SCHEMA = ToolSchema(
+    name="delegate_task",
+    description=(
+        "Delegate a self-contained subtask to a focused sub-agent with its own context, "
+        "token budget, and tool subset. Returns a compact result, not the full transcript."
+    ),
+    parameters=[
+        ToolParameter(
+            name="task_description",
+            type=str,
+            required=True,
+            description="A complete, self-contained description of the subtask.",
+            example="Find all call sites of parse_config and summarize the required signature changes.",
+            aliases=["task", "description", "prompt"],
+        ),
+        ToolParameter(
+            name="task_type",
+            type=str,
+            required=False,
+            default="general",
+            description="One of: general, code, test, research. Selects the child's tool subset.",
+            example="code",
+        ),
+        ToolParameter(
+            name="context_strategy",
+            type=str,
+            required=False,
+            default="isolated",
+            description="isolated (default), minimal, or shared. Shared/minimal add a short project summary, never the full transcript.",
+            example="isolated",
+        ),
+    ],
+    examples=[
+        {"task_description": "Run the test suite and summarize failures.", "task_type": "test"},
+        {"task_description": "Research the current API rate limits.", "task_type": "research"},
+    ],
+    returns="Returns task_id, status, and a compact result with final answer, iterations, usage, and optional spill path.",
+)
+
+
+SUBMIT_RESULT_SCHEMA = ToolSchema(
+    name="submit_result",
+    description=(
+        "Submit the final structured result for a sub-agent task. Call exactly once when the "
+        "task is complete; do not call other tools afterwards."
+    ),
+    parameters=[
+        ToolParameter(
+            name="summary",
+            type=str,
+            required=True,
+            description="Concise final answer / outcome for the parent agent.",
+            example="Found 3 call sites; updated signatures in a.py and b.py.",
+        ),
+        ToolParameter(
+            name="files_changed",
+            type=list,
+            required=False,
+            description="Exact file paths changed or inspected.",
+            example=["src/a.py", "src/b.py"],
+        ),
+        ToolParameter(
+            name="next_steps",
+            type=list,
+            required=False,
+            description="Remaining work or recommended next actions.",
+            example=["Run the full test suite"],
+        ),
+        ToolParameter(
+            name="errors",
+            type=list,
+            required=False,
+            description="Unresolved errors or blockers.",
+            example=["None"],
+        ),
+        ToolParameter(
+            name="key_evidence",
+            type=list,
+            required=False,
+            description="Short evidence lines (paths, symbols, outputs).",
+            example=["src/a.py:42 calls parse_config"],
+        ),
+    ],
+    returns="Acknowledges the recorded structured result.",
+)
+
+
+# ==================== Tool discovery / proxy schemas ====================
+LIST_TOOL_SCHEMAS_SCHEMA = ToolSchema(
+    name="list_tool_schemas",
+    description=(
+        "List tools available to this agent, including tools hidden by the current "
+        "tool profile. Use this before asking for a schema you cannot see. Returns "
+        "active/inactive status and a one-line description."
+    ),
+    parameters=[
+        ToolParameter(
+            name="query",
+            type=str,
+            required=False,
+            default="",
+            description="Optional case-insensitive filter on tool name/description.",
+        ),
+        ToolParameter(
+            name="active_only",
+            type=bool,
+            required=False,
+            default=False,
+            description="Only list tools in the current profile's active schema set.",
+        ),
+    ],
+    examples=[{"query": "browser", "active_only": False}],
+    returns="A compact text list of tool names, status, and descriptions.",
+)
+
+GET_TOOL_SCHEMA_SCHEMA = ToolSchema(
+    name="get_tool_schema",
+    description=(
+        "Return the full JSON schema (parameters, required flags, aliases, examples) "
+        "for any registered tool, even one not currently advertised in the request. "
+        "Pair with call_tool to use a discovered tool without changing profiles."
+    ),
+    parameters=[
+        ToolParameter(
+            name="name",
+            type=str,
+            required=True,
+            description="Exact tool name, e.g. browser_call.",
+        ),
+    ],
+    examples=[{"name": "browser_call"}],
+    returns="JSON schema for the requested tool.",
+)
+
+CALL_TOOL_SCHEMA = ToolSchema(
+    name="call_tool",
+    description=(
+        "Invoke any registered tool by name with a JSON arguments object. This is a "
+        "profile-stable proxy for tools that are available but not advertised in the "
+        "current tool profile; validate arguments with get_tool_schema first. Do not "
+        "use it to call list_tool_schemas/get_tool_schema/call_tool recursively."
+    ),
+    parameters=[
+        ToolParameter(
+            name="name",
+            type=str,
+            required=True,
+            description="Exact registered tool name.",
+        ),
+        ToolParameter(
+            name="arguments",
+            type=dict,
+            required=False,
+            default={},
+            description="Arguments object passed to the tool after schema normalization.",
+        ),
+    ],
+    examples=[{"name": "browser_call", "arguments": {"tool": "browser_tools", "args": {}}}],
+    returns="The tool's raw result serialized as text.",
+)
+
+
 # ==================== 所有工具schema的字典 ====================
 ALL_SCHEMAS = {
+    # Tool discovery / proxy
+    "list_tool_schemas": LIST_TOOL_SCHEMAS_SCHEMA,
+    "get_tool_schema": GET_TOOL_SCHEMA_SCHEMA,
+    "call_tool": CALL_TOOL_SCHEMA,
     # Atomic Tools
     "run_shell": RUN_SHELL_SCHEMA,
     "run_skills": RUN_SKILLS_SCHEMA,
@@ -1000,6 +1159,8 @@ ALL_SCHEMAS = {
     # History retrieval tools
     "search_history": SEARCH_HISTORY_SCHEMA,
     "read_history": READ_HISTORY_SCHEMA,
+    "delegate_task": DELEGATE_TASK_SCHEMA,
+    "submit_result": SUBMIT_RESULT_SCHEMA,
     # MCP Tools
     "list_mcp_tools": LIST_MCP_TOOLS_SCHEMA,
     "call_mcp_tool": CALL_MCP_TOOL_SCHEMA,

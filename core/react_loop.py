@@ -13,11 +13,12 @@ from __future__ import annotations
 import asyncio
 import time
 import json
+import os
 import re
 import sys
 import uuid
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Callable, Awaitable
+from typing import Dict, List, Any, Optional, Callable, Awaitable, Tuple
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -34,14 +35,60 @@ from aacode.i18n import t
 from aacode.utils.colors import style, RED, GREEN, BLUE
 from aacode.utils.message_utils import (
     estimate_tokens as _util_estimate_tokens,
+    estimate_input_tokens as _util_estimate_input_tokens,
     split_into_rounds,
     build_compact_view,
     _find_last_n_real_user_round,
     compute_retrieval_cutoff,
     render_retrieval_view,
     is_real_user_message,
+    tool_repeat_key,
 )
 from aacode.utils.usage_tracker import UsageTracker
+from aacode.utils.token_usage import (
+    cache_hit_rate,
+    ensure_canonical_usage,
+    empty_usage,
+    estimate_messages_tokens,
+    format_cost,
+    format_tokens,
+    merge_usage,
+    prefix_diagnostics,
+    prefix_state,
+    usage_cost,
+)
+from aacode.utils.context_policy import (
+    ContextPolicy,
+    RouteContext,
+    SUMMARY_INSTRUCTION,
+    SUMMARY_MODE_ADAPTIVE,
+    SUMMARY_MODE_ALWAYS,
+    SUMMARY_MODE_OFF,
+    build_summary_messages,
+    describe_policy,
+    frame_summary,
+    prune_text_middle,
+    resolve_context_policy,
+    select_prunable_indices,
+    should_inline_spill,
+    spill_preview,
+    validate_summary,
+)
+
+
+class ContextOverflowError(RuntimeError):
+    """Provider-confirmed context-window overflow; recoverable by compaction."""
+
+
+class ModelSwitchError(RuntimeError):
+    """The history cannot fit the destination model even after compaction."""
+
+
+def _is_tty_for_events() -> bool:
+    try:
+        return bool(sys.stdout.isatty())
+    except Exception:
+        return True
 
 
 def _error_extra(result: Dict, error_msg: Any) -> str:
@@ -122,6 +169,9 @@ class AsyncReActLoop:
         project_path: Optional[Path] = None,
         todo_manager: Optional[Any] = None,
         context_config: Optional[Any] = None,
+        route_context: Optional[Dict[str, Any]] = None,
+        event_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
+        summary_caller: Optional[Callable[..., Awaitable[Any]]] = None,
     ):
         """
         initializedReAct循环
@@ -148,6 +198,9 @@ class AsyncReActLoop:
 
         # 上下文配置
         self.context_config = context_config
+        self.route_context = route_context or {}
+        self.event_callback = event_callback
+        self.summary_caller = summary_caller
 
         # Token计数器（  for智能缩减）
         from ..utils.session_manager import _load_tiktoken_encoding
@@ -166,6 +219,34 @@ class AsyncReActLoop:
         self._compact_summary: Optional[str] = None
         self._compact_summary_msg_count: int = 0
         self._post_compact_tokens: int = 0  # 压缩后的 compact view token 基准值
+
+        # ── Provider-anchored usage / prefix / policy state ──
+        self.session_id: Optional[str] = None
+        self._policy: Optional[ContextPolicy] = None
+        self._task_usage: Dict[str, Any] = empty_usage()
+        self._last_usage: Optional[Dict[str, Any]] = None
+        self._last_context_tokens: int = 0
+        self._prefix_previous: Optional[Dict[str, Any]] = None
+        self._last_prefix: Dict[str, Any] = {}
+        self._repeat_chain: Optional[Dict[str, Any]] = None
+        self._repeat_counts: Dict[str, int] = {}
+        self._read_cache: Dict[str, str] = {}
+        self._read_cache_order: List[str] = []
+        self._overflow_retries_used = 0
+        self._force_compact = False
+        self._prune_state: Dict[str, Any] = {}
+        self._last_summary: Optional[str] = None
+        self._last_summary_usage: Optional[Dict[str, Any]] = None
+        self._system_prompt_for_hash: Optional[str] = None
+        self._tools_hash: Optional[str] = None
+        self._task_input_tokens = 0
+        self._task_output_tokens = 0
+        self._budget_exceeded = False
+        self._last_was_compacted = False
+        self._model_switch_check = False
+        self._spill_session_id: Optional[str] = None
+        self._full_messages_for_anchor: List[Dict] = []
+        self.active_tool_names: Optional[set] = None
 
         # Stale loop detection: tracks fetch_url results per domain to detect
         # when the model repeatedly hits pages that return no readable content
@@ -186,6 +267,46 @@ class AsyncReActLoop:
             "fetch_url_by_domain": {},
         }
         self._stale_warnings_issued: set = set()
+
+    def _route(self) -> RouteContext:
+        route = self.route_context or {}
+        fallback_window = int(getattr(self.context_config, "max_context_length", 1_000_000) or 1_000_000)
+        return RouteContext(
+            provider=str(route.get("provider") or ""),
+            model=str(route.get("model") or ""),
+            context_window=int(route.get("context_window") or fallback_window),
+            max_output_tokens=int(route.get("max_output_tokens") or route.get("max_tokens") or 0),
+            pricing=route.get("pricing") if isinstance(route.get("pricing"), dict) else None,
+        )
+
+    def _emit_event(self, event: Dict[str, Any]) -> None:
+        """Publish a structured event to the host (TUI/desktop) and JSON stdout."""
+        if self.event_callback is not None:
+            try:
+                result = self.event_callback(event)
+                if asyncio.iscoroutine(result):
+                    asyncio.create_task(result)
+            except Exception:
+                pass
+        # The desktop bridge reads JSON lines from a non-TTY stdout. Keep the
+        # event on one line and never let telemetry break a task.
+        if not _is_tty_for_events() and self.event_callback is None:
+            try:
+                print(json.dumps(event, ensure_ascii=False, default=str), flush=True)
+            except Exception:
+                pass
+
+    async def _call_model(self, messages: List[Dict], purpose: str = "chat") -> Any:
+        """Call the model, supporting the optional purpose-aware caller."""
+        caller = self.summary_caller if purpose == "summary" and self.summary_caller else self.model_caller
+        try:
+            return await caller(messages, purpose=purpose)
+        except TypeError:
+            # Test doubles and older callers accept one argument only.
+            return await caller(messages)
+
+    def _estimate_input_tokens(self, messages: List[Dict]) -> int:
+        return _util_estimate_input_tokens(self.encoding, messages)
 
     async def run(
         self,
@@ -214,6 +335,36 @@ class AsyncReActLoop:
         # 清除上一轮的 last_messages，确保失败时不残留旧数据
         self.last_messages = None
         run_id = uuid.uuid4().hex[:12]
+        if session_id:
+            self.session_id = session_id
+        self._spill_session_id = self.session_id
+        self._system_prompt_for_hash = initial_prompt
+        self._task_usage = empty_usage()
+        self._task_input_tokens = 0
+        self._task_output_tokens = 0
+        self._budget_exceeded = False
+        self._overflow_retries_used = 0
+        self._repeat_chain = None
+        self._repeat_counts = {}
+        self._read_cache = {}
+        self._read_cache_order = []
+        self._prefix_previous = None
+        self._force_compact = False
+        self._policy = resolve_context_policy(self.context_config, self._route())
+        self._tools_hash = (self.usage_meta or {}).get("tools_hash")
+        if not isinstance(self.context_checkpoint, dict):
+            self.context_checkpoint = {
+                "version": 2,
+                "cutoff_index": 0,
+                "omitted_messages": 0,
+                "anchor": None,
+            }
+        self._emit_event({
+            "type": "task_start",
+            "task": task_description,
+            "session_id": self.session_id,
+            "policy": describe_policy(self._policy),
+        })
 
         # Reset stale loop detector for this run — each react_loop.run() call
         # starts with a clean tracker (fresh fetch_url domain history).
@@ -298,13 +449,35 @@ During each thought, naturally plan:
             # 调 with 模型Get 思考（使用 round-aware 压缩视图）
             # 同时缓存 compact view 和 token 数，供后续自适应截断复用，避免重复 split_into_rounds
             model_start = asyncio.get_event_loop().time()
-            effective_msgs, was_compacted, compact_tokens = await self._build_model_view(
-                messages, session_id
-            )
-            self._cached_compact_view = effective_msgs
-            self._cached_compact_tokens = compact_tokens
-            self._cached_compact_msg_count = len(messages)
-            response = await self.model_caller(effective_msgs)
+            while True:
+                self._full_messages_for_anchor = messages
+                effective_msgs, was_compacted, compact_tokens = await self._build_model_view(
+                    messages, session_id,
+                    force=self._force_compact,
+                    aggressive=self._force_compact,
+                )
+                self._force_compact = False
+                self._model_switch_check = False
+                self._cached_compact_view = effective_msgs
+                self._cached_compact_tokens = compact_tokens
+                self._cached_compact_msg_count = len(messages)
+                self._last_request_messages = effective_msgs
+                try:
+                    response = await self._call_model(effective_msgs)
+                    break
+                except ContextOverflowError:
+                    policy = self._policy or resolve_context_policy(self.context_config, self._route())
+                    if self._overflow_retries_used >= policy.overflow_retries:
+                        raise
+                    self._overflow_retries_used += 1
+                    self._force_compact = True
+                    self._emit_event({
+                        "type": "context_overflow_recovery",
+                        "attempt": self._overflow_retries_used,
+                        "session_id": session_id,
+                    })
+                    print(style("📦 Context overflow detected; compacting and retrying once", fg=BLUE))
+                    continue
             model_time = asyncio.get_event_loop().time() - model_start
 
             self._record_usage(
@@ -316,6 +489,27 @@ During each thought, naturally plan:
                 messages_count=len(effective_msgs),
                 compacted=was_compacted,
             )
+            if self.on_checkpoint and isinstance(self.context_checkpoint, dict):
+                try:
+                    await self.on_checkpoint(self.context_checkpoint)
+                except Exception:
+                    pass
+            if self._budget_exceeded:
+                self.last_messages = messages
+                self._emit_event({
+                    "type": "task_end",
+                    "status": "budget_exceeded",
+                    "session_id": session_id,
+                    "iterations": iteration + 1,
+                    "usage": self._task_usage,
+                })
+                return {
+                    "status": "budget_exceeded",
+                    "final_thought": "Task token budget exceeded. Continue in a new task or raise the budget.",
+                    "iterations": iteration + 1,
+                    "steps": self.steps,
+                    "usage": self._task_usage,
+                }
 
             # 提取文本和 tool_calls（兼容旧版返回字符串）
             if isinstance(response, dict):
@@ -379,6 +573,9 @@ During each thought, naturally plan:
                 response_entry = {"role": "assistant", "content": response_text}
                 if reasoning_content:
                     response_entry["reasoning_content"] = reasoning_content
+                if isinstance(response, dict) and response.get("usage"):
+                    response_entry["usage"] = response["usage"]
+                    response_entry["model"] = (self.usage_meta or {}).get("model")
                 messages.append(response_entry)
 
                 # 增量持久化：本轮新消息立即保存到会话文件
@@ -402,12 +599,21 @@ During each thought, naturally plan:
                         summary={"final_thought": response_text},
                     )
                 self.last_messages = messages
+                self._emit_event({
+                    "type": "task_end",
+                    "status": "completed",
+                    "session_id": session_id,
+                    "iterations": iteration + 1,
+                    "total_time": total_time,
+                    "usage": self._task_usage,
+                })
                 return {
                     "status": "completed",
                     "final_thought": response_text,
                     "iterations": iteration + 1,
                     "steps": self.steps,
                     "total_time": total_time,
+                    "usage": self._task_usage,
                 }
 
             # execute所有Action（增强错误处理和重试机制）
@@ -433,14 +639,16 @@ During each thought, naturally plan:
                 effective_msgs, _, current_tokens = await self._build_model_view(
                     messages, session_id
                 )
-            total_budget = (
-                self.context_config.max_context_length
-                if self.context_config
-                else 16000
-            )
+            policy = self._policy or resolve_context_policy(self.context_config, self._route())
+            total_budget = policy.context_window
             remaining_budget = max(0, total_budget - current_tokens)
+            # A fixed per-result inline budget is more predictable than a
+            # fraction of a 1M window; the spill layer preserves full output.
             self._adaptive_threshold_chars = int(
-                remaining_budget * settings.output.budget_ratio * 4
+                min(
+                    max(2000, remaining_budget * settings.output.budget_ratio),
+                    policy.inline_tool_tokens,
+                ) * 4
             )
 
             for i, action_item in enumerate(actions):
@@ -463,6 +671,9 @@ During each thought, naturally plan:
 
                         # 为Agent保留完整结果
                         observation = full_result
+                        observation = self._dedupe_observation(
+                            action_item.action, action_item.action_input or {}, observation
+                        )
 
                         # 为 user显示生成简化版本
                         observation_for_display = self._format_observation_for_display(
@@ -523,17 +734,33 @@ During each thought, naturally plan:
                     error_message=observation if error_code else None,
                 )
 
-                # 记录观察结果（完整版本）
-                action_item.observation = observation
+                # 工具结果进入模型历史前先做 spill：完整内容落盘，inline 只保留
+                # head/tail。这样后续请求重放的是稳定形式，不会每次追加都付全量。
+                full_observation = observation
+                call_id = action_item.call_id or f"call_{iteration}_{i}"
+                model_observation = self._prepare_observation(
+                    action_item.action, full_observation, call_id
+                )
+                action_item.observation = model_observation
                 assert step.actions is not None, "step.actions should not be None"
                 step.actions.append(action_item)
-                all_observations.append(observation)  # AgentGet 完整内容
+                all_observations.append(model_observation)  # model-visible form
                 all_observations_for_display.append(
-                    observation_for_display or observation or ""
-                )  #  user看到简化版本
+                    observation_for_display or full_observation or ""
+                )  # user sees the readable form
 
                 # 实时打印 Observation（供客户端显示）
-                display_obs = observation_for_display or observation or ""
+                display_obs = observation_for_display or full_observation or ""
+                self._emit_event({
+                    "type": "tool_result",
+                    "call_id": call_id,
+                    "tool": action_item.action,
+                    "status": status,
+                    "duration_ms": int(action_time * 1000),
+                    "content": display_obs[:8000],
+                    "truncated": len(display_obs) > 8000,
+                    "full_observation_chars": len(str(full_observation)),
+                })
                 if display_obs:
                     # 仅在没有 observation_for_display 时才做安全截断
                     # （_format_observation_for_display 已负责显示截断+标记，不重复截断）
@@ -596,6 +823,9 @@ During each thought, naturally plan:
                 # kimi-k2 等模型要求 reasoning_content 必须在 assistant 消息中保持一致
                 if reasoning_content:
                     assistant_msg["reasoning_content"] = reasoning_content
+                if isinstance(response, dict) and response.get("usage"):
+                    assistant_msg["usage"] = response["usage"]
+                    assistant_msg["model"] = (self.usage_meta or {}).get("model")
                 openai_tool_calls = []
                 for tc in native_tool_calls:
                     args_str = json.dumps(tc["arguments"], ensure_ascii=False) if isinstance(tc["arguments"], dict) else str(tc["arguments"])
@@ -617,15 +847,27 @@ During each thought, naturally plan:
                         "tool_call_id": otc["id"],
                         "content": str(observation_item),
                     })
+                repeat_notice = self._repeat_notice(actions)
+                if repeat_notice:
+                    messages.append({"role": "system", "content": repeat_notice})
+                    self._emit_event({"type": "repeat_reminder", "text": repeat_notice})
             else:
                 # ─── 文本解析消息格式 ───
-                messages.append({"role": "assistant", "content": response_text})
+                fallback_assistant = {"role": "assistant", "content": response_text}
+                if isinstance(response, dict) and response.get("usage"):
+                    fallback_assistant["usage"] = response["usage"]
+                    fallback_assistant["model"] = (self.usage_meta or {}).get("model")
+                messages.append(fallback_assistant)
                 messages.append(
                     {
                         "role": "system",
                         "content": f"[System] Tool execution result below. Please continue to the next step (Thought→Action) based on the result. If the task is completed, output the final summary directly.\n\nObservation: {observation}",
                     }
                 )
+                repeat_notice = self._repeat_notice(actions)
+                if repeat_notice:
+                    messages.append({"role": "system", "content": repeat_notice})
+                    self._emit_event({"type": "repeat_reminder", "text": repeat_notice})
 
             # 增量持久化：本轮新消息立即保存到会话文件
             # 在上下文压缩和 finalize 检查之前保存，确保取消/压缩都不会丢消息
@@ -668,6 +910,13 @@ During each thought, naturally plan:
         print(f"💡 Tip: continue the session to finish remaining work")
 
         self.last_messages = messages
+        self._emit_event({
+            "type": "task_end",
+            "status": "max_iterations_reached",
+            "session_id": session_id,
+            "iterations": self.max_iterations,
+            "usage": self._task_usage,
+        })
         return {
             "status": "max_iterations_reached",
             "iterations": self.max_iterations,
@@ -798,30 +1047,236 @@ During each thought, naturally plan:
             stub = stub[:6000] + "\n[truncated]"
         return stub
 
-    async def _build_model_view(
-        self, messages: List[Dict], session_id: Optional[str]
-    ) -> tuple:
-        """Return the model view, advancing a frozen cutoff only when needed."""
-        trigger, keep_tokens, recent_users, min_rounds = self._retrieval_config()
-        checkpoint = (
-            self.context_checkpoint
-            if isinstance(self.context_checkpoint, dict)
-            else None
+    def _render_view(
+        self,
+        messages: List[Dict],
+        cutoff: int,
+        latest_user: int,
+        stub: str,
+    ) -> List[Dict]:
+        return (
+            render_retrieval_view(messages, cutoff, latest_user, stub)
+            if cutoff > 0
+            else list(messages)
         )
-        cutoff = int(checkpoint.get("cutoff_index") or 0) if checkpoint else 0
+
+    def _pruned_view(self, view: List[Dict], messages: List[Dict]) -> List[Dict]:
+        """Apply persisted prune replacements to a rendered view without mutating messages."""
+        items = (self._prune_state or {}).get("items") if isinstance(self._prune_state, dict) else None
+        if not items:
+            return view
+        index_by_id = {id(message): index for index, message in enumerate(messages)}
+        result = []
+        for message in view:
+            index = index_by_id.get(id(message))
+            entry = items.get(str(index)) if index is not None else None
+            if entry and entry.get("content") is not None:
+                result.append({**message, "content": entry["content"]})
+            else:
+                result.append(message)
+        return result
+
+    def _view_tokens(self, messages: List[Dict], view: List[Dict], cutoff: int, checkpoint: Optional[Dict]) -> int:
+        """Use a provider anchor plus a heuristic delta when it is still valid."""
+        checkpoint = checkpoint or {}
+        if not self._last_prefix:
+            from aacode.utils.token_usage import fingerprint as _fp
+            self._last_prefix = {
+                "system_hash": _fp(self._system_prompt_for_hash or ""),
+                "tools_hash": self._tools_hash,
+            }
+        anchor = checkpoint.get("anchor") if isinstance(checkpoint.get("anchor"), dict) else None
+        prune_generation = int((self._prune_state or {}).get("generation", 0)) if isinstance(self._prune_state, dict) else 0
+        if anchor:
+            try:
+                same_view = int(anchor.get("cutoff_index", -1)) == int(cutoff)
+                same_prune = int(anchor.get("prune_generation", 0)) == prune_generation
+                same_prefix = (
+                    anchor.get("system_hash") == self._last_prefix.get("system_hash")
+                    and anchor.get("tools_hash") == self._tools_hash
+                )
+                same_model = not anchor.get("model") or anchor.get("model") == self._route().model
+                count = int(anchor.get("message_count", -1))
+                if same_view and same_prune and same_prefix and same_model and 0 <= count <= len(messages):
+                    delta = messages[count:]
+                    return int(anchor.get("prompt_total", 0)) + self._estimate_input_tokens(delta)
+            except Exception:
+                pass
+        return self._estimate_input_tokens(view)
+
+    def _summary_prefix(
+        self,
+        view: List[Dict],
+        messages: List[Dict],
+        new_cutoff: int,
+    ) -> Tuple[List[Dict], int]:
+        """Return the exact previous-view prefix through the new cutoff."""
+        target = messages[new_cutoff] if new_cutoff < len(messages) else None
+        if target is None:
+            return list(view), len(view)
+        for index, item in enumerate(view):
+            if item is target:
+                return list(view[:index]), index
+        # The cutoff may point at a message hidden by the previous view; fall
+        # back to the original history prefix (one cold summary at worst).
+        return list(messages[:new_cutoff]), new_cutoff
+
+    def _trim_summary_prefix(self, prefix: List[Dict], policy: ContextPolicy) -> List[Dict]:
+        max_tokens = max(1, policy.context_window - policy.summary_max_tokens - policy.headroom_tokens)
+        if self._estimate_input_tokens(prefix) <= max_tokens:
+            return prefix
+        if not prefix:
+            return prefix
+        system = prefix[0]
+        tail = list(prefix[1:])
+        while tail and self._estimate_input_tokens([system] + tail) > max_tokens:
+            tail.pop(0)
+        return [system] + tail
+
+    async def _summarize(
+        self,
+        prefix: List[Dict],
+        policy: ContextPolicy,
+        session_id: Optional[str],
+    ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+        if policy.summary_mode == SUMMARY_MODE_OFF:
+            return None, None
+        prefix = self._trim_summary_prefix(prefix, policy)
+        messages = build_summary_messages(prefix, SUMMARY_INSTRUCTION)
+        async def _attempt(msgs: List[Dict]) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+            try:
+                response = await self._call_model(msgs, purpose="summary")
+            except ContextOverflowError:
+                raise
+            except Exception as exc:
+                print(style(f"⚠️  Summary call failed: {exc}", fg=BLUE))
+                return None, None
+            text = response.get("text", "") if isinstance(response, dict) else str(response or "")
+            usage = response.get("usage") if isinstance(response, dict) else None
+            return text, usage
+
+        text, usage = await _attempt(messages)
+        if text and not validate_summary(text):
+            nudge = {
+                "role": "user",
+                "content": (
+                    "Your previous answer did not contain every required Markdown section. "
+                    "Repeat the checkpoint using the exact section headings, keeping every section "
+                    "and writing (none) for empty ones."
+                ),
+            }
+            text, usage = await _attempt(messages + [nudge])
+        if not text or not validate_summary(text):
+            return None, usage
+        if usage:
+            usage = dict(usage)
+            usage["source"] = "compaction"
+            merge_usage(self._task_usage, usage)
+            self._record_compaction_usage(usage, session_id)
+        return text.strip(), usage
+
+    async def _prune_retained(
+        self,
+        messages: List[Dict],
+        cutoff: int,
+        policy: ContextPolicy,
+        previous: Optional[Dict[str, Any]],
+        session_id: Optional[str],
+    ) -> Dict[str, Any]:
+        previous = previous if isinstance(previous, dict) else {}
+        if not policy.prune_enabled:
+            return previous
+        # Drop replacements that are now outside the retained view; the full
+        # original content remains in the session log and spill files.
+        items = {
+            key: value for key, value in (previous.get("items") or {}).items()
+            if str(key).isdigit() and int(key) >= cutoff
+        }
+        indices = select_prunable_indices(
+            messages,
+            cutoff,
+            policy.prune_min_rounds,
+            policy.prune_threshold_chars,
+            items,
+        )
+        generation = int(previous.get("generation", 0))
+        for index in indices:
+            message = messages[index]
+            content = message.get("content", "")
+            pruned = prune_text_middle(
+                content,
+                threshold_chars=policy.prune_threshold_chars,
+                head_chars=policy.prune_head_chars,
+                tail_chars=policy.prune_tail_chars,
+            )
+            if not pruned:
+                continue
+            new_text, before, after = pruned
+            call_id = message.get("tool_call_id") or f"idx{index}"
+            path = spill_preview(
+                content,
+                self.project_path,
+                session_id or self.session_id,
+                call_id,
+                label="tool",
+                head_chars=policy.prune_head_chars,
+                tail_chars=policy.prune_tail_chars,
+            )[1] if self.project_path else None
+            display_path = None
+            if path is not None:
+                try:
+                    display_path = str(path.relative_to(Path(self.project_path)))
+                except Exception:
+                    display_path = str(path)
+            marker = (
+                f"\n\n[... middle pruned: {before - after} chars; "
+                f"full output: {display_path or 'unavailable'} "
+                f"(use rg/sed/head/tail) ...]\n\n"
+            )
+            head = content[:policy.prune_head_chars]
+            tail_text = content[-policy.prune_tail_chars:] if policy.prune_tail_chars else ""
+            replacement = head + marker + tail_text
+            items[str(index)] = {
+                "content": replacement,
+                "chars_before": before,
+                "chars_after": len(replacement),
+                "call_id": call_id,
+                "spill_path": display_path,
+            }
+            generation += 1
+        return {"generation": generation, "items": items}
+
+    async def _build_model_view(
+        self,
+        messages: List[Dict],
+        session_id: Optional[str],
+        force: bool = False,
+        aggressive: bool = False,
+    ) -> tuple:
+        """Return the model view, advancing a frozen cutoff only when needed.
+
+        The cutoff is frozen while the view fits the policy threshold, which is
+        what keeps provider prefix caches warm. Tool-result pruning and the
+        optional summary are batched with a cutoff advance so the view changes
+        once, not on every step.
+        """
+        policy = self._policy or resolve_context_policy(self.context_config, self._route())
+        checkpoint = self.context_checkpoint if isinstance(self.context_checkpoint, dict) else None
+        checkpoint = checkpoint or {}
+        cutoff = int(checkpoint.get("cutoff_index") or 0)
         cutoff = max(0, min(cutoff, len(messages)))
         latest_user = self._latest_real_user_index(messages)
         stub = checkpoint.get("stub", "") if checkpoint else ""
+        self._prune_state = checkpoint.get("prune") if isinstance(checkpoint.get("prune"), dict) else {}
+        self._last_summary = checkpoint.get("summary") if isinstance(checkpoint.get("summary"), str) else None
 
         if cutoff > 0 and not stub:
-            stub = await self._build_checkpoint_stub(
-                messages, cutoff, latest_user, session_id
-            )
+            stub = await self._build_checkpoint_stub(messages, cutoff, latest_user, session_id)
             checkpoint = {
-                **(checkpoint or {}),
+                **checkpoint,
                 "cutoff_index": cutoff,
                 "omitted_messages": cutoff,
-                "keep_tokens": keep_tokens,
+                "keep_tokens": policy.retain_tokens,
                 "stub": stub,
                 "session_id": session_id,
             }
@@ -829,66 +1284,298 @@ During each thought, naturally plan:
             if self.on_checkpoint:
                 await self.on_checkpoint(checkpoint)
 
-        view = (
-            render_retrieval_view(messages, cutoff, latest_user, stub)
-            if cutoff > 0
-            else list(messages)
+        view = self._pruned_view(
+            self._render_view(messages, cutoff, latest_user, stub),
+            messages,
         )
-        tokens = self._estimate_tokens(view)
-        # Freeze the cutoff while the view fits the trigger. Advancing every
-        # request would change the prefix and destroy provider prompt caching.
-        if tokens <= trigger:
-            return view, cutoff > 0, tokens
+        tokens = self._view_tokens(messages, view, cutoff, checkpoint)
+        self._last_context_tokens = tokens
+        hard_ceiling = policy.context_window - policy.max_output_tokens - policy.headroom_tokens
 
+        def _assert_switch_fits(measured: int) -> None:
+            if self._model_switch_check and hard_ceiling > 0 and measured > hard_ceiling:
+                raise ModelSwitchError(
+                    "MODEL_SWITCH_COMPACTION_FAILED: history does not fit the destination model "
+                    f"({measured} > {hard_ceiling}); choose a larger model or run /compact first."
+                )
+
+        if not force and tokens <= policy.threshold_tokens:
+            _assert_switch_fits(tokens)
+            return view, cutoff > 0 or bool(self._prune_state.get("items")), tokens
+
+        # Move the cutoff forward. The retention policy keeps the newest
+        # verbatim tail; the cutoff is monotonically non-decreasing.
+        # Overflow recovery drops the retained-tail budget so it can make
+        # real progress; normal pressure keeps the configured verbatim tail.
+        keep_target = 0 if aggressive else policy.retain_tokens
         new_cutoff, new_latest_user = compute_retrieval_cutoff(
             self.encoding,
             messages,
             current_cutoff=cutoff,
-            keep_tokens=keep_tokens,
-            keep_recent_user_messages=recent_users,
-            keep_min_rounds=min_rounds,
+            keep_tokens=keep_target,
+            keep_recent_user_messages=max(1, int(getattr(self.context_config, "retrieval_keep_recent_user_messages", 2) or 2)),
+            keep_min_rounds=max(2, int(getattr(self.context_config, "retrieval_keep_min_rounds", 4) or 4)),
         )
+        if force and new_cutoff <= cutoff:
+            # Overflow recovery must make progress even if the estimator did
+            # not cross the retention boundary. Drop the oldest remaining round.
+            starts = [i for i, m in enumerate(messages) if i == 0 or m.get("role") != "tool"]
+            candidates = [s for s in starts if s > cutoff]
+            if candidates:
+                new_cutoff = candidates[0]
         if new_cutoff <= cutoff:
-            return view, cutoff > 0, tokens
+            if tokens > policy.threshold_tokens:
+                print(style(
+                    f"⚠️  Context is above the trigger ({tokens} > {policy.threshold_tokens}) "
+                    "but no safe cutoff can reduce it further",
+                    fg=BLUE,
+                ))
+            return view, cutoff > 0 or bool(self._prune_state.get("items")), tokens
 
-        new_stub = await self._build_checkpoint_stub(
+        prefix, prefix_end = self._summary_prefix(view, messages, new_cutoff)
+        shadowed = prefix[1:] if prefix else []
+        shadow_tokens = self._estimate_input_tokens(shadowed)
+
+        summary_text = self._last_summary
+        summary_usage = None
+        should_summarize = (
+            policy.summary_mode == SUMMARY_MODE_ALWAYS
+            or (policy.summary_mode == SUMMARY_MODE_ADAPTIVE and shadow_tokens >= policy.summary_min_shadow_tokens)
+        )
+        if should_summarize and len(prefix) > 1:
+            summary_text, summary_usage = await self._summarize(prefix, policy, session_id)
+
+        continue_base = await self._build_checkpoint_stub(
             messages, new_cutoff, new_latest_user, session_id
         )
+        if summary_text:
+            new_stub = frame_summary(summary_text) + "\n\n" + continue_base
+        else:
+            new_stub = continue_base
+
+        prune = await self._prune_retained(
+            messages, new_cutoff, policy, self._prune_state, session_id
+        )
+        prune_generation = int(prune.get("generation", 0)) if isinstance(prune, dict) else 0
         checkpoint = {
+            "version": 2,
             "cutoff_index": new_cutoff,
             "omitted_messages": new_cutoff,
-            "keep_tokens": keep_tokens,
+            "keep_tokens": policy.retain_tokens,
+            "trigger_tokens": policy.threshold_tokens,
             "stub": new_stub,
+            "summary": summary_text,
+            "summary_usage": summary_usage,
+            "summary_tokens": self._estimate_input_tokens([{"role": "user", "content": new_stub}]),
+            "prune": prune,
+            "anchor": None,
             "session_id": session_id,
             "created_at": datetime.now().isoformat(timespec="seconds"),
         }
         self.context_checkpoint = checkpoint
+        self._prune_state = prune
         if self.on_checkpoint:
             await self.on_checkpoint(checkpoint)
 
-        view = render_retrieval_view(
-            messages, new_cutoff, new_latest_user, new_stub
+        view = self._pruned_view(
+            self._render_view(messages, new_cutoff, new_latest_user, new_stub),
+            messages,
         )
-        tokens = self._estimate_tokens(view)
+        tokens = self._estimate_input_tokens(view)
+        self._last_context_tokens = tokens
+        _assert_switch_fits(tokens)
+        self._last_was_compacted = True
         if self.logger:
             await self.logger.log_context_update(
                 update_type="retrieval_checkpoint",
                 content=(
                     f"Omitted messages 1-{new_cutoff}; "
-                    f"model view tokens {tokens}"
+                    f"model view tokens {tokens}; summary={bool(summary_text)}; "
+                    f"pruned={len((prune or {}).get('items', {}))}"
                 ),
             )
         print(
             style(
                 f"📦 Context cutoff: omitted {new_cutoff} messages, "
-                f"keeping ~{tokens} tokens",
+                f"keeping ~{tokens} tokens"
+                + (" + summary" if summary_text else "")
+                + (f" + {len((prune or {}).get('items', {}))} pruned tool results" if prune.get("items") else ""),
                 fg=BLUE,
             )
         )
+        self._emit_event({
+            "type": "compaction",
+            "session_id": session_id,
+            "cutoff_index": new_cutoff,
+            "tokens": tokens,
+            "summary": bool(summary_text),
+            "pruned": len((prune or {}).get("items", {})),
+            "summary_usage": summary_usage,
+        })
         return view, True, tokens
+
+    def _dedupe_observation(self, action: str, arguments: Dict[str, Any], observation: Any) -> Any:
+        """Collapse an identical repeated read-only result to a short reference.
+
+        The tool still executes, so a changed file/output is returned normally.
+        Only an identical result from the same tool+arguments within the recent
+        window becomes a one-line reference, saving the full output tokens.
+        """
+        policy = self._policy or resolve_context_policy(self.context_config, self._route())
+        if not policy.read_cache_enabled or not isinstance(observation, str):
+            return observation
+        if action == "run_shell":
+            command = str(arguments.get("command") or "")
+            if not re.match(r"^\s*(cat|head|tail|sed\s+-n|ls|find|grep|rg|git\s+(status|diff|log|show)|pwd|wc|stat|du|tree|which|echo)\b", command):
+                return observation
+        elif action not in {
+            "search_web", "fetch_url", "fetch_rendered", "search_history",
+            "read_history", "get_todo_summary", "get_mcp_status", "browser_tools",
+            "browser_call", "ax_act", "list_mcp_tools",
+        }:
+            return observation
+        key = tool_repeat_key(action, arguments)
+        previous = self._read_cache.get(key)
+        if previous is not None and previous == observation:
+            return (
+                f"[Same result as an earlier identical {action} call; "
+                f"{len(observation)} chars omitted. Reuse the earlier result.]"
+            )
+        self._read_cache[key] = observation
+        if key not in self._read_cache_order:
+            self._read_cache_order.append(key)
+        # Bound the cache; the point is recent-call deduplication, not a store.
+        while len(self._read_cache_order) > 32:
+            old = self._read_cache_order.pop(0)
+            self._read_cache.pop(old, None)
+        return observation
+
+    def _prepare_observation(self, action: str, observation: Any, call_id: str) -> str:
+        """Spill oversized tool output before it enters model-visible history."""
+        text = observation if isinstance(observation, str) else str(observation)
+        policy = self._policy or resolve_context_policy(self.context_config, self._route())
+        if not text or policy.inline_tool_tokens <= 0:
+            return text
+        # run_shell already archives its own full output and appends a stable
+        # marker; do not wrap it twice.
+        if "[Output truncated; full output saved to" in text:
+            return text
+        if not should_inline_spill(text, policy.inline_tool_tokens, self.encoding):
+            return text
+        try:
+            preview, path = spill_preview(
+                text,
+                self.project_path,
+                self.session_id,
+                call_id,
+                label=action,
+                head_chars=policy.inline_head_chars,
+                tail_chars=policy.inline_tail_chars,
+            )
+            if path is not None:
+                self._emit_event({
+                    "type": "tool_spill",
+                    "tool": action,
+                    "call_id": call_id,
+                    "path": str(path),
+                    "original_chars": len(text),
+                })
+            return preview
+        except Exception:
+            return text
+
+    def _repeat_notice(self, actions: List[ActionItem]) -> Optional[str]:
+        """Return a reminder when the same tool+arguments repeats consecutively."""
+        policy = self._policy or resolve_context_policy(self.context_config, self._route())
+        if not policy.repeat_tool_enabled or not actions:
+            return None
+        reminder = None
+        for action in actions:
+            key = tool_repeat_key(action.action, action.action_input or {})
+            chain = self._repeat_chain
+            count = chain["count"] + 1 if chain and chain.get("key") == key else 1
+            self._repeat_chain = {"key": key, "count": count}
+            if count not in policy.repeat_tool_thresholds:
+                continue
+            if count == policy.repeat_tool_thresholds[0]:
+                reminder = (
+                    "You are repeating the exact same tool call with identical arguments. "
+                    "Carefully analyze the previous result before calling again: if the task is "
+                    "not complete, try a different approach or different arguments instead of "
+                    "repeating the call."
+                )
+            else:
+                preview = json.dumps(action.action_input or {}, ensure_ascii=False)
+                if len(preview) > 500:
+                    preview = preview[:500] + "…"
+                reminder = (
+                    "Repeated tool call detected:\n"
+                    f"- tool: {action.action}\n"
+                    f"- consecutive_calls: {count}\n"
+                    f"- arguments: {preview}\n"
+                    "The repeated calls are not making progress. Do not call this tool with "
+                    "these exact arguments again. Inspect the latest result and choose a "
+                    "different action, different arguments, or finish the task if enough "
+                    "evidence has been gathered."
+                )
+        return reminder
+
+    async def compact_now(self, messages: List[Dict], session_id: Optional[str] = None) -> Dict[str, Any]:
+        """Compact an idle session even below the automatic pressure threshold.
+
+        This is the manual /compact operation. It uses the normal retention
+        budget (not the aggressive overflow policy), persists the checkpoint,
+        and never sends the compacted view to the model.
+        """
+        if not isinstance(self.context_checkpoint, dict):
+            self.context_checkpoint = {
+                "version": 2,
+                "cutoff_index": 0,
+                "omitted_messages": 0,
+                "anchor": None,
+            }
+        self._policy = resolve_context_policy(self.context_config, self._route())
+        before = int(self.context_checkpoint.get("cutoff_index") or 0)
+        view, changed, tokens = await self._build_model_view(
+            messages, session_id, force=True, aggressive=False
+        )
+        after = int(self.context_checkpoint.get("cutoff_index") or 0)
+        return {
+            "status": "compacted" if changed and after > before else "noop",
+            "cutoff_before": before,
+            "cutoff_after": after,
+            "tokens": tokens,
+            "summary": bool(self.context_checkpoint.get("summary")),
+            "pruned": len((self.context_checkpoint.get("prune") or {}).get("items", {})),
+        }
 
     def _classify_tool_status(self, observation: Any) -> tuple:
         """Return (status, error_code) for a tool result."""
+        # run_shell (and similar tools) return structured dicts. ``success``
+        # means the tool itself ran; the command's returncode/stderr decide
+        # whether the command failed. Treat timeouts and nonzero exits with
+        # stderr as errors, while allowing common benign exit 1 (e.g. grep
+        # with no match) to remain visible output rather than a failure.
+        if isinstance(observation, dict):
+            if observation.get("timeout"):
+                return "error", "timeout"
+            dict_error = str(observation.get("error") or "")
+            if dict_error or observation.get("allowed") is False:
+                error_text = dict_error.lower()
+                if "safety guard" in error_text or "dangerous operation" in error_text:
+                    return "error", "safety_guard"
+                if "timeout" in error_text or "timed out" in error_text:
+                    return "error", "timeout"
+                if "not found" in error_text:
+                    return "error", "not_found"
+                return "error", "tool_error"
+            returncode = observation.get("returncode")
+            if returncode not in (0, None):
+                stderr = str(observation.get("stderr") or "").strip()
+                if stderr or returncode not in (1,):
+                    if "not found" in stderr.lower():
+                        return "error", "not_found"
+                    return "error", "exit_code"
         text = observation if isinstance(observation, str) else str(observation)
         lowered = text.lower()
         error_prefixes = (
@@ -943,6 +1630,27 @@ During each thought, naturally plan:
             payload["error_message"] = str(error_message)[:500]
         print(json.dumps(payload, ensure_ascii=False), flush=True)
 
+    def _record_compaction_usage(self, usage: Dict[str, Any], session_id: Optional[str]) -> None:
+        """Persist the auxiliary summary call separately from the main turn."""
+        tracker = self._usage_tracker
+        if tracker is None:
+            return
+        usage = ensure_canonical_usage(usage, self._route().provider or "unknown") or usage
+        event = {
+            "source": "compaction",
+            "session_id": session_id or self.session_id,
+            "run_id": None,
+            "iteration": None,
+            "provider": self._route().provider,
+            "model": self._route().model,
+            "stream": True,
+            "status": "ok",
+            "usage_source": usage.get("usage_source", "provider"),
+            "cache_hit_rate": cache_hit_rate(usage),
+        }
+        event.update(usage)
+        tracker.record(event)
+
     def _record_usage(
         self,
         response: Any,
@@ -953,15 +1661,33 @@ During each thought, naturally plan:
         messages_count: int,
         compacted: bool,
     ) -> None:
-        """Persist provider-reported usage for one model call.
-
-        The JSONL log is append-only and contains no prompt or response text.
-        """
-        usage = response.get("usage") if isinstance(response, dict) else None
+        """Persist provider-reported usage, update the anchor, and emit telemetry."""
+        usage = ensure_canonical_usage(
+            response.get("usage") if isinstance(response, dict) else None,
+            self._route().provider or "unknown",
+        )
         meta = self.usage_meta or {}
+        request_messages = getattr(self, "_last_request_messages", []) or []
+        diagnostics = prefix_diagnostics(
+            request_messages,
+            system_prompt=self._system_prompt_for_hash,
+            tools=None,
+            previous=self._prefix_previous,
+        )
+        diagnostics["tools_hash"] = self._tools_hash
+        self._last_prefix = diagnostics
+        previous_rate = None
+        if isinstance(self._prefix_previous, dict):
+            previous_rate = self._prefix_previous.get("cache_hit_rate")
+        rate = cache_hit_rate(usage) if usage else None
+        self._prefix_previous = {
+            **prefix_state(request_messages, diagnostics),
+            "cache_hit_rate": rate,
+        }
+
         event: Dict[str, Any] = {
-            "source": "main",
-            "session_id": session_id,
+            "source": meta.get("source", "main"),
+            "session_id": session_id or self.session_id,
             "run_id": run_id,
             "iteration": iteration,
             "provider": meta.get("provider"),
@@ -974,29 +1700,100 @@ During each thought, naturally plan:
             "context_tokens_estimate": context_tokens,
             "messages_count": messages_count,
             "compacted": bool(compacted),
+            "system_hash": diagnostics.get("system_hash"),
+            "tools_hash": diagnostics.get("tools_hash"),
+            "history_hash": diagnostics.get("history_hash"),
+            "first_diff": diagnostics.get("first_diff"),
         }
 
         if usage:
             event.update(usage)
-            hit = int(usage.get("cache_read_tokens") or 0)
-            miss = int(usage.get("cache_miss_tokens") or 0)
-            denominator = hit + miss
-            event["cache_hit_rate"] = (hit / denominator) if denominator else 0.0
+            event["cache_hit_rate"] = rate
+            merge_usage(self._task_usage, usage)
+            self._task_input_tokens += int(usage.get("prompt_total") or 0)
+            self._task_output_tokens += int(usage.get("output") or 0)
+            # Anchor only provider-reported usage; an estimate is not a billing fact.
+            if isinstance(self.context_checkpoint, dict):
+                prompt_total = int(usage.get("prompt_total") or context_tokens)
+                self.context_checkpoint["anchor"] = {
+                    "cutoff_index": int(self.context_checkpoint.get("cutoff_index", 0)),
+                    "prune_generation": int((self._prune_state or {}).get("generation", 0)) if isinstance(self._prune_state, dict) else 0,
+                    "message_count": len(self._full_messages_for_anchor),
+                    "prompt_total": prompt_total,
+                    "model": self._route().model,
+                    "system_hash": diagnostics.get("system_hash"),
+                    "tools_hash": self._tools_hash,
+                    "usage": usage,
+                }
+            self._last_usage = usage
+        else:
+            # Without provider usage, still count the anchored estimate toward
+            # the task budget; the UI labels it as estimated.
+            self._task_input_tokens += int(context_tokens or 0)
+
+        policy = self._policy or resolve_context_policy(self.context_config, self._route())
+        budget_exceeded = (
+            (policy.task_input_token_budget and self._task_input_tokens > policy.task_input_token_budget)
+            or (policy.task_output_token_budget and self._task_output_tokens > policy.task_output_token_budget)
+        )
+        if budget_exceeded:
+            self._budget_exceeded = True
+            event["budget_exceeded"] = True
+
+        pricing = self._route().pricing or {}
+        cost = usage_cost(usage, pricing) if usage else None
+        event["cost"] = cost
+        event["currency"] = pricing.get("currency", "") if isinstance(pricing, dict) else ""
+        event["context_window"] = policy.context_window
+        event["context_percent"] = (
+            int(round(context_tokens / policy.context_window * 100)) if policy.context_window else None
+        )
 
         tracker = self._usage_tracker
-        if tracker is None or not tracker.record(event):
-            return
+        if tracker is not None:
+            tracker.record(event)
 
-        if usage and tracker.verbose:
-            hit = int(usage.get("cache_read_tokens") or 0)
-            miss = int(usage.get("cache_miss_tokens") or 0)
-            denominator = hit + miss
-            rate = (hit / denominator) if denominator else 0.0
+        # Anomaly hints: a fresh task with a cold prefix or a sudden hit-rate
+        # drop almost always means the prompt prefix changed.
+        if usage and rate is not None:
+            if previous_rate is None and rate < 0.30 and context_tokens > 2000:
+                print(style(
+                    f"⚠️  Cache hit {rate:.1%} on the first call of this task; "
+                    f"prefix may have changed (system={diagnostics.get('system_hash')}, first_diff={diagnostics.get('first_diff')})",
+                    fg=BLUE,
+                ), flush=True)
+            elif previous_rate is not None and previous_rate - rate > 0.40:
+                print(style(
+                    f"⚠️  Cache hit dropped {previous_rate:.0%} → {rate:.0%}; "
+                    f"first_diff={diagnostics.get('first_diff')}",
+                    fg=BLUE,
+                ), flush=True)
+
+        if usage:
+            self._emit_event({
+                "type": "usage",
+                "session_id": session_id or self.session_id,
+                "iteration": iteration,
+                "usage": usage,
+                "context_tokens": context_tokens,
+                "context_window": policy.context_window,
+                "context_percent": event.get("context_percent"),
+                "cache_hit_rate": rate,
+                "cost": cost,
+                "currency": event.get("currency", ""),
+                "total": self._task_usage,
+                "budget_exceeded": self._budget_exceeded,
+            })
+
+        if _is_tty_for_events() and usage and os.getenv("AACODE_USAGE_QUIET", "0") != "1":
             print(
                 style(
-                    f"📊 Usage iter {iteration}: input={usage.get('input_tokens', 0)} "
-                    f"(cache {rate:.1%}) output={usage.get('output_tokens', 0)} "
-                    f"reasoning={usage.get('reasoning_tokens', 0)}",
+                    f"📊 iter {iteration}: ctx {format_tokens(context_tokens)} "
+                    f"({event.get('context_percent')}%) | cache {rate:.1%} | "
+                    f"in {format_tokens(usage.get('prompt_total', 0))} "
+                    f"(uncached {format_tokens(usage.get('uncached_input', 0))}) | "
+                    f"out {format_tokens(usage.get('output', 0))} | "
+                    f"cost {format_cost(cost)}",
                     fg=BLUE,
                 ),
                 flush=True,
@@ -1395,6 +2192,11 @@ During each thought, naturally plan:
         if action not in self.tools:
             # 使 with 工具注册表提供友好的错误消息
             return registry.format_tool_not_found_error(action)
+        if self.active_tool_names is not None and action not in self.active_tool_names:
+            return (
+                f"Error: tool '{action}' is not enabled in this session's tool profile. "
+                "Use one of the tools advertised in the current request."
+            )
 
         try:
             # 验证输入参数

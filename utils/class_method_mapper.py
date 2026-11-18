@@ -12,11 +12,40 @@ from __future__ import annotations
 
 import ast
 import os
+import time
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Set, Tuple
 import re
 from datetime import datetime
 from aacode.i18n import t
+
+
+# Directories which must never be walked by project analysis.  This matters
+# for source checkouts that vendor large reference repositories or have a
+# populated desktop/node_modules tree.
+SKIP_DIRS = {
+    ".venv", "venv", "env", "__pycache__", ".git", ".aacode", ".idea",
+    ".mypy_cache", ".pytest_cache", ".tox", "node_modules", "vendor",
+    "target", "build", "dist", "site-packages", ".cache", "projects",
+}
+
+
+def _iter_files(root: Path, suffix: Optional[str] = None):
+    """Walk *root* while pruning build/vendor/dependency directories."""
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        for filename in filenames:
+            if suffix and not filename.lower().endswith(suffix):
+                continue
+            yield Path(dirpath) / filename
+
+
+def _analysis_deadline() -> float:
+    try:
+        budget = float(os.getenv("AACODE_ANALYSIS_BUDGET", "8") or 8)
+    except Exception:
+        budget = 8.0
+    return time.monotonic() + max(1.0, budget)
 
 
 class ClassMethodMapper:
@@ -39,20 +68,17 @@ class ClassMethodMapper:
         self.imports_map.clear()
         self.file_structure.clear()
 
-        # 查找所有Python文件
-        python_files = list(self.project_path.rglob("*.py"))
+        # 查找所有Python文件，跳过 vendor/node_modules 等大目录
+        python_files = list(_iter_files(self.project_path, ".py"))
 
         print(f"📁 Found {len(python_files)} Python files")
 
         analyzed_count = 0
+        deadline = _analysis_deadline()
         for file_path in python_files:
-            # 跳过虚拟环境目录和缓存目录
-            if any(
-                skip in str(file_path)
-                for skip in [".venv", "__pycache__", ".git", ".aacode"]
-            ):
-                continue
-
+            if time.monotonic() > deadline:
+                print("⏱ Project analysis budget exceeded; using a partial map.")
+                break
             try:
                 self._analyze_file(file_path)
                 analyzed_count += 1
@@ -729,34 +755,21 @@ class MultiLangAnalyzer:
         total_files = 0
         analyzed_files = 0
 
-        for file_path in self.project_path.rglob("*"):
-            if file_path.is_file():
-                total_files += 1
-                # 跳过虚拟环境目录和缓存目录
-                if any(
-                    skip in str(file_path)
-                    for skip in [
-                        ".venv",
-                        "__pycache__",
-                        ".git",
-                        ".aacode",
-                        "node_modules",
-                        "target",
-                        "build",
-                        "dist",
-                    ]
-                ):
-                    continue
-
-                try:
-                    detected_lang = self._detect_language(file_path)
-                    if detected_lang:
-                        self._analyze_file(file_path, detected_lang)
-                        analyzed_files += 1
-                except Exception as e:
-                    print(
-                        f"⚠️  分析文件 {file_path.relative_to(self.project_path)} 时出错: {e}"
-                    )
+        deadline = _analysis_deadline()
+        for file_path in _iter_files(self.project_path):
+            total_files += 1
+            if time.monotonic() > deadline:
+                print("⏱ Multi-language analysis budget exceeded; using a partial map.")
+                break
+            try:
+                detected_lang = self._detect_language(file_path)
+                if detected_lang:
+                    self._analyze_file(file_path, detected_lang)
+                    analyzed_files += 1
+            except Exception as e:
+                print(
+                    f"⚠️  分析文件 {file_path.relative_to(self.project_path)} 时出错: {e}"
+                )
 
         print(f"📁 Found {total_files} files, successfully analyzed {analyzed_files} code files")
         return self._generate_summary()

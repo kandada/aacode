@@ -27,6 +27,7 @@ class AICoderRunner:
         task: str,
         target_project: Optional[str] = None,
         session_id: Optional[str] = None,
+        event_callback=None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Run a task and yield events for streaming"""
         if target_project:
@@ -81,7 +82,19 @@ class AICoderRunner:
 
             self.running_task = asyncio.current_task()
 
-            result = await agent.execute(task)
+            # Desktop/CLI manual compaction shares the same session pipeline.
+            if task.strip().lower() in ("/compact", "compact"):
+                result = await agent.compact_context()
+                yield {"type": "compact_done", "session_id": session_id, "result": result}
+                yield {"type": "done", "session_id": session_id, "result": result}
+                return
+
+            try:
+                result = await agent.execute(task, event_callback=event_callback)
+            except TypeError as exc:
+                if "event_callback" not in str(exc):
+                    raise
+                result = await agent.execute(task)
 
             if result.get("status") == "completed":
                 yield {"type": "done", "session_id": session_id, "result": result}
@@ -162,6 +175,10 @@ class AICoderRunner:
                             "created_at": created_at,
                             "last_activity": last_activity,
                             "status": info.get("status", "active"),
+                            "calls": info.get("calls", 0),
+                            "cache_hit_rate": info.get("cache_hit_rate", 0.0),
+                            "total_cost": info.get("total_cost", 0.0),
+                            "last_context_tokens": info.get("last_context_tokens", 0),
                         }
                     )
                 # 排序：统一转为 float 比较

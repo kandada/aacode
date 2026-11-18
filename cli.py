@@ -83,6 +83,9 @@ def _update_yaml_model(config_file: Path, model: dict, api_key: str):
         models = {}
     key = model["key"]
     entry = models.get(key) if isinstance(models.get(key), dict) else {}
+    from aacode.config import DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_OUTPUT_TOKENS
+    entry.setdefault("context_window", DEFAULT_CONTEXT_WINDOW)
+    entry.setdefault("max_output_tokens", DEFAULT_MAX_OUTPUT_TOKENS)
     entry.update(
         {
             "name": model["name"],
@@ -202,9 +205,36 @@ def run_main_async(args):
         sys.argv = old_argv
 
 
+def _run_tui(args):
+    """Launch the terminal UI, falling back to the line CLI on failure."""
+    import argparse
+    parser = argparse.ArgumentParser(prog="aacode tui")
+    parser.add_argument("-p", "--project", default="")
+    parser.add_argument("--session", default="")
+    parser.add_argument("--model", default="")
+    try:
+        parsed = parser.parse_args(args)
+    except SystemExit:
+        return 2
+    from aacode.tui import run_tui
+    code = run_tui(project=parsed.project or os.getcwd(), session=parsed.session, model=parsed.model)
+    return code
+
+
 def main():
     """CLI main entry point"""
     if len(sys.argv) < 2:
+        # Interactive terminal users get the TUI; pipes/CI keep the line CLI.
+        if (
+            sys.stdin.isatty()
+            and sys.stdout.isatty()
+            and os.getenv("AACODE_LEGACY_CLI") != "1"
+            and not os.getenv("PYTEST_CURRENT_TEST")
+        ):
+            try:
+                return _run_tui([])
+            except Exception:
+                pass
         run_main_async([])
         return 0
 
@@ -219,11 +249,15 @@ def main():
     elif command == "run":
         run_main_async(sys.argv[2:])
 
+    elif command == "tui":
+        return _run_tui(sys.argv[2:])
+
     elif command == "--help" or command == "-h":
         print("aacode - AI Coding Assistant")
         print("\nUsage:")
         print("  aacode init        Initialize configuration")
-        print("  aacode              进入交互会话模式（在当前目录）")
+        print("  aacode tui         Open the full-screen terminal UI")
+        print("  aacode              进入 TUI（非 TTY 时回退到交互会话模式）")
         print("  aacode <task>       在当前目录执行任务")
         print("  aacode run <task>   在当前目录执行任务")
         print('\n  aacode -p /path/to/project "task description"')

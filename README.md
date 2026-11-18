@@ -63,10 +63,19 @@ pip install aacode
 # Initialize configuration
 aacode init
 
-# Enter interactive session mode (no task required)
+# Enter the full-screen TUI (no task required; falls back to the line CLI in pipes)
 aacode
 
-# Run a single task in current directory
+# Or explicitly open the TUI
+aacode tui
+
+# When running the source entry point directly
+python3 aacode/main.py --tui
+
+# Resume a session in the TUI
+aacode tui --session session_xxxxxxxx
+
+# Run a single task in current directory (line mode)
 aacode "your task"
 
 # Or explicitly with aacode run (same as above)
@@ -76,14 +85,41 @@ aacode run "your task"
 aacode run -p /your/project/path "your task"
 ```
 
+### 🖥️ Terminal UI (TUI)
+
+`aacode tui` opens a Textual-based terminal UI inspired by OpenCode's minimal
+layout: a compact header, a scrollable transcript with Markdown answers,
+collapsible tool/thinking blocks, a command palette, and a live status line for
+context %, cache hit %, tokens, and estimated cost. A dependency-free curses
+fallback remains available if Textual is not installed.
+
+Key bindings: `Enter` sends, `Shift+Enter` inserts a newline (composer grows to
+five content lines), `Ctrl+K` opens the command palette, `Ctrl+O` expands or
+collapses tool output, `Ctrl+T` toggles thinking, `Ctrl+L` clears the
+transcript, `Ctrl+Q` quits, and `Esc` cancels the running task. `Ctrl+C` copies
+the current selection; selecting text also copies it. `Ctrl+Y` or `/copy`
+copies the last assistant answer. Use `Ctrl+V` or right-click in the composer
+to paste from the system clipboard.
+Slash commands: type `/` for the filtered dropdown menu — `/help`, `/setup`,
+`/usage`, `/sessions`, `/resume`, `/model`, `/settings`, `/compact`, `/reload`,
+`/tools`, `/thinking`, `/clear`, `/cancel`, `/exit`. `/setup` opens a form for
+model name, base URL, gateway, and API key and writes it to the YAML config;
+`aacode init` remains available from the shell for the full interactive wizard.
+The running footer uses an animated one-cell work indicator with elapsed time;
+tool headers animate while running and assistant output shows a streaming caret.
+The TUI skips the one-shot project scan by default so the first token is not
+delayed by large vendor/node_modules trees; set
+`AACODE_SKIP_PROJECT_ANALYSIS=0` to restore it. Non-TTY invocations keep the
+original line-oriented CLI.
+
 ### 🖥️ Desktop Client
 
 If you prefer a graphical interface, try AACode Desktop:
 
 | Platform | Download                                                                                                |
 |----------|---------------------------------------------------------------------------------------------------------|
-| macOS (Apple Silicon) | [AACode_1.8.15_aarch64.dmg](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.8.15_aarch64.dmg) |
-| Windows | [AACode_1.8.15_x64-setup.exe](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.8.15_x64-setup.exe) |
+| macOS (Apple Silicon) | [AACode_1.8.16_aarch64.dmg](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.8.16_aarch64.dmg) |
+| Windows | [AACode_1.8.16_x64-setup.exe](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.8.16_x64-setup.exe) |
 > The desktop client still requires Python and dependencies (not required for the mobile app). See 👉 [DESKTOP.md](DESKTOP.md) for full setup instructions.
 
 ### 📱 Mobile App

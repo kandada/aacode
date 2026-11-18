@@ -33,6 +33,12 @@ class SubAgent(BaseAgent):
         tools: Dict[str, Any],
         context_manager: Any,
         parent_agent_id: Optional[str] = None,
+        project_path: Optional[Path] = None,
+        context_config: Any = None,
+        route_context: Optional[Dict[str, Any]] = None,
+        usage_meta: Optional[Dict[str, Any]] = None,
+        session_manager: Any = None,
+        max_iterations: int = 15,
         **kwargs,
     ):
 
@@ -43,7 +49,19 @@ class SubAgent(BaseAgent):
             + "\n\n⚡ Always use native function calls (tool_calls) — do NOT output "
             "JSON/text-formatted tool call info in your response. The system executes "
             "tools automatically and returns results as tool role messages."
+            "\n\nWhen the task is complete, call submit_result exactly once with a concise "
+            "summary, exact files changed, remaining next steps, unresolved errors, and key "
+            "evidence. Do not call other tools after submit_result."
         )
+        self._structured_result: Optional[Dict[str, Any]] = None
+        tools = dict(tools or {})
+        tools["submit_result"] = self.submit_result
+        try:
+            from aacode.utils.tool_registry import get_global_registry
+            from aacode.utils.tool_schemas import SUBMIT_RESULT_SCHEMA
+            get_global_registry().register(self.submit_result, SUBMIT_RESULT_SCHEMA)
+        except Exception:
+            pass
 
         super().__init__(
             agent_id=agent_id,
@@ -56,14 +74,21 @@ class SubAgent(BaseAgent):
 
         self.parent_agent_id = parent_agent_id
         self.task_description: Optional[str] = None
+        self.project_path = project_path
+        self.usage_meta = usage_meta or {"source": "subagent"}
+        self.session_manager = session_manager
 
-        # 创建专用的ReAct循环
+        # 创建专用的ReAct循环（独立预算、独立 usage、独立工具集）
         self.react_loop = AsyncReActLoop(
             model_caller=model_caller,
             tools=tools,
             context_manager=context_manager,
-            max_iterations=kwargs.get("max_iterations", 15),
+            max_iterations=max_iterations,
+            project_path=project_path,
+            context_config=context_config,
+            route_context=route_context,
         )
+        self.react_loop.usage_meta = self.usage_meta
 
     async def execute(
         self,
@@ -99,13 +124,83 @@ class SubAgent(BaseAgent):
             }
         )
 
-        # 运行ReAct循环
+        # 子 agent 拥有独立的持久化 session（可恢复、可审计）。
+        child_session_id = self.usage_meta.get("session_id")
+        if self.session_manager is not None:
+            if not self.session_manager.current_session_id:
+                child_session_id = await self.session_manager.create_session(
+                    task, title=f"[subagent] {task[:60]}"
+                )
+            else:
+                child_session_id = self.session_manager.current_session_id
+            self.usage_meta["session_id"] = child_session_id
+
+        async def _save_child_messages(new_msgs):
+            if self.session_manager is None:
+                return
+            from aacode.utils.session_manager import SessionMessage
+            from datetime import datetime
+            for msg in new_msgs:
+                if msg.get("role") not in ("assistant", "tool", "system"):
+                    continue
+                content = msg.get("content", "")
+                reasoning = msg.get("reasoning_content")
+                counter = getattr(self.session_manager, "_count_tokens", None)
+                tokens = (counter(content or "") if callable(counter) else len(content or "") // 4)
+                if reasoning:
+                    tokens += (counter(reasoning) if callable(counter) else len(reasoning) // 4)
+                self.session_manager.current_messages.append(
+                    SessionMessage(
+                        role=msg.get("role", "assistant"),
+                        content=content,
+                        timestamp=datetime.now().isoformat(timespec="seconds"),
+                        tokens=tokens,
+                        tool_calls=msg.get("tool_calls"),
+                        tool_call_id=msg.get("tool_call_id"),
+                        reasoning_content=reasoning,
+                        usage=msg.get("usage") if isinstance(msg.get("usage"), dict) else None,
+                        model=msg.get("model") or self.usage_meta.get("model"),
+                    )
+                )
+            try:
+                summary = self.session_manager.sessions_index.get(child_session_id)
+                if summary:
+                    summary.last_activity = datetime.now().isoformat(timespec="seconds")
+                    summary.total_messages = len(self.session_manager.current_messages)
+                    summary.total_tokens = self.session_manager._get_total_tokens()
+                await self.session_manager._save_session()
+                self.session_manager._save_sessions_index()
+            except Exception:
+                pass
+
+        # 运行ReAct循环（子 agent 使用独立会话 id 做 usage 归因）
+        self.react_loop.usage_meta = {
+            **self.usage_meta,
+            "source": "subagent",
+            "session_id": child_session_id,
+        }
         result = await self.react_loop.run(
-            initial_prompt=self.system_prompt, task_description=task
+            initial_prompt=self.system_prompt,
+            task_description=task,
+            session_id=child_session_id,
+            on_new_messages=_save_child_messages,
         )
+        if self.session_manager is not None:
+            try:
+                summary = self.session_manager.sessions_index.get(child_session_id)
+                if summary:
+                    summary.status = "completed"
+                await self.session_manager._save_session()
+                self.session_manager._save_sessions_index()
+            except Exception:
+                pass
 
         # 更新统计
         self.iterations = len(self.react_loop.steps)
+        if self._structured_result and isinstance(self._structured_result.get("summary"), str):
+            result = dict(result)
+            # The structured submission is the authoritative final answer.
+            result["final_thought"] = self._structured_result["summary"]
 
         execution_time = 0.0
         if self.start_time is not None:
@@ -117,34 +212,26 @@ class SubAgent(BaseAgent):
             "task": task,
             "agent_stats": self.get_stats(),
             "execution_time": execution_time,
+            "usage": getattr(self.react_loop, "_task_usage", {}),
+            "structured": self._structured_result,
         }
 
-    async def submit_result(self, result: Dict) -> Dict[str, Any]:
-        """提交任务结果（用于结构化输出）"""
+    async def submit_result(self, **result) -> Dict[str, Any]:
+        """Record the structured final result for this sub-agent."""
         try:
-            # 验证结果格式
             if not isinstance(result, dict):
                 return {"error": "Result must be dict format"}
-
-            # 添加元数据
-            result_with_metadata = {
-                **result,
-                "agent_id": self.agent_id,
-                "parent_agent_id": self.parent_agent_id,
-                "task_description": self.task_description,
-                "submitted_at": asyncio.get_event_loop().time(),
-                "iterations": self.iterations,
-                "tool_calls": self.tool_calls,
-            }
-
-            print(f"✅ SubAgent {self.agent_id} submitted result")
-
+            if not str(result.get("summary") or "").strip():
+                return {"error": "submit_result requires a non-empty summary"}
+            for key in ("files_changed", "next_steps", "errors", "key_evidence"):
+                value = result.get(key)
+                if value is not None and not isinstance(value, list):
+                    result[key] = [str(value)]
+            self._structured_result = dict(result)
             return {
                 "success": True,
-                "result": result_with_metadata,
-                "message": "Result submitted successfully",
+                "message": "Structured result recorded. The sub-agent task is complete.",
             }
-
         except Exception as e:
             return {"error": f"Submit result failed: {str(e)}"}
 

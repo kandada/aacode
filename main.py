@@ -271,7 +271,7 @@ class AICoder:
             print(style(f"❌ {error_msg}", fg=RED, bold=True))
             return error_msg
 
-    async def run(self, task: str, max_iterations: int = 30) -> Dict[str, Any]:
+    async def run(self, task: str, max_iterations: int = 30, event_callback=None) -> Dict[str, Any]:
         """
         execute任务
 
@@ -283,25 +283,45 @@ class AICoder:
             execute结果
         """
         display_task = task[:15] + "..." if len(task) > 15 else task
+
+        def emit_phase(phase: str, label: str) -> None:
+            if event_callback is None:
+                return
+            try:
+                result = event_callback({"type": "phase", "phase": phase, "label": label})
+                if asyncio.iscoroutine(result):
+                    asyncio.create_task(result)
+            except Exception:
+                pass
+
         print(style(f"\n🎯 Starting task: {display_task}", fg=BLUE, bold=True))
         print(t("cli.aacode_work_dir", path=self.project_path))
         print(f"🎯 Target project dir: {self.target_project}")
         print(f"📝 Init instructions loaded ({len(self.init_instructions.split())} chars)")
 
-        # 任务开始前分析项目结构
-        print(style(t("cli.analyze_pre_task"), fg=BLUE))
-        analysis_result = self.analyze_project_structure()
-        if "failed" not in analysis_result.lower():
-            print(style("✅ Project analysis complete, class-method map generated", fg=GREEN))
+        # 任务开始前分析项目结构。 TUI/desktop can skip this for fast startup;
+        # the agent can still inspect the project with its tools.
+        skip_analysis = os.getenv("AACODE_SKIP_PROJECT_ANALYSIS") == "1"
+        if skip_analysis:
+            analysis_result = "Project analysis skipped for fast startup."
+            print("⏭️  Project analysis skipped (AACODE_SKIP_PROJECT_ANALYSIS=1)")
         else:
-            print("⚠️  Project analysis incomplete, but task will continue")
+            emit_phase("analyze", "Analyzing project structure")
+            print(style(t("cli.analyze_pre_task"), fg=BLUE))
+            analysis_result = self.analyze_project_structure()
+            if "failed" not in analysis_result.lower():
+                print(style("✅ Project analysis complete, class-method map generated", fg=GREEN))
+            else:
+                print("⚠️  Project analysis incomplete, but task will continue")
 
         # 创建to-do-list，并同步到上下文管理器
+        emit_phase("todo", "Creating task todo list")
         print(style("\n📋 Creating task todo list...", fg=BLUE))
         todo_file = await self.todo_manager.create_todo_list(
             task, context_manager=self.context_manager
         )
         print(style(f"✅ Todo created: {todo_file}", fg=GREEN))
+        emit_phase("agent", "Calling model")
 
         try:
             # Run主Agent
@@ -310,6 +330,7 @@ class AICoder:
                 task_dir=None,
                 max_iterations=max_iterations,
                 todo_manager=self.todo_manager,  # 传递todo管理器
+                event_callback=event_callback,
             )
             return result
         except asyncio.CancelledError:
@@ -377,6 +398,8 @@ async def continue_session(coder, project_dir):
             print("  - Type 'list' to view project files")
             print("  - Type 'todo' to view todo list")
             print("  - Type 'logs' to view session logs")
+            print("  - Type 'usage' to view session token/cache/cost usage")
+            print("  - Type 'compact' to manually compact the current session")
             print("  - Type 'jobs' to list background jobs")
             print("  - Type 'job <id>' to view job output, 'killjob <id>' to stop it")
             print("  - Type 'exit' or 'quit' to exit")
@@ -635,10 +658,17 @@ async def continue_session(coder, project_dir):
             else:
                 print("❌ Please enter a valid command")
 
+        except EOFError:
+            print("\n👋 Exit (stdin closed)")
+            break
         except KeyboardInterrupt:
             print("\n\n⏸️  Session interrupted")
             print("Enter 'y' to continue current session, or 'n' to exit")
-            choice = input("Continue? (y/n): ").strip().lower()
+            try:
+                choice = input("Continue? (y/n): ").strip().lower()
+            except (KeyboardInterrupt, EOFError):
+                print("\n👋 Exit")
+                break
             if choice == "y":
                 continue
             else:
@@ -708,6 +738,7 @@ async def main():
     parser.add_argument("--session", help="Specify session ID")
     parser.add_argument("--plan-first", action="store_true", help="Plan-first execution mode")
     parser.add_argument("--interactive", action="store_true", help="Interactive mode")
+    parser.add_argument("--tui", action="store_true", help="Open the full-screen Textual TUI")
 
     args = parser.parse_args()
 
@@ -727,7 +758,13 @@ async def main():
                 line = line.strip()
                 if line and "=" in line and not line.startswith("#"):
                     key, value = line.split("=", 1)
-                    os.environ[key.strip()] = value.strip()
+                    key = key.strip()
+                    # A stale project .env must not shadow the key already
+                    # configured in aacode_config.yaml. Explicit shell env
+                    # still wins because setdefault never overwrites it.
+                    if key in {"LLM_API_KEY", "LLM_API_URL", "LLM_MODEL_NAME", "LLM_GATEWAY"} and settings.model.api_key:
+                        continue
+                    os.environ.setdefault(key, value.strip())
 
     # 解析任务和目标项目
     # 如果第一个参数是路径（存在的目录），则作为目标项目
@@ -745,6 +782,12 @@ async def main():
 
     # 如果没有给任务，直接进入交互会话模式
     task = " ".join(task_parts).strip()
+
+    if args.tui:
+        from aacode.tui import run_tui
+        base_project = args.project if is_cli_mode else os.getcwd()
+        project_dir = str(Path(target_project or base_project).absolute())
+        raise SystemExit(run_tui(project=project_dir, session=args.session or "", model=os.getenv("LLM_MODEL_NAME", "")))
 
     # 创建AI编码助手实例
     coder = AICoder(args.project, target_project=target_project)

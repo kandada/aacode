@@ -74,14 +74,28 @@ def normalize_openai_usage(usage: Any) -> Optional[Dict[str, int]]:
 
     reasoning = _as_int(completion_details.get("reasoning_tokens"))
 
+    # Canonical disjoint shape. DeepSeek folds cache hits into prompt_tokens,
+    # so subtract them back out for uncached input.
+    uncached_input = cache_miss
+    if uncached_input <= 0 and input_tokens > 0:
+        uncached_input = max(input_tokens - cache_read, 0)
+    prompt_total = uncached_input + cache_read
     return {
-        "input_tokens": input_tokens,
+        "input_tokens": prompt_total,
         "output_tokens": output_tokens,
-        "total_tokens": total_tokens,
+        "total_tokens": prompt_total + output_tokens,
         "cache_read_tokens": cache_read,
         "cache_write_tokens": 0,
-        "cache_miss_tokens": cache_miss,
+        "cache_miss_tokens": uncached_input,
         "reasoning_tokens": reasoning,
+        # Canonical fields used by the context policy and usage dashboard.
+        "prompt_total": prompt_total,
+        "uncached_input": uncached_input,
+        "cache_read": cache_read,
+        "cache_write": 0,
+        "output": output_tokens,
+        "reasoning": reasoning,
+        "usage_source": "provider",
     }
 
 
@@ -105,6 +119,14 @@ def normalize_anthropic_usage(usage: Any) -> Optional[Dict[str, int]]:
         "cache_write_tokens": cache_write,
         "cache_miss_tokens": uncached_input,
         "reasoning_tokens": 0,
+        # Canonical fields used by the context policy and usage dashboard.
+        "prompt_total": input_tokens,
+        "uncached_input": uncached_input,
+        "cache_read": cache_read,
+        "cache_write": cache_write,
+        "output": output_tokens,
+        "reasoning": 0,
+        "usage_source": "provider",
     }
 
 

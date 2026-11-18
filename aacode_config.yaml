@@ -13,11 +13,46 @@ context:
   compact_summary_steps: 10         # 摘要包含的步骤数
   compact_protect_user_rounds: 2    # 保护最新N条用户消息及附带消息（≥2，确保最新上下文完整）
 
-  # 检索式上下文控制（不生成摘要，只过滤模型视图）
-  retrieval_trigger_tokens: 100000   # 模型视图超过此 token 数时推进 cutoff
-  retrieval_keep_tokens: 20000       # cutoff 后保留的最近原文预算
+  # 新一代上下文策略：质量优先，尽量用满窗口；可选成本上限。
+  # trigger = min(window * window_ratio, window - max_output_tokens - headroom_tokens)
+  window_ratio: 0.8
+  headroom_tokens: 65536
+  retain_ratio: 0.16          # 最近原文保留比例；1M 窗口约 16 万 token
+  # retain_tokens: 20000      # 如希望更省钱，取消注释并设置绝对保留值
+  # cost_ceiling_tokens: 100000  # 可选成本上限；设置后 trigger 取较小值
+
+  # 兼容旧字段（新逻辑不再使用）
+  retrieval_trigger_tokens: 0
+  retrieval_keep_tokens: 0
   retrieval_keep_recent_user_messages: 2
   retrieval_keep_min_rounds: 4
+
+  # 工具结果治理：进入历史前 spill，compaction 时批量裁剪旧结果
+  inline_tool_tokens: 6000
+  inline_head_chars: 8000
+  inline_tail_chars: 4000
+  prune_enabled: true
+  prune_threshold_chars: 8192
+  prune_head_chars: 4096
+  prune_tail_chars: 1024
+  prune_min_rounds: 4
+
+  # 结构化摘要 + 检索式 cutoff 混合
+  summary_mode: adaptive      # off | always | adaptive
+  summary_min_shadow_tokens: 30000
+  summary_max_tokens: 2000
+  summary_provider: ""
+  summary_model: ""
+
+  # 失效恢复与任务预算
+  overflow_retries: 1
+  task_input_token_budget: 0  # 0 = 不限制
+  task_output_token_budget: 0
+
+  # 循环与重复调用防护
+  repeat_tool_enabled: true
+  repeat_tool_thresholds: [3, 5, 8]
+  read_cache_enabled: true
 
 # 输出处理配置（自适应截断 — 基于剩余上下文预算）
 output:
@@ -51,7 +86,7 @@ limits:
 
 model:
   temperature: 0.7
-  max_tokens: 96000   # 单次输出tokens长度
+  max_tokens: 32000   # 默认输出上限（每个模型可在 models 中覆盖）
   default_model: deepseek    # 默认使用的模型 key
   models:
     deepseek:
@@ -59,16 +94,26 @@ model:
       gateway: openai
       base_url: https://api.deepseek.com/v1
       api_key: ""   # 从环境变量 LLM_API_KEY 或 OPENAI_API_KEY 读取
+      context_window: 1000000
+      max_output_tokens: 64000
+      # pricing:  # 可选，按百万 token 计价
+      #   input: 2.0
+      #   cache_read: 0.2
+      #   output: 8.0
     moonshot_kimi_k2.5:
       name: kimi-k2.5
       gateway: openai
       base_url: https://api.moonshot.cn/v1
       api_key: ""
+      context_window: 256000
+      max_output_tokens: 32000
     minimax_m2.5:
       name: MiniMax-M2.5
       gateway: anthropic
       base_url: https://api.minimax.chat/anthropic
       api_key: ""
+      context_window: 200000
+      max_output_tokens: 32000
 
 # 多模态模型配置（支持扩展多个多模态模型）
 multimodal:
@@ -133,6 +178,12 @@ agent:
   max_sub_agent_iterations: 100
   enable_auto_planning: true
   enable_todo_tracking: true
+  max_sub_agent_depth: 2
+  max_sub_agent_concurrency: 3
+  subagent_model: ""
+  subagent_input_token_budget: 400000
+  subagent_output_token_budget: 60000
+  subagent_timeout_seconds: 600
 safety:
   allow_network: true
   dangerous_command_action: ask   # reject, ask, log — ask 模式下危险命令弹窗确认
