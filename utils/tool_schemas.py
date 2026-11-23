@@ -8,6 +8,7 @@
 包含参数说明、类型、示例等
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -363,6 +364,17 @@ SEARCH_WEB_SCHEMA = ToolSchema(
     ],
     returns="Returns a dictionary with success, query, results (list), and other fields",
 )
+
+if os.getenv("MONID_API_KEY"):
+    SEARCH_WEB_SCHEMA.parameters.append(
+        ToolParameter(
+            name="engine",
+            type=str,
+            required=False,
+            description="Select monid to search via Monid",
+            example="monid",
+        )
+    )
 
 FETCH_URL_SCHEMA = ToolSchema(
     name="fetch_url",

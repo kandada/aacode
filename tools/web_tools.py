@@ -20,8 +20,12 @@ from typing import Dict, List, Any, Optional
 from pathlib import Path
 from urllib.parse import quote, urljoin
 import os
+import ssl
 import time
 from aacode.i18n import t
+
+
+MONID_API = "https://api.monid.ai"
 
 
 def _detect_engine_type(url: str) -> str:
@@ -115,6 +119,13 @@ class WebTools:
             "_engine_type": engine_type,
             "_enable_fallback": enable_fallback,
         }
+        monid_key = os.getenv("MONID_API_KEY")
+        if monid_key:
+            self.search_engines["monid"] = {
+                "enabled": enable_web_search,
+                "api_key": monid_key,
+                "description": "Monid web search via Search1API",
+            }
         self.last_search_time: dict[str, float] = {}
 
     async def _ensure_session(self):
@@ -455,6 +466,7 @@ class WebTools:
                 "google_cse": self._search_google_cse,
                 "bing": self._search_bing,
                 "serpapi": self._search_serpapi,
+                "monid": self._search_monid,
             }
             method = search_methods.get(engine)
             if method:
@@ -785,6 +797,112 @@ class WebTools:
                                 "content": r.get("snippet", ""), "engine": "serpapi", "score": 0})
             return {"success": True, "engine": "serpapi", "query": query,
                     "results": results, "total_results": len(results)}
+
+    async def _search_monid(
+        self, query: str, max_results: int, safe_search: bool, timeout: int = 8
+    ) -> Dict[str, Any]:
+        """Monid Search1API"""
+        api_key = self.search_engines.get("monid", {}).get("api_key", "")
+        if not api_key:
+            return {
+                "success": False,
+                "error": "Monid API key not set (env: MONID_API_KEY)",
+                "query": query,
+            }
+        try:
+            return await asyncio.wait_for(
+                self._search_monid_inner(query, max_results, timeout, api_key),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            return {
+                "success": False,
+                "error": f"Monid search timed out after {timeout}s",
+                "query": query,
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Monid search failed: {str(e)}",
+                "query": query,
+            }
+
+    async def _search_monid_inner(self, query, max_results, timeout, api_key):
+        payload = {
+            "provider": "search1api",
+            "endpoint": "/search",
+            "input": {
+                "body": {"query": query, "max_results": max(1, min(max_results, 50))}
+            },
+        }
+        headers = {"Authorization": f"Bearer {api_key}"}
+        request_options = {
+            "timeout": aiohttp.ClientTimeout(total=timeout),
+            "ssl": ssl.create_default_context(),
+            "allow_redirects": False,
+        }
+        await self._ensure_session()
+        session = self.session
+        assert session is not None
+        async with session.post(
+            f"{MONID_API}/v1/run",
+            headers={**headers, "Content-Type": "application/json; charset=utf-8"},
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            **request_options,
+        ) as resp:
+            if resp.status not in (200, 202):
+                return {
+                    "success": False,
+                    "error": f"Monid HTTP {resp.status}",
+                    "query": query,
+                }
+            run = await resp.json()
+            pending = resp.status == 202
+
+        terminal_statuses = ("COMPLETED", "FAILED", "TIMED_OUT", "STOPPED", "BLOCKED")
+        if pending:
+            run_url = f"{MONID_API}/v1/runs/{quote(run['runId'], safe='')}"
+            while run.get("status") not in terminal_statuses:
+                await asyncio.sleep(2)
+                async with session.get(
+                    run_url, headers=headers, **request_options
+                ) as resp:
+                    if resp.status != 200:
+                        return {
+                            "success": False,
+                            "error": f"Monid HTTP {resp.status}",
+                            "query": query,
+                        }
+                    run = await resp.json()
+
+        status = run.get("status")
+        if status not in (None, "COMPLETED"):
+            return {"success": False, "error": f"Monid run {status}", "query": query}
+        provider_status = (run.get("providerResponse") or {}).get("httpStatus", 200)
+        if provider_status >= 400:
+            return {
+                "success": False,
+                "error": f"Search1API HTTP {provider_status}",
+                "query": query,
+            }
+
+        results = [
+            {
+                "title": item.get("title", ""),
+                "url": item.get("link", ""),
+                "content": item.get("snippet", ""),
+                "engine": "monid",
+                "score": 0,
+            }
+            for item in run["output"].get("results", [])[:max_results]
+        ]
+        return {
+            "success": True,
+            "engine": "monid",
+            "query": query,
+            "results": results,
+            "total_results": len(results),
+        }
 
     async def _search_fallback_scrape(
         self, query: str, max_results: int, timeout: int = 8

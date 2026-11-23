@@ -163,7 +163,12 @@ Supports various multimodal models (e.g., Kimi K2.5, MiniMax M2.5, etc.). Config
 - `MULTIMODAL_API_URL`: Multimodal model API address (optional, defaults to model-specific address)
 
 ### Search Engine
-Currently only supports SearXNG. Users need to deploy their own and configure the URL in aacode_config.yaml, but it is recommended to configure via environment variable SEARCHXNG_URL.
+To use SearXNG, deploy your own instance and configure the URL in aacode_config.yaml or set the recommended environment variable SEARCHXNG_URL.
+
+For optional web search through Monid, set `MONID_API_KEY` before starting
+AACode and ask it to call `search_web` with `engine="monid"`. Monid uses
+Search1API, whose search options do not include a SafeSearch setting.
+[Monid docs](https://docs.monid.ai)
 
 ### MCP
 - Users can configure MCP resources (supporting stdio and sse) in aacode_config.yaml
@@ -303,7 +308,7 @@ Edit the `init.md` file and add project-specific rules:
 
 * **Shell Execution** — Safely execute any shell command as the universal adapter
 * **File Operations** — Read, write, and modify files in the project workspace
-* **Web Search & Fetch** — Search the web (SearXNG, Brave, Google, Bing, SerpAPI) and fetch URL content
+* **Web Search & Fetch** — Search the web (SearXNG, Brave, Google, Bing, SerpAPI, Monid) and fetch URL content
 * **Task Management** — Todo lists with add/mark/update/summary, historical tracking
 * **Session Management** — Create, switch, continue, list, and delete conversation sessions
 * **Sub-Agent Delegation** — Delegate tasks to specialized sub-agents (code, test, research)

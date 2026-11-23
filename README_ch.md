@@ -130,7 +130,11 @@ export LLM_MULTIMODAL="true"
 - `MULTIMODAL_API_URL`: 多模态模型API地址（可选，默认使用模型对应的地址）
 
 ### 搜索引擎
-目前仅支持SearXNG，需要用户自己部署并将url配置到aacode_config.yaml中，但建议还是配置环境变量SEARCHXNG_URL
+使用 SearXNG 时，请自行部署实例，然后在 aacode_config.yaml 中配置 URL，或通过推荐的环境变量 SEARCHXNG_URL 配置。
+
+如需使用 Monid 搜索，请在启动 AACode 前设置 `MONID_API_KEY`，并要求 AACode
+调用 `search_web` 时传入 `engine="monid"`。Monid 使用的 Search1API 暂无 SafeSearch 设置。
+[Monid 文档](https://docs.monid.ai)
 
 ### MCP
 - 用户自行将MCP资源（支持stdio和sse）配置到aacode_config.yaml中 
@@ -274,7 +278,7 @@ python3 main.py -p examples/app "为所有功能编写测试"
 
 * **Shell 执行** — 安全执行任意 shell 命令，作为万能适配器
 * **文件操作** — 在项目工作区内读写和修改文件
-* **网络搜索与抓取** — 搜索网络（SearXNG、Brave、Google、Bing、SerpAPI）并获取 URL 内容
+* **网络搜索与抓取** — 搜索网络（SearXNG、Brave、Google、Bing、SerpAPI、Monid）并获取 URL 内容
 * **任务管理** — 待办列表，支持添加/标记/更新/摘要、历史追踪
 * **会话管理** — 创建、切换、继续、列出和删除对话会话
 * **子代理委托** — 将任务委托给专业子代理（代码、测试、调研）
