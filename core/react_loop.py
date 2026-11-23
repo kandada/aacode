@@ -84,6 +84,16 @@ class ModelSwitchError(RuntimeError):
     """The history cannot fit the destination model even after compaction."""
 
 
+class EmptyModelResponseError(RuntimeError):
+    """The provider returned neither text nor tool calls.
+
+    Treating this as "task completed" produced a blank UI and a misleading
+    ``✅ Task completed`` marker.  It is normally transient (stream truncation,
+    proxy error, thinking-only response), so the model caller retries it; if it
+    persists, the task must surface as an error.
+    """
+
+
 def _is_tty_for_events() -> bool:
     try:
         return bool(sys.stdout.isatty())
@@ -568,6 +578,12 @@ During each thought, naturally plan:
                 # 原生 Tool Calling: 有 tool_calls = 未完成，继续execute
                 pass
             elif not actions:
+                # An empty completion is not a successful task. Surface it as
+                # an error; MainAgent.execute must not append the completed marker.
+                if not str(response_text or "").strip():
+                    raise EmptyModelResponseError(
+                        "provider returned an empty final response (no text, no tool calls)"
+                    )
                 # 无 tool_calls 且无文本 actions → 任务完成
                 # 先追加 assistant 回复到 messages，确保 last_messages 包含模型输出内容
                 response_entry = {"role": "assistant", "content": response_text}
@@ -1745,6 +1761,8 @@ During each thought, naturally plan:
         event["cost"] = cost
         event["currency"] = pricing.get("currency", "") if isinstance(pricing, dict) else ""
         event["context_window"] = policy.context_window
+        event["context_trigger_tokens"] = policy.context_window
+        event["context_retain_tokens"] = policy.retain_tokens
         event["context_percent"] = (
             int(round(context_tokens / policy.context_window * 100)) if policy.context_window else None
         )

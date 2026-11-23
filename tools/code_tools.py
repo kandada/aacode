@@ -115,7 +115,8 @@ class CodeTools:
                     if capture_output:
                         result["stdout"] = stdout.decode("utf-8", errors="replace")
                         result["stderr"] = stderr.decode("utf-8", errors="replace")
-
+                    if process.returncode not in (0, None):
+                        result.update(_shell_error_meta(process.returncode, "python3", result.get("stderr", "")))
                     return result
 
                 except asyncio.TimeoutError:
@@ -129,7 +130,11 @@ class CodeTools:
                         except Exception:
                             pass
                     return {
+                        "success": False,
                         "error": f"Code execution timeout ({timeout_float}s)",
+                        "error_kind": "timeout",
+                        "retryable": True,
+                        "hint": "code execution timed out; reduce the workload or raise the timeout",
                         "file": str(temp_file.relative_to(self.project_path)),
                     }
 

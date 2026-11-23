@@ -118,8 +118,8 @@ If you prefer a graphical interface, try AACode Desktop:
 
 | Platform | Download                                                                                                |
 |----------|---------------------------------------------------------------------------------------------------------|
-| macOS (Apple Silicon) | [AACode_1.8.16_aarch64.dmg](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.8.16_aarch64.dmg) |
-| Windows | [AACode_1.8.16_x64-setup.exe](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.8.16_x64-setup.exe) |
+| macOS (Apple Silicon) | [AACode_1.8.17_aarch64.dmg](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.8.17_aarch64.dmg) |
+| Windows | [AACode_1.8.17_x64-setup.exe](https://github.com/kandada/aacode/raw/main/desktop/AACode_1.8.17_x64-setup.exe) |
 > The desktop client still requires Python and dependencies (not required for the mobile app). See 👉 [DESKTOP.md](DESKTOP.md) for full setup instructions.
 
 ### 📱 Mobile App

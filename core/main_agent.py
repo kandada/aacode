@@ -94,7 +94,7 @@ def _stream_print(text, newline_after=False, kind="text"):
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).parent.parent.parent))
     from core.agent import BaseAgent
-    from core.react_loop import AsyncReActLoop, ContextOverflowError, ModelSwitchError
+    from core.react_loop import AsyncReActLoop, ContextOverflowError, EmptyModelResponseError, ModelSwitchError
     from core.multi_agent import MultiAgentSystem
     from core.prompts import SYSTEM_PROMPT_FOR_MAIN_AGENT
     from tools.atomic_tools import AtomicTools
@@ -114,7 +114,7 @@ if __package__ in (None, ""):
     from config import settings
 else:
     from .agent import BaseAgent
-    from .react_loop import AsyncReActLoop, ContextOverflowError, ModelSwitchError
+    from .react_loop import AsyncReActLoop, ContextOverflowError, EmptyModelResponseError, ModelSwitchError
     from .multi_agent import MultiAgentSystem
     from .prompts import SYSTEM_PROMPT_FOR_MAIN_AGENT
     from ..tools.atomic_tools import AtomicTools
@@ -200,6 +200,80 @@ def _make_anthropic_client(api_key: str, base_url: str):
         if saved is not None:
             os.environ["ANTHROPIC_AUTH_TOKEN"] = saved
     return client
+
+
+def _format_anthropic_messages(messages: List[Dict]) -> tuple[str, List[Dict]]:
+    """Convert the internal OpenAI-shaped history into Anthropic messages.
+
+    Anthropic requires every ``tool_use`` block to be answered by the *same*
+    immediately-following user message.  The ReAct loop stores one ``role:
+    tool`` message per result, so a two-tool turn becomes two consecutive user
+    messages if converted naively.  Anthropic-compatible providers (DeepSeek,
+    MiniMax, ...) reject that on the next iteration with::
+
+        tool_use ids were found without tool_result blocks immediately after
+
+    Group all consecutive tool results into one user message instead.  Multiple
+    internal system messages are folded into the single top-level ``system``
+    field, preserving their order.
+    """
+    system_parts: List[str] = []
+    formatted: List[Dict[str, Any]] = []
+    pending_tool_results: List[Dict[str, Any]] = []
+
+    def flush_tool_results() -> None:
+        if pending_tool_results:
+            formatted.append({"role": "user", "content": pending_tool_results.copy()})
+            pending_tool_results.clear()
+
+    for msg in messages:
+        role = msg.get("role", "")
+        content = msg.get("content", "")
+        if role == "system":
+            if content:
+                system_parts.append(str(content))
+            continue
+        if role == "tool":
+            pending_tool_results.append({
+                "type": "tool_result",
+                "tool_use_id": msg.get("tool_call_id", ""),
+                "content": content if isinstance(content, list) else (str(content) if content else ""),
+            })
+            continue
+
+        flush_tool_results()
+        if role == "assistant":
+            tool_calls = msg.get("tool_calls", [])
+            if tool_calls:
+                blocks: List[Dict[str, Any]] = []
+                if content:
+                    blocks.append({"type": "text", "text": str(content)})
+                for tc in tool_calls:
+                    func = tc.get("function", {})
+                    args = func.get("arguments", "{}")
+                    if isinstance(args, str):
+                        try:
+                            args = json.loads(args)
+                        except json.JSONDecodeError:
+                            args = {}
+                    blocks.append({
+                        "type": "tool_use",
+                        "id": tc.get("id", ""),
+                        "name": func.get("name", ""),
+                        "input": args,
+                    })
+                formatted.append({"role": "assistant", "content": blocks})
+            elif content:
+                formatted.append({"role": "assistant", "content": str(content)})
+            continue
+        if content:
+            formatted.append({
+                "role": "user",
+                "content": content if isinstance(content, list) else str(content),
+            })
+
+    flush_tool_results()
+    return "\n\n".join(system_parts), formatted
 
 
 class MainAgent(BaseAgent):
@@ -533,6 +607,8 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
 
     @staticmethod
     def _is_retryable_model_error(e: Exception) -> bool:
+        if isinstance(e, EmptyModelResponseError):
+            return True
         try:
             import httpx
             if isinstance(e, (
@@ -638,15 +714,22 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
 
                     # 根据网关类型创建客户端
                     if gateway == "anthropic":
-                        return await self._call_anthropic_api(
+                        result = await self._call_anthropic_api(
                             api_key, base_url, model_name, messages, call_config,
                             tools=native_tools,
                         )
                     else:
-                        return await self._call_openai_api(
+                        result = await self._call_openai_api(
                             api_key, base_url, model_name, messages, call_config,
                             tools=native_tools,
                         )
+                    if purpose != "summary" and not result.get("tool_calls"):
+                        text = result.get("text") or ""
+                        if not str(text).strip():
+                            raise EmptyModelResponseError(
+                                "provider returned neither text nor tool calls"
+                            )
+                    return result
                 except asyncio.CancelledError:
                     raise
                 except Exception as _inner:
@@ -1016,56 +1099,8 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
         # 使 with  AsyncAnthropic 客户端（对标 OpenAI 的 AsyncOpenAI）
         client = _make_anthropic_client(api_key, adjusted_base_url)
 
-        # Anthropic格式的消息转换
-        system_message = ""
-        formatted_messages = []
-
-        def _make_anth_content(content_val, content_type="text", **extra) -> dict:
-            block = {"type": content_type}
-            if content_type == "text":
-                block["text"] = str(content_val) if content_val else ""
-            elif content_type == "tool_result":
-                block["tool_use_id"] = extra.get("tool_use_id", "")
-                block["content"] = str(content_val) if content_val else ""
-            elif content_type == "tool_use":
-                block["id"] = extra.get("id", "")
-                block["name"] = extra.get("name", "")
-                block["input"] = extra.get("input", {})
-            return block
-
-        for msg in messages:
-            role = msg.get("role", "")
-            content = msg.get("content", "")
-            if role == "system":
-                system_message = content
-                continue
-            if role == "tool":
-                tool_call_id = msg.get("tool_call_id", "")
-                formatted_messages.append({
-                    "role": "user",
-                    "content": [_make_anth_content(content, "tool_result", tool_use_id=tool_call_id)],
-                })
-                continue
-            if role == "assistant":
-                tool_calls = msg.get("tool_calls", [])
-                if tool_calls:
-                    blocks = []
-                    if content:
-                        blocks.append(_make_anth_content(content, "text"))
-                    for tc in tool_calls:
-                        func = tc.get("function", {})
-                        args = func.get("arguments", "{}")
-                        if isinstance(args, str):
-                            try: args = json.loads(args)
-                            except json.JSONDecodeError: args = {}
-                        blocks.append(_make_anth_content(None, "tool_use",
-                            id=tc.get("id", ""), name=func.get("name", ""), input=args))
-                    formatted_messages.append({"role": "assistant", "content": blocks})
-                elif content:
-                    formatted_messages.append({"role": "assistant", "content": content})
-                continue
-            if content:
-                formatted_messages.append({"role": "user", "content": content})
+        # Anthropic格式的消息转换（多个 tool_result 必须合并到同一条 user 消息）
+        system_message, formatted_messages = _format_anthropic_messages(messages)
 
         # Async 流式调 with 
         if _is_tty and not _JSON_EVENTS:
@@ -1136,6 +1171,19 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
                 #  with  get_final_message Get 完整的 tool_use（非流式解析，可靠）
                 final = await stream.get_final_message()
                 last_usage = getattr(final, "usage", None)
+                # Some Anthropic-compatible proxies return a final message
+                # without replaying text as stream deltas.  Fall back to the
+                # final content before adding the truncation warning, otherwise
+                # a max_tokens response would surface only the warning text.
+                if not response.strip():
+                    final_text = "".join(
+                        str(getattr(block, "text", "") or "")
+                        for block in final.content
+                        if getattr(block, "type", "") == "text"
+                    )
+                    if final_text:
+                        response = final_text
+                        _stream_print(final_text)
                 # Check for max_tokens truncation
                 if getattr(final, 'stop_reason', None) == "max_tokens":
                     warning_text = "\n\n[⚠️ WARNING: API response was truncated (max_tokens limit reached). Reduce content per request or increase max_tokens in config.]"
@@ -1150,7 +1198,6 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
                             "arguments": getattr(block, 'input', {}),
                         })
 
-        stream_succeeded = False
         stream_succeeded = False
         while True:
             try:
@@ -1224,6 +1271,7 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
                     file=sys.stderr,
                     flush=True,
                 )
+                raise
 
         # ─── thinking 内容与正文分离返回 ───
         if thinking_content:
@@ -1814,8 +1862,27 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
             }
         )
 
+        # ─── 保存 user 任务消息（在 react_loop 之前，确保取消也不会丢失）───
+        has_user_msg = (
+            len(self.session_manager.current_messages) > 0
+            and self.session_manager.current_messages[-1].role == "user"
+            and self.session_manager.current_messages[-1].content == task
+        )
+        if not has_user_msg:
+            await self.session_manager.add_message("user", task)
+
         # ─── 获取历史消息（含动态 system 消息，用于跨任务缓存前缀匹配）───
         history_messages = await self.session_manager.get_messages(include_system=True)
+        # create_session() already persists the first task.  ReactLoop appends
+        # task_description again, so remove the just-saved copy from history;
+        # otherwise every first request contains the same user message twice
+        # (wasted prompt tokens and a confusing duplicate turn).
+        if (
+            history_messages
+            and history_messages[-1].get("role") == "user"
+            and history_messages[-1].get("content") == task
+        ):
+            history_messages = history_messages[:-1]
 
         # ─── 会话恢复保护：检测上次会话是否中断在工具执行中途 ───
         if history_messages and history_messages[-1].get("role") == "tool":
@@ -1829,15 +1896,6 @@ mark_todo_completed(todo_id="t1") → precisely marked complete"""
                 "role": "system",
                 "content": recovery_hint,
             })
-
-        # ─── 保存 user 任务消息（在 react_loop 之前，确保取消也不会丢失）───
-        has_user_msg = (
-            len(self.session_manager.current_messages) > 0
-            and self.session_manager.current_messages[-1].role == "user"
-            and self.session_manager.current_messages[-1].content == task
-        )
-        if not has_user_msg:
-            await self.session_manager.add_message("user", task)
 
         # ─── 保存动态上下文系统消息到 session（持久化，后续任务可复用前缀）───
         for dsm in dynamic_system_msgs:

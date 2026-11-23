@@ -291,6 +291,25 @@ class SessionManager:
         """获取当前会话的总token数"""
         return sum(msg.tokens for msg in self.current_messages)
 
+    def _sum_raw_message_tokens(self, raw_messages: Any) -> int:
+        """Count legacy message tokens, estimating when the stored value is 0/null."""
+        if not isinstance(raw_messages, list):
+            return 0
+        total = 0
+        for msg in raw_messages:
+            if not isinstance(msg, dict):
+                continue
+            try:
+                tokens = int(msg.get("tokens") or 0)
+            except (TypeError, ValueError):
+                tokens = 0
+            if tokens <= 0:
+                content = msg.get("content") or ""
+                if content:
+                    tokens = self._count_tokens(str(content))
+            total += max(0, tokens)
+        return total
+
     def get_context_checkpoint(self) -> Optional[Dict[str, Any]]:
         """返回当前会话的模型视图 cutoff（不修改消息）。"""
         checkpoint = self.context_checkpoint
@@ -652,6 +671,9 @@ class SessionManager:
                     tokens = int(msg_data.get("tokens") or 0)
                 except (TypeError, ValueError):
                     tokens = 0
+                content = msg_data.get("content") or ""
+                if tokens <= 0 and content:
+                    tokens = self._count_tokens(str(content))
                 tool_calls = msg_data.get("tool_calls")
                 if not isinstance(tool_calls, list):
                     tool_calls = None
@@ -660,7 +682,7 @@ class SessionManager:
                     usage = None
                 message = SessionMessage(
                     role=role,
-                    content=msg_data.get("content") or "",
+                    content=content,
                     timestamp=_ensure_iso_timestamp(msg_data.get("timestamp")),
                     tokens=max(0, tokens),
                     tool_calls=tool_calls,
@@ -785,11 +807,7 @@ class SessionManager:
         raw_messages = session_summary.get("structured_messages") or session_summary.get("messages") or []
         if not isinstance(raw_messages, list):
             raw_messages = []
-        computed_tokens = sum(
-            int(m.get("tokens") or 0)
-            for m in raw_messages
-            if isinstance(m, dict)
-        )
+        computed_tokens = self._sum_raw_message_tokens(raw_messages)
         file_total_messages = session_summary.get("total_messages")
         file_total_tokens = session_summary.get("total_tokens")
 
@@ -805,7 +823,7 @@ class SessionManager:
             "total_tokens": (
                 int(file_total_tokens)
                 if file_total_tokens not in (None, 0, "0")
-                else (indexed.total_tokens if indexed else computed_tokens)
+                else (indexed.total_tokens if indexed and indexed.total_tokens > 0 else computed_tokens)
             ),
             "created_at": session_summary.get("created_at") or (indexed.created_at if indexed else ""),
             "last_activity": session_summary.get("last_activity") or (indexed.last_activity if indexed else ""),
@@ -831,13 +849,7 @@ class SessionManager:
             if stored not in (None, 0, "0"):
                 return int(stored)
             raw_messages = session_data.get("structured_messages") or session_data.get("messages") or []
-            if isinstance(raw_messages, list):
-                return sum(
-                    int(m.get("tokens") or 0)
-                    for m in raw_messages
-                    if isinstance(m, dict)
-                )
-            return 0
+            return self._sum_raw_message_tokens(raw_messages)
         except Exception:
             return 0
 
@@ -891,11 +903,7 @@ class SessionManager:
         raw_messages = session_summary.get("structured_messages") or session_summary.get("messages") or []
         if not isinstance(raw_messages, list):
             raw_messages = []
-        computed_tokens = sum(
-            int(m.get("tokens") or 0)
-            for m in raw_messages
-            if isinstance(m, dict)
-        )
+        computed_tokens = self._sum_raw_message_tokens(raw_messages)
         return {
             "session_id": self.current_session_id,
             "title": session_summary.get("title") or (indexed.title if indexed else ""),
@@ -907,7 +915,7 @@ class SessionManager:
             "total_tokens": (
                 int(session_summary["total_tokens"])
                 if session_summary.get("total_tokens") not in (None, 0, "0")
-                else (indexed.total_tokens if indexed else computed_tokens)
+                else (indexed.total_tokens if indexed and indexed.total_tokens > 0 else computed_tokens)
             ),
             "current_tokens": self._get_total_tokens(),
             "max_tokens": self.max_tokens,

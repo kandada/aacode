@@ -35,7 +35,7 @@ Available tools:
       * Write/edit: echo/cat/sed/awk, supports pipes (|), redirection (>), etc. prefer sed/awk for line/char-level edits on existing files
       * max_output param: pass a number e.g. 200 to limit output by default (saves tokens); pass full_output=true only when you genuinely need the full output
       * Context-aware reading: prefer grep/rg to extract what you need instead of reading entire files. Use head/tail to preview before opening. Don't re-read files already in context — trust what you've already seen and move on.
-      * Long-running processes: use action=\"spawn\" + check/read/write/kill, or action=\"jobs\" to list persisted jobs. Use use_pty=true for TTY-only CLIs (Linux/macOS).
+      * Long-running processes: use background=true (or action=\"spawn\") + check/read/write/kill, or action=\"jobs\" to list persisted jobs. For builds, tests, downloads, and servers, start them in the background and continue useful work; do not sleep/poll. Use use_pty=true for TTY-only CLIs (Linux/macOS).
 2. Web tools
     - search_web: Search the internet (SearXNG engine)
     - fetch_url: Fetch web page content (also available via run_shell + curl)

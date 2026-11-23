@@ -335,12 +335,15 @@ class TimeoutConfig:
     """timeout配置"""
 
     tool_default: int = 300  # 通用工具执行timeout（秒），防挂起兜底
-    shell_command: int = 30  # Shell命令executetimeout（秒）
+    shell_command: int = 120  # Shell命令前台等待timeout（秒）
+    shell_foreground_max: int = 600  # 单次前台等待上限（秒）
+    shell_idle: int = 120  # Shell无输出后进入长任务/空闲探测的秒数
+    shell_background: int = 1800  # 后台任务默认运行上限（秒）
     model_summary: int = 30  # 模型摘要生成timeout（秒）
     file_search: int = 5  # 文件搜索timeout（秒）
     code_execution: int = 60  # 代码executetimeout（秒）
     sandbox_command: int = 120  # 沙箱命令timeout（秒）
-    web_request: int = 30  # 网络请求timeout（秒）
+    web_request: int = 60  # 网络请求timeout（秒）
 
 
 @dataclass
@@ -798,15 +801,39 @@ class Settings:
 
         if _as_int(self.context.max_context_length, 0) <= 0:
             self.context.max_context_length = DEFAULT_CONTEXT_WINDOW
+        self.context.max_context_length = max(8192, _as_int(self.context.max_context_length, DEFAULT_CONTEXT_WINDOW))
         ratio = _as_float(self.context.window_ratio, 0.8)
         self.context.window_ratio = ratio if ratio <= 1 else 0.8
         self.context.headroom_tokens = max(0, _as_int(self.context.headroom_tokens, 65536))
+        if self.context.headroom_tokens >= self.context.max_context_length:
+            self.context.headroom_tokens = max(1, self.context.max_context_length // 16)
         retain = _as_float(self.context.retain_ratio, 0.16)
         self.context.retain_ratio = retain if retain < self.context.window_ratio else 0.16
+        window = int(self.model.context_window or self.context.max_context_length or DEFAULT_CONTEXT_WINDOW)
+        window = max(8192, window)
+        requested_output = _as_int(
+            self.model.max_output_tokens or self.model.max_tokens,
+            DEFAULT_MAX_OUTPUT_TOKENS,
+        )
+        safe_output = min(
+            96_000,
+            max(1, window - max(4096, self.context.headroom_tokens)),
+        )
+        output = max(1, min(requested_output, safe_output))
+        if self.model.max_output_tokens is not None:
+            self.model.max_output_tokens = output
+        else:
+            self.model.max_tokens = output
+        try:
+            self.model.temperature = min(2.0, max(0.0, float(self.model.temperature)))
+        except (TypeError, ValueError):
+            self.model.temperature = 0.1
         mode = str(self.context.summary_mode or "adaptive").lower()
         self.context.summary_mode = (
             mode if mode in ("off", "adaptive", "always") else "adaptive"
         )
+        retain_tokens = _as_int(self.context.retain_tokens, 0)
+        self.context.retain_tokens = retain_tokens if retain_tokens > 0 else None
         for key in ("compact_trigger_tokens", "compact_keep_rounds", "compact_protect_first_rounds", "compact_protect_user_rounds"):
             setattr(self.context, key, max(0, _as_int(getattr(self.context, key, 0), 0)))
 

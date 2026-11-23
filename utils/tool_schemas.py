@@ -98,6 +98,15 @@ RUN_SHELL_SCHEMA = ToolSchema(
             aliases=["mode", "op"],
         ),
         ToolParameter(
+            name="background",
+            type=bool,
+            required=False,
+            default=False,
+            description="Run in the background (equivalent to action=spawn). Use for builds, tests, downloads, or servers.",
+            example=True,
+            aliases=["run_in_background", "async"],
+        ),
+        ToolParameter(
             name="process_id",
             type=str,
             required=False,
@@ -133,6 +142,7 @@ RUN_SHELL_SCHEMA = ToolSchema(
     ],
     examples=[
         {"command": "ls -la", "description": "List all files in current directory (including hidden files)"},
+        {"command": "npm run build", "background": True, "description": "Run a long build as a background process"},
         {"command": "pwd", "description": "Print current working directory"},
         {"command": "python --version", "description": "Check Python version"},
         {"command": "python script.py", "description": "Run a Python script"},

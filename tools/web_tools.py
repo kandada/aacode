@@ -40,6 +40,29 @@ def _detect_engine_type(url: str) -> str:
     return "searxng"
 
 
+def _fetch_error_meta(exc: Exception = None, timeout: float = 0) -> dict:
+    text = str(exc or "").lower()
+    if "timeout" in text or "timed out" in text:
+        return {"error_kind": "timeout", "retryable": True, "hint": "request timed out; retry or use a smaller request"}
+    if "name or service" in text or "nodename nor servname" in text or "dns" in text:
+        return {"error_kind": "dns", "retryable": True, "hint": "DNS resolution failed; check the hostname/network"}
+    if "certificate" in text or "ssl" in text or "tls" in text:
+        return {"error_kind": "tls", "retryable": False, "hint": "TLS/certificate failure; try another endpoint"}
+    if "refused" in text or "connect" in text or "unreachable" in text:
+        return {"error_kind": "connect", "retryable": True, "hint": "connection failed; the endpoint may be blocked or offline"}
+    if "redirect" in text and ("too many" in text or "loop" in text):
+        return {"error_kind": "redirect", "retryable": False, "hint": "redirect loop; use another source"}
+    return {"error_kind": "request", "retryable": False, "hint": "fetch failed; inspect the URL and try another source"}
+
+
+def _compact_json(text: str) -> str:
+    try:
+        import json
+        return json.dumps(json.loads(text), ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        return text
+
+
 class WebTools:
     """网络搜索和Web操作工具（searXNG / Brave / Google CSE / Bing / SerpAPI）"""
 
@@ -249,7 +272,8 @@ class WebTools:
 
             # URL安全检查
             if not self._is_safe_url(url):
-                return {"success": False, "error": "URL safety check failed"}
+                return {"success": False, "error_kind": "invalid_url", "retryable": False,
+                        "error": "URL safety check failed"}
 
             if timeout is None:
                 timeout = 30
@@ -265,7 +289,10 @@ class WebTools:
                 ):
                     return {
                         "success": False,
+                        "error_kind": "unsupported_content_type",
+                        "retryable": False,
                         "error": f"unsupported content type: {content_type}",
+                        "hint": "fetch_url only returns text/html, text/plain and application/json",
                     }
 
                 raw_content = await response.text(errors="ignore")
@@ -288,6 +315,8 @@ class WebTools:
 
                 # 清洗 HTML：去除 script/style/head 等垃圾，提取纯文本
                 cleaned = self._clean_html(raw_content)
+                if "json" in content_type:
+                    cleaned = _compact_json(cleaned)
                 cleaned_length = len(cleaned)
 
                 # 对清洗后的纯文本做截断
@@ -312,7 +341,9 @@ class WebTools:
                     "url": url,
                     "status_code": response.status,
                     "content_type": content_type,
+                    "content_format": "json" if "json" in content_type else ("markup" if "html" in content_type or "xml" in content_type else "text"),
                     "content_length": cleaned_length,
+                    "content_truncated": cleaned_length > max_content_length,
                     "raw_length": raw_length,
                     "content": content,
                 }
@@ -322,9 +353,13 @@ class WebTools:
                 return result
 
         except asyncio.TimeoutError:
-            return {"success": False, "error": f"request timeout ({timeout}s)"}
+            return {
+                "success": False,
+                "error": f"request timeout ({timeout}s)",
+                **_fetch_error_meta(TimeoutError("timeout"), timeout),
+            }
         except Exception as e:
-            return {"success": False, "error": f"Fetch web page failed: {str(e)}"}
+            return {"success": False, "error": f"Fetch web page failed: {str(e)}", **_fetch_error_meta(e, timeout)}
 
     @staticmethod
     def _clean_html(html: str) -> str:

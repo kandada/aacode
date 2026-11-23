@@ -13,6 +13,7 @@ import asyncio
 import collections
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -53,6 +54,131 @@ def _is_unlimited(val) -> bool:
     return False
 
 
+def _shell_error_meta(exit_code, command, stderr):
+    """Give the model stable, tool-aware shell failure semantics."""
+    cmd = command or ""
+    words = {w.strip("'\"[](){};|&<>") for w in cmd.split()}
+    lower = cmd.lower()
+    stderr_lower = (stderr or "").lower()
+    if "traceback (most recent call last)" in stderr_lower:
+        if "keyerror" in stderr_lower:
+            hint = "Python KeyError: the requested field/key is missing; inspect the available keys first"
+        elif "modulenotfounderror" in stderr_lower or "importerror" in stderr_lower:
+            hint = "Python import failed; the module is unavailable in this sandbox"
+        elif "filenotfounderror" in stderr_lower:
+            hint = "Python file not found; verify the path or download result"
+        elif "syntaxerror" in stderr_lower:
+            hint = "Python syntax error; fix the script before retrying"
+        else:
+            hint = "Python raised an exception; inspect the traceback before retrying"
+        return {"error_kind": "python_exception", "hint": hint}
+    if "curl" in words and "-ss" not in lower and "-s" in lower and not (stderr or "").strip():
+        return {
+            "error_kind": "network_connect",
+            "hint": "curl used -s and suppressed the error; retry with -sS to see the real network error",
+        }
+    if (";" in cmd or "&&" in cmd or "||" in cmd) and (
+        "not found" in stderr_lower or "no such file" in stderr_lower
+    ):
+        return {
+            "error_kind": "command_chain",
+            "hint": "a later command failed; an earlier command in the chain may have failed first. Use && for dependent steps and check the earlier exit code.",
+        }
+    if exit_code == 124:
+        return {"error_kind": "timeout", "hint": "command timed out; split it into smaller steps or increase timeout"}
+    if exit_code == 130:
+        return {"error_kind": "cancelled", "hint": "command was cancelled"}
+    if exit_code == 126:
+        return {"error_kind": "permission_denied", "hint": "command is not executable or permission was denied"}
+    if exit_code == 127:
+        return {"error_kind": "command_not_found", "hint": "command was not found; check the command name/path"}
+    if "curl" in words and exit_code == 6:
+        return {"error_kind": "dns", "hint": "curl could not resolve the host; check DNS/network"}
+    if "curl" in words and exit_code == 7:
+        return {"error_kind": "network_connect", "hint": "curl could not connect; check network/reachability"}
+    if exit_code == 28 and ("curl" in words or "wget" in words):
+        return {"error_kind": "timeout", "hint": "network request timed out"}
+    if "curl" in words and exit_code == 22:
+        return {"error_kind": "http_status", "hint": "curl received an HTTP error status"}
+    if exit_code == 1 and any(x in words for x in ("grep", "egrep", "fgrep", "rg")):
+        return {"error_kind": "no_match", "hint": "no matching lines were found; grep/rg exit 1 is a normal result", "expected_nonzero": True}
+    if exit_code == 1 and "diff" in words:
+        return {"error_kind": "differences", "hint": "files differ; diff exit 1 is a normal result", "expected_nonzero": True}
+    if exit_code == 1 and ("test" in words or "[" in words):
+        return {"error_kind": "condition_false", "hint": "test condition evaluated to false", "expected_nonzero": True}
+    if not (stderr or "").strip():
+        return {"error_kind": "exit_nonzero", "hint": f"command exited with code {exit_code} but wrote no stderr; inspect stdout and the command"}
+    return {"error_kind": "command_failed", "hint": "command failed; inspect stderr and exit code"}
+
+def _empty_output_meta(command, stdout_text, stderr_text, returncode):
+    """Explain suspiciously empty successful output.
+
+    Windows cmd.exe often mangles multi-line ``python -c "..."`` / ``node -e``
+    snippets: the command can exit 0 while printing nothing.  The model used to
+    spend an extra iteration guessing ("Empty stdout? Odd.").  Point it at the
+    reliable workaround: write a temporary script and execute that.
+    """
+    if returncode != 0 or (stdout_text or "").strip() or (stderr_text or "").strip():
+        return {}
+    if "\n" not in (command or ""):
+        return {}
+    lower = (command or "").lower()
+    interpreters = ("python -c", "python3 -c", "py -c", "node -e", "perl -e", "ruby -e")
+    if not any(token in lower for token in interpreters):
+        return {}
+    return {
+        "empty_output": True,
+        "hint": (
+            "Command exited 0 but printed nothing. Multi-line code passed to "
+            "python -c / node -e is unreliable in cmd.exe; write a temporary "
+            "script file and run it instead."
+        ),
+    }
+
+
+_INLINE_CODE_RE = re.compile(
+    r"^\s*(?P<launcher>python(?:3(?:\.\d+)?)?|py|node)(?:\.exe)?\s+"
+    r"(?P<flag>-c|-e)\s+(?P<quote>['\"])(?P<code>.*)(?P=quote)\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _extract_inline_code(command):
+    """Return (launcher, language, code) for a standalone `python -c` / `node -e`."""
+    match = _INLINE_CODE_RE.match(command or "")
+    if not match:
+        return None
+    launcher = match.group("launcher")
+    language = "js" if launcher.lower() == "node" else "py"
+    return launcher, language, match.group("code")
+
+
+def _rewrite_windows_inline_code(command, project_path):
+    """Convert standalone multi-line interpreter code into a temp script.
+
+    cmd.exe does not reliably pass newlines inside `python -c "..."` or
+    `node -e "..."`; the process can exit 0 with empty stdout.  On Windows we
+    write the code to `.aacode/tmp` and execute the file instead.  Only a
+    standalone interpreter invocation is rewritten; chained commands keep the
+    normal hint path to avoid changing shell semantics.
+    """
+    if os.name != "nt" or "\n" not in (command or ""):
+        return None
+    parsed = _extract_inline_code(command)
+    if not parsed:
+        return None
+    launcher, language, code = parsed
+    try:
+        base = project_path if isinstance(project_path, Path) else Path(project_path)
+        tmp_dir = base / ".aacode" / "tmp"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        script = tmp_dir / f"inline_{uuid.uuid4().hex[:12]}.{language}"
+        script.write_text(code if code.endswith("\n") else code + "\n", encoding="utf-8")
+    except Exception:
+        return None
+    return f'{launcher} "{script}"', script
+
+
 class AtomicTools:
     """简化的原子工具集"""
 
@@ -76,7 +202,7 @@ class AtomicTools:
         action: str = "exec", process_id: str = None,
         max_lines: int = None, idle_timeout: int = None,
         use_pty: bool = False, max_output_lines: int = None,
-        full_output: bool = False, **kwargs
+        full_output: bool = False, background: bool = False, **kwargs
     ) -> Dict[str, Any]:
         """
         执行shell命令(带安全护栏)
@@ -114,21 +240,38 @@ class AtomicTools:
                 max_output_lines = DEFAULT_MAX_OUTPUT_LINES
 
         try:
+            if __package__ in (None, ""):
+                from config import settings
+            else:
+                from ..config import settings
+            if background:
+                action = "spawn"
             if timeout is None:
-                if __package__ in (None, ""):
-                    from config import settings
-                else:
-                    from ..config import settings
                 timeout = settings.timeouts.shell_command
+            if idle_timeout is None:
+                idle_timeout = getattr(settings.timeouts, "shell_idle", 120)
+            if action == "exec":
+                timeout = min(timeout, getattr(settings.timeouts, "shell_foreground_max", 600))
 
             if action == "exec":
+                if (
+                    not background
+                    and timeout >= 60
+                    and (idle_timeout is None or idle_timeout >= 60)
+                    and not stop_on_exit
+                ):
+                    return await self._exec_with_promotion(
+                        command, timeout, max_output, max_output_lines,
+                        max_lines, idle_timeout, stdin_input, use_pty,
+                    )
                 return await self._exec_action(command, timeout, stdin_input,
                                                max_output, stop_on_exit,
                                                max_lines, idle_timeout, use_pty,
                                                max_output_lines)
             elif action == "spawn":
-                return await self._spawn_action(command, max_lines,
-                                                idle_timeout, use_pty)
+                return await self._spawn_action(
+                    command, max_lines, idle_timeout, use_pty, stdin_input
+                )
             elif action == "check":
                 return self._check_action(process_id)
             elif action == "read":
@@ -168,6 +311,18 @@ class AtomicTools:
                 "error": f"Command rejected by safety guard: {safety_check['reason']}",
                 "allowed": False,
                 "command": command,
+            }
+
+        original_command = command
+        inline_meta = None
+        rewritten = _rewrite_windows_inline_code(command, self.project_path)
+        if rewritten is not None:
+            command, script = rewritten
+            inline_meta = {
+                "original_command": original_command,
+                "executed_command": command,
+                "inline_script": str(script),
+                "inline_rewritten": True,
             }
 
         print(f"\U0001f527 Executing command: {command}")
@@ -226,6 +381,14 @@ class AtomicTools:
                 "command": command,
                 "working_directory": str(self.project_path),
             }
+            if process.returncode not in (0, None):
+                result.update(_shell_error_meta(process.returncode, command, stderr_text))
+            result.update(_empty_output_meta(
+                command, stdout_text, stderr_text, process.returncode
+            ))
+            if inline_meta:
+                result.update(inline_meta)
+                result["command"] = original_command
             await self._attach_changes(result)
             return result
         except asyncio.TimeoutError:
@@ -236,11 +399,110 @@ class AtomicTools:
                 "ok": False,
                 "error": f"Command execution timeout ({timeout}s)",
                 "timeout": True,
+                "error_kind": "timeout",
+                "hint": "command timed out; split it into smaller steps or increase timeout",
                 "command": command,
                 "working_directory": str(self.project_path),
             }
             await self._attach_changes(result)
             return result
+
+    async def _exec_with_promotion(
+        self, command, timeout, max_output, max_output_lines,
+        max_lines, idle_timeout, stdin_input=None, use_pty=False,
+    ):
+        """Run in a background-capable process, then promote on timeout.
+
+        Short commands return exactly like ``exec``. A command still running
+        after the foreground wait keeps running as a job and returns its job id.
+        """
+        safety_check = self.safety_guard.check_command(command)
+        if not safety_check["allowed"]:
+            return {
+                "error": f"Command rejected by safety guard: {safety_check['reason']}",
+                "allowed": False,
+                "command": command,
+            }
+        original_command = command
+        inline_meta = None
+        rewritten = _rewrite_windows_inline_code(command, self.project_path)
+        if rewritten is not None:
+            command, script = rewritten
+            inline_meta = {
+                "original_command": original_command,
+                "executed_command": command,
+                "inline_script": str(script),
+                "inline_rewritten": True,
+            }
+
+        if self._diff_hook:
+            self._diff_hook.pre_exec(command)
+        spawned = await self._spawn_action(
+            command, max_lines, idle_timeout, use_pty, stdin_input
+        )
+        if not spawned.get("success"):
+            if inline_meta:
+                spawned.update(inline_meta)
+                spawned["command"] = original_command
+            return spawned
+        process_id = spawned.get("process_id") or spawned.get("job_id")
+        deadline = time.monotonic() + max(1, timeout)
+        while True:
+            bg = self._background_processes.get(process_id)
+            if bg is None:
+                break
+            process = bg.get("process")
+            if process is None or process.returncode is not None:
+                break
+            if time.monotonic() >= deadline:
+                result = {
+                    "success": True,
+                    "status": "backgrounded",
+                    "process_id": process_id,
+                    "job_id": process_id,
+                    "initial_stdout": spawned.get("initial_stdout", ""),
+                    "command": command,
+                    "working_directory": str(self.project_path),
+                    "log_path": spawned.get("log_path"),
+                    "hint": (
+                        "The command exceeded its foreground wait and is still running. "
+                        "Continue other work and collect it with action=check/read; do not start a duplicate command."
+                    ),
+                }
+                if inline_meta:
+                    result.update(inline_meta)
+                    result["command"] = original_command
+                return result
+            await asyncio.sleep(0.1)
+
+        read = self._read_action(process_id, max_lines)
+        stdout_text, stdout_truncated = self._apply_max_output(
+            read.get("stdout", ""), max_output, "stdout", max_output_lines
+        )
+        stderr_text, stderr_truncated = self._apply_max_output(
+            read.get("stderr", ""), max_output, "stderr", max_output_lines
+        )
+        result = {
+            "success": read.get("returncode") == 0,
+            "returncode": read.get("returncode"),
+            "stdout": stdout_text,
+            "stderr": stderr_text,
+            "stdout_truncated": stdout_truncated,
+            "stderr_truncated": stderr_truncated,
+            "_max_output_setting": max_output,
+            "command": command,
+            "working_directory": str(self.project_path),
+        }
+        if read.get("returncode") not in (0, None):
+            result.update(_shell_error_meta(read.get("returncode"), command, stderr_text))
+        result.update(_empty_output_meta(
+            command, stdout_text, stderr_text, read.get("returncode")
+        ))
+        if inline_meta:
+            result.update(inline_meta)
+            result["command"] = original_command
+        await self._attach_changes(result)
+        return result
 
     async def _exec_with_stdin(self, process, stdin_input, timeout):
         """执行带 stdin_input 的命令"""
@@ -364,7 +626,7 @@ class AtomicTools:
         stdout_text, stdout_truncated = self._apply_max_output(
             stdout_text, max_output, "stdout", max_output_lines)
 
-        return {
+        result = {
             "success": True,
             "returncode": process.returncode,
             "stdout": stdout_text,
@@ -376,6 +638,10 @@ class AtomicTools:
             "working_directory": str(self.project_path),
             "pty": True,
         }
+        result.update(_empty_output_meta(
+            command, stdout_text, "", process.returncode
+        ))
+        return result
 
     # ─── background job persistence ─────────────────────────────
 
@@ -492,7 +758,7 @@ class AtomicTools:
 
     # ─── action: spawn ──────────────────────────────────────────
 
-    async def _spawn_action(self, command, max_lines, idle_timeout, use_pty):
+    async def _spawn_action(self, command, max_lines, idle_timeout, use_pty, stdin_input=None):
         """后台启动命令，返回 process_id"""
         if not command:
             return {"success": False, "error": "command is required for action=\"spawn\""}
@@ -521,7 +787,7 @@ class AtomicTools:
         if use_pty and pty_info:
             return await self._spawn_with_pty(command, pid, max_lines,
                                               idle_timeout, pty_info,
-                                              log_path, log_handle)
+                                              log_path, log_handle, stdin_input)
 
         spawn_kwargs = _no_window_kwargs()
         if os.name != "nt":
@@ -537,6 +803,14 @@ class AtomicTools:
             env={**os.environ, "PYTHONUNBUFFERED": "1"},
             **spawn_kwargs,
         )
+
+        if stdin_input is not None and process.stdin is not None:
+            try:
+                process.stdin.write(stdin_input.encode("utf-8"))
+                await process.stdin.drain()
+                process.stdin.close()
+            except Exception:
+                pass
 
         maxlen = max_lines if max_lines else 10000
         stdout_deque = collections.deque(maxlen=maxlen)
@@ -616,7 +890,7 @@ class AtomicTools:
         }
 
     async def _spawn_with_pty(self, command, pid, max_lines,
-                              idle_timeout, pty_info, log_path, log_handle):
+                              idle_timeout, pty_info, log_path, log_handle, stdin_input=None):
         """后台 PTY 模式启动"""
         master_fd, slave_fd = pty_info
         cwd = str(self.project_path)
@@ -636,6 +910,11 @@ class AtomicTools:
         os.close(slave_fd)
 
         reader = await self._create_pty_reader(master_fd)
+        if stdin_input is not None:
+            try:
+                os.write(master_fd, stdin_input.encode("utf-8"))
+            except Exception:
+                pass
 
         maxlen = max_lines if max_lines else 10000
         output_deque = collections.deque(maxlen=maxlen)
